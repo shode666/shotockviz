@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Briefcase, TrendingUp, TrendingDown, X } from 'lucide-react';
+import { Briefcase, TrendingUp, TrendingDown, X, Trash2, History, ChevronDown, ChevronUp } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 
@@ -26,24 +26,31 @@ function StatCard({ label, value, sub, up }: { label: string; value: string | nu
 export default function PortfolioPage() {
     const { isAuthenticated } = useAuthStore();
     const [analytics, setAnalytics] = useState(null);
+    const [txns, setTxns] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
     const [timedOut, setTimedOut] = useState(false);
     const [showModal, setShowModal] = useState(false);
     const [form, setForm] = useState(TXN_FORM_INIT);
     const [saving, setSaving] = useState(false);
+    const [deletingId, setDeletingId] = useState<number | null>(null);
+    const [showHistory, setShowHistory] = useState(true);
+    const [historyFilter, setHistoryFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
 
     const load = useCallback(async () => {
         if (!isAuthenticated) return;
         setLoading(true);
         setTimedOut(false);
         try {
-            const res = await portfolioService.getAnalytics();
-            setAnalytics(res.data);
+            const [analyticsRes, txnsRes] = await Promise.all([
+                portfolioService.getAnalytics(),
+                portfolioService.getTransactions(),
+            ]);
+            setAnalytics(analyticsRes.data);
+            setTxns(txnsRes.data ?? []);
         } catch (err: any) {
             if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
                 setTimedOut(true);
             }
-            /* not authenticated or network error */
         } finally { setLoading(false); }
     }, [isAuthenticated]);
 
@@ -73,7 +80,17 @@ export default function PortfolioPage() {
         } finally { setSaving(false); }
     };
 
+    const handleDelete = async (id: number) => {
+        if (!confirm('ลบธุรกรรมนี้?')) return;
+        setDeletingId(id);
+        try {
+            await portfolioService.deleteTransaction(id);
+            await load();
+        } finally { setDeletingId(null); }
+    };
+
     const fmt = (n, decimals = 2) => n?.toLocaleString('th-TH', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }) ?? '—';
+    const fmtQty = (n) => n != null ? parseFloat(n.toFixed(8)).toString() : '—';
     const pnlUp = analytics ? analytics.unrealized_pl >= 0 : true;
 
     return (
@@ -180,6 +197,108 @@ export default function PortfolioPage() {
                                         })}
                                     </tbody>
                                 </table>
+                            </div>
+                        )}
+                        {/* Transaction History */}
+                        {txns.length > 0 && (
+                            <div className="mt-5 panel border rounded-2xl overflow-hidden" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
+                                {/* Header */}
+                                <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--color-border)' }}>
+                                    <button
+                                        className="flex items-center gap-2 text-xs font-semibold"
+                                        onClick={() => setShowHistory(v => !v)}
+                                    >
+                                        <History size={13} style={{ color: 'var(--color-accent)' }} />
+                                        ประวัติธุรกรรม ({txns.length} รายการ)
+                                        {showHistory ? <ChevronUp size={12} style={{ color: 'var(--color-text-sub)' }} /> : <ChevronDown size={12} style={{ color: 'var(--color-text-sub)' }} />}
+                                    </button>
+                                    {/* Filter tabs */}
+                                    {showHistory && (
+                                        <div className="flex rounded-lg overflow-hidden text-[10px]" style={{ background: 'var(--color-input-bg)' }}>
+                                            {(['ALL', 'BUY', 'SELL'] as const).map(f => (
+                                                <button key={f} onClick={() => setHistoryFilter(f)}
+                                                    className="px-3 py-1.5 font-semibold transition-all"
+                                                    style={{
+                                                        background: historyFilter === f ? 'var(--color-accent)' : 'transparent',
+                                                        color: historyFilter === f ? '#fff' : 'var(--color-text-sub)',
+                                                    }}>
+                                                    {f === 'ALL' ? 'ทั้งหมด' : f === 'BUY' ? 'ซื้อ' : 'ขาย'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                {showHistory && (
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full">
+                                            <thead>
+                                                <tr className="text-[10px] border-b" style={{ color: 'var(--color-text-sub)', borderColor: 'var(--color-border)', background: 'var(--color-hover)' }}>
+                                                    {['วันที่', 'Symbol', 'ประเภท', 'จำนวน', 'ราคา/หุ้น', 'ค่าคอม', 'มูลค่ารวม', 'หมายเหตุ', ''].map(h => (
+                                                        <th key={h} className="text-left px-4 py-2 font-medium whitespace-nowrap">{h}</th>
+                                                    ))}
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {txns
+                                                    .filter(t => historyFilter === 'ALL' || t.type === historyFilter)
+                                                    .map((t) => {
+                                                        const isBuy = t.type === 'BUY';
+                                                        const cs = CURR_SIGN[t.currency] ?? '฿';
+                                                        const total = t.qty * t.price;
+                                                        return (
+                                                            <tr key={t.id} className="border-b text-xs transition-colors"
+                                                                style={{ borderColor: 'var(--color-border)' }}
+                                                                onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-hover)')}
+                                                                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
+                                                                <td className="px-4 py-3 tabular-nums whitespace-nowrap" style={{ color: 'var(--color-text-sub)' }}>{t.date}</td>
+                                                                <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--color-accent)' }}>
+                                                                    {t.symbol}
+                                                                    <span className="ml-1 text-[9px] px-1 py-0.5 rounded font-normal" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+                                                                        {t.currency ?? 'THB'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-3">
+                                                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                                                        style={{
+                                                                            background: isBuy ? 'rgba(52,211,153,0.15)' : 'rgba(248,113,113,0.15)',
+                                                                            color: isBuy ? 'var(--color-green)' : 'var(--color-red)',
+                                                                        }}>
+                                                                        {isBuy ? '▲ ซื้อ' : '▼ ขาย'}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-4 py-3 tabular-nums">{fmtQty(t.qty)}</td>
+                                                                <td className="px-4 py-3 tabular-nums">{cs}{fmt(t.price)}</td>
+                                                                <td className="px-4 py-3 tabular-nums" style={{ color: 'var(--color-text-sub)' }}>{t.fee ? `${cs}${fmt(t.fee)}` : '—'}</td>
+                                                                <td className="px-4 py-3 tabular-nums font-medium">{cs}{fmt(total)}</td>
+                                                                <td className="px-4 py-3 max-w-[120px] truncate" style={{ color: 'var(--color-text-sub)' }} title={t.note}>{t.note || '—'}</td>
+                                                                <td className="px-4 py-3">
+                                                                    <button
+                                                                        onClick={() => handleDelete(t.id)}
+                                                                        disabled={deletingId === t.id}
+                                                                        className="p-1.5 rounded-lg transition-colors"
+                                                                        style={{ color: 'var(--color-text-sub)' }}
+                                                                        onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-red)')}
+                                                                        onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text-sub)')}
+                                                                        title="ลบธุรกรรม"
+                                                                    >
+                                                                        {deletingId === t.id
+                                                                            ? <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.65s linear infinite' }} />
+                                                                            : <Trash2 size={12} />}
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                            </tbody>
+                                        </table>
+                                        {txns.filter(t => historyFilter === 'ALL' || t.type === historyFilter).length === 0 && (
+                                            <div className="text-center py-6 text-xs" style={{ color: 'var(--color-text-sub)' }}>
+                                                ไม่มีรายการ {historyFilter === 'BUY' ? 'ซื้อ' : 'ขาย'}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
                             </div>
                         )}
                     </>
