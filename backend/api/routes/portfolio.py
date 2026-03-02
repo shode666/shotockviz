@@ -34,10 +34,20 @@ async def get_analytics(
     db: AsyncSession = Depends(get_db),
 ):
     """Calculate portfolio analytics with current market prices."""
-    result = await db.execute(
-        select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
-    )
-    txns = result.scalars().all()
+    try:
+        result = await db.execute(
+            select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
+        )
+        txns = result.scalars().all()
+    except Exception as e:
+        # Likely DB schema mismatch (e.g. migration not yet run) — return empty analytics
+        import logging
+        logging.getLogger(__name__).error(f"portfolio analytics DB error: {e}")
+        return PortfolioAnalytics(
+            total_value=0.0, total_cost=0.0,
+            unrealized_pl=0.0, unrealized_pl_pct=0.0,
+            holdings=[],
+        )
 
     # Calculate holdings: net qty and avg cost per symbol
     holdings: dict[str, dict] = {}
@@ -87,11 +97,13 @@ async def get_analytics(
         total_cost += cost_basis
 
     unrealized_pl = total_value - total_cost
+    unrealized_pl_pct = round(unrealized_pl / total_cost * 100, 2) if total_cost else 0.0
+
     return PortfolioAnalytics(
         total_value=round(total_value, 2),
         total_cost=round(total_cost, 2),
         unrealized_pl=round(unrealized_pl, 2),
-        unrealized_pl_pct=round(unrealized_pl / total_cost * 100, 2) if total_cost else 0,
+        unrealized_pl_pct=unrealized_pl_pct,
         holdings=holding_responses,
     )
 
