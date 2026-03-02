@@ -1,4 +1,4 @@
-import { CandlestickChart, TrendingUp, AreaChart } from 'lucide-react';
+import { CandlestickChart, TrendingUp, AreaChart, Loader2 } from 'lucide-react';
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 const chartTypes = [
@@ -16,6 +16,7 @@ export default function ChartToolbar({
     onChartTypeChange,
     activeIndicators = [],
     onIndicatorToggle,
+    isLoading = false,
 }) {
     return (
         <div
@@ -45,30 +46,30 @@ export default function ChartToolbar({
             <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />
 
             {/* Timeframes */}
-            <div className="flex gap-1">
-                {timeframes.map((tf) => (
-                    <button
-                        key={tf}
-                        onClick={() => onTFChange(tf)}
-                        className="text-xs px-2 py-1 rounded-lg font-medium transition-all cursor-pointer"
-                        style={selectedTF === tf
-                            ? {
-                                background: 'var(--color-accent)',
-                                color: '#fff',
-                                border: '1px solid var(--color-accent)',
+            <div className="flex gap-1 items-center">
+                {timeframes.map((tf) => {
+                    const isActive = selectedTF === tf;
+                    const isLoadingThis = isActive && isLoading;
+                    return (
+                        <button
+                            key={tf}
+                            onClick={() => onTFChange(tf)}
+                            className="text-xs px-2 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1"
+                            style={isActive
+                                ? { background: 'var(--color-accent)', color: '#fff', border: '1px solid var(--color-accent)' }
+                                : { color: 'var(--color-text-sub)', border: '1px solid transparent', background: 'transparent' }
                             }
-                            : {
-                                color: 'var(--color-text-sub)',
-                                border: '1px solid transparent',
-                                background: 'transparent',
+                            onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-hover)'; }}
+                            onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                        >
+                            {isLoadingThis
+                                ? <Loader2 size={10} style={{ animation: 'spin 0.65s linear infinite' }} />
+                                : null
                             }
-                        }
-                        onMouseEnter={(e) => { if (selectedTF !== tf) e.currentTarget.style.background = 'var(--color-hover)'; }}
-                        onMouseLeave={(e) => { if (selectedTF !== tf) e.currentTarget.style.background = 'transparent'; }}
-                    >
-                        {tf}
-                    </button>
-                ))}
+                            {tf}
+                        </button>
+                    );
+                })}
             </div>
 
             <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />

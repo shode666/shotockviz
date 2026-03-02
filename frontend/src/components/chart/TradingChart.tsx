@@ -22,7 +22,7 @@ const ERROR_BARS = [
     { time: 1700345600, open: 68, high: 74, low: 60, close: 65 },
 ];
 
-export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null }) {
+export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null }) {
     const containerRef = useRef(null);
     const chartRef = useRef(null);
     const seriesRef = useRef(null);
@@ -48,6 +48,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         async function loadData() {
             if (retryCount === 0) {
                 setLoading(true);
+                onLoadingChange?.(true);
                 setNoData(false);
                 setIsTimeout(false); // reset timeout on each fresh load
                 setBars([]); // Clear immediately so old chart doesn't linger
@@ -60,6 +61,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     setNoData(false);
                     setIsTimeout(false);
                     setLoading(false);
+                    onLoadingChange?.(false);
                 } else if (retryCount < MAX_RETRIES) {
                     // Empty response — backend may still be fetching history; retry
                     retryCount++;
@@ -71,6 +73,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     setNoData(true);
                     setIsTimeout(false);
                     setLoading(false);
+                    onLoadingChange?.(false);
                 }
             } catch (err: any) {
                 if (!cancelled) {
@@ -81,12 +84,14 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                         setBars([]);
                         setNoData(false);
                         setLoading(false);
+                        onLoadingChange?.(false);
                     } else {
                         console.error(`[TradingChart] Failed to fetch ${selectedStock.sym} ${timeframe}:`, err);
                         setBars(ERROR_BARS);
                         setIsTimeout(false);
                         setNoData(false);
                         setLoading(false);
+                        onLoadingChange?.(false);
                     }
                 }
             }
@@ -374,32 +379,30 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         <div className="w-full h-full relative">
             <div ref={containerRef} className="w-full h-full" />
 
-            {/* Loading overlay */}
+            {/* Loading overlay — semi-opaque so user knows something is happening */}
             {loading && (
                 <div
-                    className="absolute inset-0 flex items-center justify-center pointer-events-none"
-                    style={{ background: 'transparent' }}
+                    className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none z-10"
+                    style={{ background: 'rgba(13,15,23,0.72)', backdropFilter: 'blur(2px)' }}
                 >
-                    <div
-                        className="flex items-center gap-2 text-xs px-4 py-2 rounded-full"
+                    {/* Spinner ring */}
+                    <span
                         style={{
-                            background: 'var(--color-panel)',
-                            color: 'var(--color-text-sub)',
-                            border: '1px solid var(--color-border)',
-                            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+                            display: 'block',
+                            width: 32, height: 32,
+                            border: '3px solid var(--color-border)',
+                            borderTopColor: 'var(--color-accent)',
+                            borderRadius: '50%',
+                            animation: 'spin 0.65s linear infinite',
                         }}
-                    >
-                        <span
-                            style={{
-                                display: 'inline-block',
-                                width: 12, height: 12,
-                                border: '2px solid var(--color-border)',
-                                borderTopColor: 'var(--color-accent)',
-                                borderRadius: '50%',
-                                animation: 'spin 0.65s linear infinite',
-                            }}
-                        />
-                        กำลังโหลด {selectedStock.sym}…
+                    />
+                    <div className="text-center">
+                        <div className="text-xs font-semibold" style={{ color: 'var(--color-text)' }}>
+                            กำลังโหลด {selectedStock.sym}…
+                        </div>
+                        <div className="text-[10px] mt-0.5" style={{ color: 'var(--color-text-sub)' }}>
+                            กรุณารอสักครู่
+                        </div>
                     </div>
                 </div>
             )}

@@ -34,6 +34,7 @@ export default function ChartPage() {
     const [chartType, setChartType] = useState('candlestick');
     const [activeIndicators, setActiveIndicators] = useState<string[]>([]);
     const [crosshair, setCrosshair] = useState<CrosshairData | null>(null);
+    const [isChartLoading, setIsChartLoading] = useState(false);
 
     return (
         <div className="flex flex-1 overflow-hidden">
@@ -50,6 +51,7 @@ export default function ChartPage() {
                             prev.includes(ind) ? prev.filter(i => i !== ind) : [...prev, ind]
                         );
                     }}
+                    isLoading={isChartLoading}
                 />
                 <DrawingToolbar />
 
@@ -60,6 +62,7 @@ export default function ChartPage() {
                         chartType={chartType}
                         activeIndicators={activeIndicators}
                         onCrosshairMove={setCrosshair}
+                        onLoadingChange={setIsChartLoading}
                     />
 
                     {/* Crosshair OHLCV overlay */}
