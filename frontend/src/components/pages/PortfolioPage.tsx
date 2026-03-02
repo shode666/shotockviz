@@ -246,11 +246,11 @@ export default function PortfolioPage() {
                             {/* ราคาต่อหุ้น พร้อม currency prefix */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ราคาต่อหุ้น</div>
-                                <div className="relative">
-                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium pointer-events-none" style={{ color: 'var(--color-text-sub)' }}>
+                                <div className="input-field flex items-center gap-2 p-0 overflow-hidden">
+                                    <span className="pl-3 text-xs font-medium shrink-0 select-none" style={{ color: 'var(--color-text-sub)' }}>
                                         {CURR_SIGN[form.currency]}
                                     </span>
-                                    <input type="number" className="input-field pl-7" placeholder="38.00"
+                                    <input type="number" className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm" placeholder="38.00"
                                         value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} />
                                 </div>
                             </div>
@@ -258,11 +258,11 @@ export default function PortfolioPage() {
                             {/* ค่าคอมมิชชั่น */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ค่าคอมมิชชั่น</div>
-                                <div className="relative">
-                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium pointer-events-none" style={{ color: 'var(--color-text-sub)' }}>
+                                <div className="input-field flex items-center gap-2 p-0 overflow-hidden">
+                                    <span className="pl-3 text-xs font-medium shrink-0 select-none" style={{ color: 'var(--color-text-sub)' }}>
                                         {CURR_SIGN[form.currency]}
                                     </span>
-                                    <input type="number" className="input-field pl-7" placeholder="0"
+                                    <input type="number" className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm" placeholder="0"
                                         value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: e.target.value }))} />
                                 </div>
                             </div>
