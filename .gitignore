@@ -1,0 +1,94 @@
+# ============================================================
+# ShotockViz .gitignore
+# ============================================================
+
+# ===== SECRETS (ห้าม commit เด็ดขาด) =====
+.env
+.env.production
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+caddy-root.crt
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+env/
+.python-version
+
+# ===== Celery =====
+celerybeat-schedule
+celerybeat-schedule-shm
+celerybeat-schedule-wal
+celerybeat.pid
+*.pid
+
+# ===== Node.js / Frontend =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp
+.pnp.js
+
+# ===== Vite / Build Output =====
+frontend/dist/
+frontend/.vite/
+frontend/build/
+frontend/.output/
+.nitro/
+.tanstack/
+
+# ===== Testing =====
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+frontend/playwright-report/
+frontend/test-results/
+frontend/.playwright/
+
+# ===== Database / Data =====
+*.sql.gz
+*.dump
+pgdata/
+redisdata/
+backup*.sql
+
+# ===== OS =====
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ===== IDE / Editor =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cursor/
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Skills (local dev tool ไม่ต้องขึ้น repo) =====
+*.skill
+.skills/

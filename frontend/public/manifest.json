@@ -1,0 +1,17 @@
+{
+    "name": "ShotockViz Platform",
+    "short_name": "ShotockViz",
+    "description": "Premium self-hosted stock analysis and tracking platform.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#0b0d14",
+    "theme_color": "#0b0d14",
+    "icons": [
+        {
+            "src": "/favicon.svg",
+            "type": "image/svg+xml",
+            "sizes": "192x192 256x256 512x512",
+            "purpose": "any maskable"
+        }
+    ]
+}

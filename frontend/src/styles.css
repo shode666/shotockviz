@@ -1,0 +1,657 @@
+@import "tailwindcss";
+@import "./styles/glass.css";
+@variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ─── Theme Variables ─────────────────────────────────────────────────────── */
+:root {
+  --font-sans: "Poppins", system-ui, -apple-system, sans-serif;
+
+  /* Light theme */
+  --color-bg: #f5f6fa;
+  --color-panel: #ffffff;
+  --color-panel-2: #f8f9fc;
+  --color-border: #e8eaef;
+  --color-text: #2d3142;
+  --color-text-sub: #8b91a7;
+  --color-hover: #f0f1f5;
+  --color-input-bg: #f0f2f7;
+
+  /* Accent — vibrant violet */
+  --color-accent: #7c5cfc;
+  --color-accent-hover: #6b4cf0;
+  --color-accent-glow: rgba(124, 92, 252, 0.14);
+
+  /* Vivid semantic colors */
+  --color-green: #10b981;
+  --color-red: #ef4444;
+  --color-yellow: #f59e0b;
+  --color-blue: #3b82f6;
+  --color-cyan: #06b6d4;
+  --color-pink: #ec4899;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-full: 9999px;
+}
+
+[data-theme="dark"] {
+  --color-bg: #0b0d14;
+  --color-panel: #0f1119;
+  --color-panel-2: #141722;
+  --color-border: #1a1e2e;
+  --color-text: #e8eaef;
+  --color-text-sub: #6b7280;
+  --color-hover: #171b28;
+  --color-input-bg: #141722;
+
+  --color-green: #34d399;
+  --color-red: #fb7185;
+  --color-yellow: #fbbf24;
+  --color-blue: #60a5fa;
+  --color-cyan: #22d3ee;
+  --color-pink: #f472b6;
+
+  /* Logo "ho" glow in dark mode */
+  --ho-glow: 0 0 8px rgba(196, 181, 253, 0.55);
+}
+
+/* ─── Base ────────────────────────────────────────────────────────────────── */
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 400;
+  background: var(--color-bg);
+  color: var(--color-text);
+  letter-spacing: 0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+
+/* ─── Scrollbar ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: var(--radius-full);
+}
+
+/* ─── Utilities ───────────────────────────────────────────────────────────── */
+.panel {
+  background: var(--color-panel);
+  border-color: var(--color-border);
+}
+
+.glass {
+  background: color-mix(in srgb, var(--color-panel) 72%, transparent);
+  backdrop-filter: blur(20px) saturate(1.6);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+}
+
+/* ─── Glassmorphism Modal (shared) ───────────────────────────────────────── */
+
+.glass-overlay {
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* Light mode — frosted white glass */
+.glass-panel {
+  background: rgba(248, 250, 255, 0.88);
+  backdrop-filter: blur(28px) saturate(1.8);
+  -webkit-backdrop-filter: blur(28px) saturate(1.8);
+  border: 1px solid rgba(0, 0, 0, 0.07) !important;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+/* Dark mode — deep dark glass */
+[data-theme="dark"] .glass-overlay {
+  background: rgba(0, 0, 0, 0.72);
+}
+
+[data-theme="dark"] .glass-panel {
+  background: rgba(13, 15, 23, 0.80);
+  backdrop-filter: blur(28px) saturate(1.9);
+  -webkit-backdrop-filter: blur(28px) saturate(1.9);
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(124, 92, 252, 0.09);
+}
+
+/* Inputs inside dark glass panels */
+[data-theme="dark"] .glass-panel .input-field {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* ─── Premium Search Modal ────────────────────────────────────────────────── */
+
+/* Search-specific CSS variables */
+:root {
+  --search-divider: rgba(0, 0, 0, 0.06);
+  --search-section-label: #9ca3af;
+}
+[data-theme="dark"] {
+  --search-divider: rgba(255, 255, 255, 0.05);
+  --search-section-label: #4b5563;
+}
+
+/* Overlay: stronger blur for cinematic feel (keeping for backward compat) */
+.search-overlay {
+  background: rgba(0, 0, 0, 0.60);
+  backdrop-filter: blur(10px) saturate(1.4);
+  -webkit-backdrop-filter: blur(10px) saturate(1.4);
+}
+
+/* Panel: premium frosted glass with gradient border glow */
+.search-panel {
+  border-radius: 18px;
+  /* Gradient border via box-shadow + outline trick */
+  position: relative;
+  overflow: hidden;
+
+  /* Light mode */
+  background: rgba(252, 253, 255, 0.92);
+  backdrop-filter: blur(40px) saturate(2);
+  -webkit-backdrop-filter: blur(40px) saturate(2);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.18),
+    0 8px 16px rgba(0, 0, 0, 0.06),
+    0 32px 80px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+}
+
+/* Accent glow strip at top of panel */
+.search-panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    rgba(124, 92, 252, 0),
+    rgba(124, 92, 252, 0.9) 30%,
+    rgba(99, 179, 237, 0.9) 60%,
+    rgba(124, 92, 252, 0)
+  );
+  z-index: 1;
+}
+
+/* Dark mode panel */
+[data-theme="dark"] .search-panel {
+  background: rgba(11, 13, 22, 0.88);
+  backdrop-filter: blur(40px) saturate(2.2);
+  -webkit-backdrop-filter: blur(40px) saturate(2.2);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.22),
+    0 8px 16px rgba(0, 0, 0, 0.30),
+    0 32px 80px rgba(0, 0, 0, 0.70),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 60px rgba(124, 92, 252, 0.06);
+}
+
+/* ── New glass-search class (2026 design tokens) ─────────────────────────── */
+.glass-search {
+  border-radius: 20px;
+  position: relative;
+  overflow: hidden;
+  background: rgba(252, 253, 255, 0.92);
+  backdrop-filter: blur(40px) saturate(2);
+  -webkit-backdrop-filter: blur(40px) saturate(2);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.18),
+    0 8px 16px rgba(0, 0, 0, 0.06),
+    0 32px 80px rgba(0, 0, 0, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+}
+
+.glass-search::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg,
+    rgba(124, 92, 252, 0),
+    rgba(124, 92, 252, 0.9) 30%,
+    rgba(99, 179, 237, 0.9) 60%,
+    rgba(124, 92, 252, 0)
+  );
+  z-index: 1;
+}
+
+[data-theme="dark"] .glass-search {
+  background: rgba(11, 13, 22, 0.88);
+  backdrop-filter: blur(40px) saturate(2.2);
+  -webkit-backdrop-filter: blur(40px) saturate(2.2);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.22),
+    0 8px 16px rgba(0, 0, 0, 0.30),
+    0 32px 80px rgba(0, 0, 0, 0.70),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 60px rgba(124, 92, 252, 0.06);
+}
+
+/* Input row */
+.search-input-row {
+  border-bottom: 1px solid var(--search-divider);
+}
+
+/* Loading spinner */
+.search-spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+  flex-shrink: 0;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* KBD badges */
+.search-kbd {
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  background: var(--color-hover);
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+  letter-spacing: 0;
+}
+.search-kbd-mini {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-family: var(--font-sans);
+  background: var(--color-hover);
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+}
+
+/* Section labels */
+.search-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--search-section-label);
+}
+
+/* Footer */
+.search-footer {
+  border-top: 1px solid var(--search-divider);
+  font-size: 10px;
+  color: var(--color-text-sub);
+}
+
+/* ─── Loading skeleton ────────────────────────────────────────────────────── */
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--color-hover) 25%,
+    var(--color-border) 50%,
+    var(--color-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s ease infinite;
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GLOBAL GLASSMORPHISM SYSTEM
+   Applies to ALL modals, popups, drawers, dropdowns, tooltips, select menus.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Universal backdrop overlay ─────────────────────────────────────────── */
+/* Used for: Modals, Search, Settings, Alerts, Portfolio popups             */
+.glass-overlay {
+  background: rgba(0, 0, 0, 0.52);
+  backdrop-filter: blur(8px) saturate(1.3);
+  -webkit-backdrop-filter: blur(8px) saturate(1.3);
+}
+[data-theme="dark"] .glass-overlay {
+  background: rgba(0, 0, 0, 0.68);
+  backdrop-filter: blur(10px) saturate(1.5);
+  -webkit-backdrop-filter: blur(10px) saturate(1.5);
+}
+
+/* ── 2. Glass panel (modal body) ────────────────────────────────────────────
+   Light: bright frosted glass    Dark: deep dark glass with violet glow   */
+.glass-panel {
+  /* Frosted white glass — light mode */
+  background: rgba(250, 252, 255, 0.90);
+  backdrop-filter: blur(36px) saturate(2) brightness(1.05);
+  -webkit-backdrop-filter: blur(36px) saturate(2) brightness(1.05);
+  border: 1px solid rgba(255, 255, 255, 0.75) !important;
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.10),
+    0 4px 12px rgba(0, 0, 0, 0.05),
+    0 20px 60px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.03);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Subtle gradient cap at top (accent colour strip) */
+.glass-panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(124, 92, 252, 0.7) 35%,
+    rgba(56, 189, 248, 0.7) 65%,
+    transparent 100%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Dark mode panel */
+[data-theme="dark"] .glass-panel {
+  background: rgba(10, 12, 20, 0.82);
+  backdrop-filter: blur(40px) saturate(2.2) brightness(1.0);
+  -webkit-backdrop-filter: blur(40px) saturate(2.2) brightness(1.0);
+  border: 1px solid rgba(255, 255, 255, 0.06) !important;
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.20),
+    0 4px 12px rgba(0, 0, 0, 0.25),
+    0 24px 72px rgba(0, 0, 0, 0.65),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 0 80px rgba(124, 92, 252, 0.05);
+}
+
+/* Inputs/selects inside glass panels get a transparent glass look */
+.glass-panel .input-field,
+.glass-panel select {
+  background: rgba(255, 255, 255, 0.50);
+  border-color: rgba(0, 0, 0, 0.08);
+}
+[data-theme="dark"] .glass-panel .input-field,
+[data-theme="dark"] .glass-panel select {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.09);
+  color: var(--color-text);
+}
+
+/* ── 3. Glassmorphism <select> element (native + custom-styled) ─────────────
+   We can't style the browser dropdown list itself, but we can make the
+   select box look premium.                                                  */
+select.input-field,
+.glass-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b91a7' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+  cursor: pointer;
+}
+select.input-field:focus,
+.glass-select:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-glow);
+  outline: none;
+}
+
+/* Dark-mode select arrow (lighter stroke) */
+[data-theme="dark"] select.input-field,
+[data-theme="dark"] .glass-select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236b7280' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  color-scheme: dark;
+}
+
+/* ── 4. Glass tooltip / small popup ─────────────────────────────────────────  */
+.glass-tooltip {
+  background: rgba(248, 250, 255, 0.94);
+  backdrop-filter: blur(20px) saturate(1.8);
+  -webkit-backdrop-filter: blur(20px) saturate(1.8);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: var(--radius-md);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12), 0 1px 4px rgba(0, 0, 0, 0.06);
+  font-size: 11px;
+  color: var(--color-text);
+  padding: 6px 10px;
+}
+[data-theme="dark"] .glass-tooltip {
+  background: rgba(15, 17, 28, 0.90);
+  border-color: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.50), 0 0 0 1px rgba(124, 92, 252, 0.12);
+}
+
+/* ── 5. Glass dropdown / context menu ───────────────────────────────────────  */
+.glass-dropdown {
+  background: rgba(250, 252, 255, 0.94);
+  backdrop-filter: blur(28px) saturate(2);
+  -webkit-backdrop-filter: blur(28px) saturate(2);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.10),
+    0 8px 24px rgba(0, 0, 0, 0.12),
+    0 2px 8px rgba(0, 0, 0, 0.06);
+  overflow: hidden;
+}
+[data-theme="dark"] .glass-dropdown {
+  background: rgba(30, 33, 52, 0.98);
+  border-color: rgba(124, 92, 252, 0.35);
+  box-shadow:
+    0 0 0 1px rgba(124, 92, 252, 0.30),
+    0 12px 40px rgba(0, 0, 0, 0.70),
+    0 4px 12px rgba(0, 0, 0, 0.40);
+}
+
+/* ── 6. Modal enter animation (shared) ──────────────────────────────────────  */
+.animate-slide-up {
+  animation: slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+/* Glass slide up animation (2026 design tokens) */
+.glass-slide-up {
+  animation: glass-slide-up 0.25s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes glass-slide-up {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* ── 7. Modal close animation ───────────────────────────────────────────────  */
+.animate-fade-in {
+  animation: fade-in 0.28s ease both;
+}
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+.btn-accent {
+  background: var(--color-accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-md);
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-accent:hover {
+  filter: brightness(1.12);
+  transform: translateY(-0.5px);
+}
+
+.btn-accent:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.btn-outline {
+  background: transparent;
+  color: var(--color-text-sub);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-outline:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.input-field {
+  background: var(--color-input-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 7px 12px;
+  font-size: 11px;
+  color: var(--color-text);
+  outline: none;
+  transition: all 0.15s ease;
+  width: 100%;
+}
+
+.input-field:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px var(--color-accent-glow);
+}
+
+.input-field::placeholder {
+  color: var(--color-text-sub);
+  opacity: 0.5;
+  font-weight: 300;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.badge-green {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--color-green);
+}
+
+.badge-red {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--color-red);
+}
+
+.badge-violet {
+  background: rgba(124, 92, 252, 0.12);
+  color: var(--color-accent);
+}
+
+.badge-yellow {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--color-yellow);
+}
+
+.badge-cyan {
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--color-cyan);
+}
+
+.badge-pink {
+  background: rgba(236, 72, 153, 0.12);
+  color: var(--color-pink);
+}
+
+.gradient-accent {
+  background: linear-gradient(135deg, #7c5cfc, #a855f7);
+}
+
+/* ─── Animations ──────────────────────────────────────────────────────────── */
+@keyframes pulse-dot {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-slide-up {
+  animation: slide-up 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+:focus-visible {
+  outline: 1.5px solid var(--color-accent);
+  outline-offset: 1px;
+}

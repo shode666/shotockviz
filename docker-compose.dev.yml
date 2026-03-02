@@ -1,0 +1,228 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stockviz}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-stockviz_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stockviz} -d ${POSTGRES_DB:-stockviz_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://stockviz:password@db:5432/stockviz_db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-prod}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      APP_ENV: development
+      DEBUG: "True"
+      TZ: ${TZ:-Asia/Bangkok}
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:3000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # --reload-include "*.py" limits watching to .py files only — prevents
+    # uvicorn from restarting on __pycache__ writes, which caused intermittent
+    # 503 responses for /auth/me during normal operation.
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-include "*.py"
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://stockviz:password@db:5432/stockviz_db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-prod}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      APP_ENV: development
+      TZ: ${TZ:-Asia/Bangkok}
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: celery -A workers.celery_app worker --loglevel=info
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  celery-beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://stockviz:password@db:5432/stockviz_db}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
+      APP_ENV: development
+      TZ: ${TZ:-Asia/Bangkok}
+      PYTHONPATH: /app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: celery -A workers.celery_app beat --loglevel=info
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  flower:
+    image: mher/flower:2.0
+    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_URL: /api
+      VITE_WS_URL: wss://localhost
+      VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollamadata:/root/.ollama
+    environment:
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
+    # Uncomment if you have an NVIDIA GPU:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        ollama serve &
+        echo "Waiting for Ollama to be ready..."
+        until ollama list > /dev/null 2>&1; do sleep 1; done
+        echo "Pulling model: $${OLLAMA_MODEL}..."
+        ollama pull $${OLLAMA_MODEL}
+        echo "Model ready. Ollama is running."
+        wait
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"     # HTTP → auto-redirected to HTTPS by Caddy
+      - "443:443"   # HTTPS (TLS)
+    volumes:
+      - ./caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # persists CA cert + issued certs across restarts
+      - caddy_config:/config # persists Caddy runtime config
+    depends_on:
+      backend:
+        condition: service_started
+      frontend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
+networks:
+  stockviz-net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redisdata:
+  ollamadata:
+  caddy_data:
+  caddy_config:

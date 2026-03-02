@@ -1,0 +1,208 @@
+import { useState, useRef, useEffect } from 'react'
+import { Link, useMatches, useNavigate } from '@tanstack/react-router'
+import {
+    Search, Sun, Moon, LogOut, Settings,
+    TrendingUp, SlidersHorizontal, Briefcase, Bell, Newspaper, LayoutDashboard,
+} from 'lucide-react'
+import useAppStore from '@/store/appStore'
+import useAuthStore from '@/store/authStore'
+import ShotockLogo from './ShotockLogo'
+import SettingsModal from '@/components/modals/SettingsModal'
+import { getSetStatus, getUsStatus, type MarketStatusResult } from '@/utils/marketStatus'
+
+const navItems = [
+    { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
+    { to: '/', label: 'Chart', Icon: TrendingUp },
+    { to: '/screener', label: 'Screener', Icon: SlidersHorizontal },
+    { to: '/portfolio', label: 'Portfolio', Icon: Briefcase },
+    { to: '/alerts', label: 'Alerts', Icon: Bell },
+    { to: '/news', label: 'News', Icon: Newspaper },
+]
+
+const STATUS_COLORS: Record<MarketStatusResult['color'], string> = {
+    green: 'var(--color-green)',
+    yellow: '#f59e0b',
+    gray: 'var(--color-text-sub)',
+}
+
+function MarketBadge({ status }: { status: MarketStatusResult }) {
+    const dotColor = STATUS_COLORS[status.color]
+    return (
+        <div className="flex items-center gap-1 text-xs">
+            <span
+                className={status.pulse ? 'w-1.5 h-1.5 rounded-full animate-pulse-dot' : 'w-1.5 h-1.5 rounded-full'}
+                style={{ background: dotColor }}
+            />
+            <span style={{ color: dotColor }}>{status.label}</span>
+        </div>
+    )
+}
+
+export default function Navbar() {
+    const { theme, toggleTheme, setSearchOpen } = useAppStore()
+    const { user, isAuthenticated, isLoading, logout } = useAuthStore()
+    const matches = useMatches()
+    const currentPath = matches[matches.length - 1]?.pathname || '/'
+    const navigate = useNavigate()
+
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false)
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+    const dropdownRef = useRef<HTMLDivElement>(null)
+
+    const [setStatus, setSetStatus] = useState<MarketStatusResult>(getSetStatus)
+    const [usStatus, setUsStatus] = useState<MarketStatusResult>(getUsStatus)
+
+    // Refresh market status every 60 s
+    useEffect(() => {
+        const t = setInterval(() => {
+            setSetStatus(getSetStatus())
+            setUsStatus(getUsStatus())
+        }, 60_000)
+        return () => clearInterval(t)
+    }, [])
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsDropdownOpen(false)
+            }
+        }
+        document.addEventListener('mousedown', handleClickOutside)
+        return () => document.removeEventListener('mousedown', handleClickOutside)
+    }, [])
+
+    const handleLogout = async () => {
+        await logout()
+        setIsDropdownOpen(false)
+        navigate({ to: '/login' })
+    }
+
+    return (
+        <>
+            <nav className="flex items-center justify-between px-4 py-2 border-b" style={{ background: 'var(--color-panel)', borderColor: 'var(--color-border)' }}>
+                <div className="flex items-center gap-6">
+                    {/* Logo */}
+                    <div className="flex items-center gap-2.5">
+                        <ShotockLogo className="w-8 h-8 rounded-[11px] shadow-[0_4px_16px_rgba(168,85,247,0.2)] dark:shadow-[0_4px_16px_rgba(168,85,247,0.15)]" />
+                        <div className="text-4xl tracking-tight flex items-baseline select-none">
+                            <div className="font-extrabold tracking-tight text-gray-900 dark:text-white">S</div>
+                            <div
+                                className="font-semibold tracking-[-.15em] text-orange-500 dark:text-violet-300 w-2 -translate-x-2 text-xl"
+                                style={{ textShadow: 'var(--ho-glow, none)' }}
+                            >ho</div>
+                            <div className="font-extrabold tracking-tight text-gray-900 dark:text-white">tock</div>
+                            <div className="font-semibold text-orange-500 dark:text-violet-300 ml-1"
+                                style={{ textShadow: 'var(--ho-glow, none)' }}
+                            >Viz</div>
+                        </div>
+                    </div>
+
+                    {/* Navigation */}
+                    <div className="flex items-center gap-1">
+                        {navItems.map(({ to, label, Icon }) => (
+                            <Link
+                                key={to}
+                                to={to}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                                style={{
+                                    background: currentPath === to ? 'var(--color-accent-glow, rgba(124,92,252,0.14))' : 'transparent',
+                                    color: currentPath === to ? 'var(--color-accent)' : 'var(--color-text-sub)',
+                                }}
+                            >
+                                <Icon size={13} />
+                                {label}
+                            </Link>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                    {/* Search */}
+                    <button
+                        onClick={() => setSearchOpen(true)}
+                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs"
+                        style={{ background: 'var(--color-input-bg)', color: 'var(--color-text-sub)' }}
+                    >
+                        <Search size={12} />
+                        ค้นหา PTT, AAPL... ⌘K
+                    </button>
+
+                    {/* Market Status — dynamic */}
+                    <div className="flex items-center gap-3 border-l border-r px-3" style={{ borderColor: 'var(--color-border)' }}>
+                        <MarketBadge status={setStatus} />
+                        <MarketBadge status={usStatus} />
+                    </div>
+
+                    {/* Theme Toggle */}
+                    <button onClick={toggleTheme} className="p-1.5 rounded-lg hover:bg-[var(--color-hover)] transition-colors" style={{ color: 'var(--color-text-sub)' }}>
+                        {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+                    </button>
+
+                    {/* Auth */}
+                    {isLoading ? (
+                        /* Spinner while checkAuth retries — prevents "Login" flash */
+                        <div
+                            className="w-8 h-8 rounded-full flex items-center justify-center"
+                            style={{ background: 'var(--color-hover)' }}
+                        >
+                            <span
+                                style={{
+                                    display: 'inline-block',
+                                    width: 14, height: 14,
+                                    border: '2px solid var(--color-border)',
+                                    borderTopColor: 'var(--color-accent)',
+                                    borderRadius: '50%',
+                                    animation: 'spin 0.65s linear infinite',
+                                }}
+                            />
+                        </div>
+                    ) : isAuthenticated ? (
+                        <div className="relative" ref={dropdownRef}>
+                            <button
+                                onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
+                                style={{ background: 'var(--color-accent)' }}
+                            >
+                                {user?.display_name?.[0]?.toUpperCase() || 'U'}
+                            </button>
+
+                            {isDropdownOpen && (
+                                <div
+                                    className="glass-dropdown absolute right-0 mt-2 w-48 z-50"
+                                >
+                                    <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+                                        <p className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{user?.display_name}</p>
+                                        <p className="text-xs truncate" style={{ color: 'var(--color-text-sub)' }}>{user?.email}</p>
+                                    </div>
+                                    <div className="p-1">
+                                        <button
+                                            onClick={() => {
+                                                setIsSettingsOpen(true)
+                                                setIsDropdownOpen(false)
+                                            }}
+                                            className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-[var(--color-hover)]"
+                                            style={{ color: 'var(--color-text)' }}
+                                        >
+                                            <Settings size={14} />
+                                            Settings
+                                        </button>
+                                        <button
+                                            onClick={handleLogout}
+                                            className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-red-500/10 text-red-500"
+                                        >
+                                            <LogOut size={14} />
+                                            Logout
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <Link to="/login" className="btn-accent text-[11px] px-3 py-1.5">Login</Link>
+                    )}
+                </div>
+            </nav>
+            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+        </>
+    )
+}

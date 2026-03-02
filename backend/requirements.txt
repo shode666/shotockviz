@@ -1,0 +1,52 @@
+# Web framework
+fastapi==0.131.0
+uvicorn[standard]==0.41.0
+gunicorn==23.0.0
+
+# Database
+asyncpg==0.30.0
+sqlalchemy[asyncio]==2.0.46
+alembic==1.14.1
+
+# Redis & Cache
+redis==7.1.0
+celery==5.6.2
+
+# Auth
+PyJWT==2.10.1
+bcrypt==5.0.0
+passlib[bcrypt]==1.7.4
+google-auth==2.38.0
+python-multipart==0.0.20
+
+# Data
+pandas==2.2.3
+numpy==2.2.3
+requests==2.32.3
+httpx==0.28.1
+yfinance==0.2.65
+
+# Sync DB driver (required by Celery workers — asyncpg is async-only)
+psycopg2-binary==2.9.10
+
+# Validation
+pydantic==2.12.5
+pydantic-settings==2.8.1
+email-validator==2.2.0
+
+# Logging
+structlog==25.1.0
+
+# Telegram
+python-telegram-bot==22.6
+
+# Feed parsing
+feedparser==6.0.11
+
+# Testing
+pytest==8.3.5
+pytest-asyncio==0.25.3
+aiosqlite==0.20.0
+
+# Dev tools
+pip-audit==2.9.0

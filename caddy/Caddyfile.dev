@@ -1,0 +1,62 @@
+# Local dev HTTPS — Caddy auto-generates a cert signed by its internal CA
+# Trust the root CA once: see README for instructions
+localhost {
+	tls internal
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		X-XSS-Protection "1; mode=block"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' ws: wss:"
+		-Server
+	}
+
+	encode gzip
+
+	# Flower UI — Celery task monitoring
+	@flower path /flower*
+	reverse_proxy @flower flower:5555
+
+	# WebSocket — long timeout for /api/ws/* live prices
+	@ws path /api/ws/*
+	reverse_proxy @ws backend:8000 {
+		header_up Connection {>Connection}
+		header_up Upgrade {>Upgrade}
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+			dial_timeout 5s
+		}
+	}
+
+	# AI chat — SSE streaming (flush immediately, never buffer)
+	@ai path /api/ai/*
+	reverse_proxy @ai backend:8000 {
+		flush_interval -1
+		transport http {
+			read_timeout 3m
+			write_timeout 3m
+			dial_timeout 5s
+		}
+	}
+
+	# REST API — explicit timeouts for long-running Thai stock history requests (up to 30s)
+	reverse_proxy /api/* backend:8000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-For {remote_host}
+		transport http {
+			read_timeout 35s
+			write_timeout 35s
+			dial_timeout 5s
+		}
+	}
+
+	# Vite dev server — listens on port 3000
+	# lb_try_duration: retry upstream for up to 30s on startup (avoids 502 while Vite is booting)
+	reverse_proxy frontend:3000 {
+		lb_try_duration 30s
+		lb_try_interval 500ms
+	}
+}
