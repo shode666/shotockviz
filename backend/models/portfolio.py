@@ -10,6 +10,11 @@ class TransactionType(str, PyEnum):
     SELL = "SELL"
 
 
+class Currency(str, PyEnum):
+    THB = "THB"
+    USD = "USD"
+
+
 class Transaction(Base):
     __tablename__ = "transactions"
 
@@ -20,6 +25,7 @@ class Transaction(Base):
     qty: Mapped[float] = mapped_column(Float, nullable=False)
     price: Mapped[float] = mapped_column(Float, nullable=False)
     fee: Mapped[float] = mapped_column(Float, default=0.0)
+    currency: Mapped[Currency] = mapped_column(Enum(Currency), nullable=False, server_default="THB")
     date: Mapped[date] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -3,7 +3,13 @@ import { Briefcase, TrendingUp, TrendingDown, X } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 
-const TXN_FORM_INIT = { symbol: '', type: 'BUY', qty: '', price: '', fee: '0', date: new Date().toISOString().slice(0, 10), note: '' };
+const TXN_FORM_INIT = { symbol: '', type: 'BUY', qty: '', price: '', fee: '0', currency: 'THB', date: new Date().toISOString().slice(0, 10), note: '' };
+
+// Auto-detect currency: .BK suffix = THB, anything else = USD
+const detectCurrency = (symbol: string): 'THB' | 'USD' =>
+    symbol.trim().toUpperCase().endsWith('.BK') ? 'THB' : symbol.trim() ? 'USD' : 'THB';
+
+const CURR_SIGN: Record<string, string> = { THB: '฿', USD: '$' };
 
 function StatCard({ label, value, sub, up }: { label: string; value: string | number; sub?: string; up?: boolean }) {
     return (
@@ -43,6 +49,10 @@ export default function PortfolioPage() {
 
     useEffect(() => { load(); }, [load]);
 
+    const handleSymbolChange = (val: string) => {
+        setForm((f) => ({ ...f, symbol: val, currency: detectCurrency(val) }));
+    };
+
     const handleAdd = async () => {
         if (!form.symbol || !form.qty || !form.price) return;
         setSaving(true);
@@ -53,6 +63,7 @@ export default function PortfolioPage() {
                 qty: parseFloat(form.qty),
                 price: parseFloat(form.price),
                 fee: parseFloat(form.fee) || 0,
+                currency: form.currency,
                 date: form.date,
                 note: form.note,
             });
@@ -145,15 +156,21 @@ export default function PortfolioPage() {
                                     <tbody>
                                         {analytics.holdings.map((h) => {
                                             const up = (h.unrealized_pl ?? 0) >= 0;
+                                            const cs = CURR_SIGN[h.currency] ?? '฿';
                                             return (
                                                 <tr key={h.symbol} className="border-b text-xs" style={{ borderColor: 'var(--color-border)' }}>
-                                                    <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent)' }}>{h.symbol}</td>
+                                                    <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent)' }}>
+                                                        {h.symbol}
+                                                        <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded font-normal" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+                                                            {h.currency ?? 'THB'}
+                                                        </span>
+                                                    </td>
                                                     <td className="px-4 py-3 tabular-nums">{h.qty.toLocaleString()}</td>
-                                                    <td className="px-4 py-3 tabular-nums">{fmt(h.avg_cost)}</td>
-                                                    <td className="px-4 py-3 tabular-nums">{fmt(h.current_price) ?? '—'}</td>
-                                                    <td className="px-4 py-3 tabular-nums">{fmt(h.current_value) ?? '—'}</td>
+                                                    <td className="px-4 py-3 tabular-nums">{cs}{fmt(h.avg_cost)}</td>
+                                                    <td className="px-4 py-3 tabular-nums">{h.current_price != null ? `${cs}${fmt(h.current_price)}` : '—'}</td>
+                                                    <td className="px-4 py-3 tabular-nums">{h.current_value != null ? `${cs}${fmt(h.current_value)}` : '—'}</td>
                                                     <td className="px-4 py-3 tabular-nums font-medium" style={{ color: up ? 'var(--color-green)' : 'var(--color-red)' }}>
-                                                        {h.unrealized_pl != null ? `${up ? '+' : ''}${fmt(h.unrealized_pl)}` : '—'}
+                                                        {h.unrealized_pl != null ? `${up ? '+' : ''}${cs}${fmt(h.unrealized_pl)}` : '—'}
                                                     </td>
                                                     <td className="px-4 py-3 tabular-nums" style={{ color: up ? 'var(--color-green)' : 'var(--color-red)' }}>
                                                         {h.unrealized_pl_pct != null ? `${up ? '+' : ''}${fmt(h.unrealized_pl_pct)}%` : '—'}
@@ -188,12 +205,81 @@ export default function PortfolioPage() {
                                     </button>
                                 ))}
                             </div>
-                            {[['Symbol', 'symbol', 'text', 'เช่น PTT.BK'], ['จำนวน (หุ้น)', 'qty', 'number', '100'], ['ราคาต่อหุ้น', 'price', 'number', '38.00'], ['ค่าคอมมิชชั่น', 'fee', 'number', '0'], ['วันที่', 'date', 'date', ''], ['หมายเหตุ', 'note', 'text', '']].map(([label, key, type, ph]) => (
-                                <div key={key}>
-                                    <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>{label}</div>
-                                    <input type={type} className="input-field" placeholder={ph} value={form[key]} onChange={(e) => setForm((f) => ({ ...f, [key]: e.target.value }))} />
+
+                            {/* Symbol */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>Symbol</div>
+                                <input type="text" className="input-field" placeholder="เช่น PTT.BK หรือ AAPL"
+                                    value={form.symbol}
+                                    onChange={(e) => handleSymbolChange(e.target.value)} />
+                            </div>
+
+                            {/* Currency Toggle (auto-detected, แต่เปลี่ยนเองได้) */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
+                                    สกุลเงิน
+                                    <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+                                        auto-detect จาก symbol
+                                    </span>
                                 </div>
-                            ))}
+                                <div className="flex rounded-xl overflow-hidden" style={{ background: 'var(--color-input-bg)' }}>
+                                    {['THB', 'USD'].map((c) => (
+                                        <button key={c} onClick={() => setForm((f) => ({ ...f, currency: c }))}
+                                            className="flex-1 py-2 text-xs font-semibold transition-all"
+                                            style={{
+                                                background: form.currency === c ? 'var(--color-accent)' : 'transparent',
+                                                color: form.currency === c ? '#fff' : 'var(--color-text-sub)',
+                                            }}>
+                                            {c === 'THB' ? '฿ THB' : '$ USD'}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+
+                            {/* จำนวน */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>จำนวน (หุ้น)</div>
+                                <input type="number" className="input-field" placeholder="100"
+                                    value={form.qty} onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))} />
+                            </div>
+
+                            {/* ราคาต่อหุ้น พร้อม currency prefix */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ราคาต่อหุ้น</div>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium pointer-events-none" style={{ color: 'var(--color-text-sub)' }}>
+                                        {CURR_SIGN[form.currency]}
+                                    </span>
+                                    <input type="number" className="input-field pl-7" placeholder="38.00"
+                                        value={form.price} onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))} />
+                                </div>
+                            </div>
+
+                            {/* ค่าคอมมิชชั่น */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ค่าคอมมิชชั่น</div>
+                                <div className="relative">
+                                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-medium pointer-events-none" style={{ color: 'var(--color-text-sub)' }}>
+                                        {CURR_SIGN[form.currency]}
+                                    </span>
+                                    <input type="number" className="input-field pl-7" placeholder="0"
+                                        value={form.fee} onChange={(e) => setForm((f) => ({ ...f, fee: e.target.value }))} />
+                                </div>
+                            </div>
+
+                            {/* วันที่ */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>วันที่</div>
+                                <input type="date" className="input-field"
+                                    value={form.date} onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} />
+                            </div>
+
+                            {/* หมายเหตุ */}
+                            <div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>หมายเหตุ</div>
+                                <input type="text" className="input-field" placeholder="เช่น ซื้อตามแผน DCA"
+                                    value={form.note} onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))} />
+                            </div>
                             <div className="flex gap-2 mt-2">
                                 <button onClick={() => setShowModal(false)} className="btn-outline flex-1 py-2">ยกเลิก</button>
                                 <button onClick={handleAdd} disabled={saving} className="btn-accent flex-1 py-2">{saving ? 'กำลังบันทึก…' : 'บันทึก'}</button>

@@ -43,7 +43,7 @@ async def get_analytics(
     holdings: dict[str, dict] = {}
     for t in txns:
         if t.symbol not in holdings:
-            holdings[t.symbol] = {"qty": 0.0, "total_cost": 0.0}
+            holdings[t.symbol] = {"qty": 0.0, "total_cost": 0.0, "currency": getattr(t, "currency", "THB") or "THB"}
         if t.type.value == "BUY":
             holdings[t.symbol]["qty"] += t.qty
             holdings[t.symbol]["total_cost"] += t.qty * t.price + t.fee
@@ -75,6 +75,7 @@ async def get_analytics(
             symbol=symbol,
             qty=h["qty"],
             avg_cost=round(avg_cost, 4),
+            currency=h.get("currency", "THB"),
             current_price=current_price,
             current_value=round(current_value, 2) if current_value else None,
             unrealized_pl=round(unrealized_pl, 2) if unrealized_pl else None,
@@ -109,6 +110,7 @@ async def add_transaction(
         qty=body.qty,
         price=body.price,
         fee=body.fee,
+        currency=body.currency.upper() if body.currency else "THB",
         date=body.date,
         note=body.note,
     )

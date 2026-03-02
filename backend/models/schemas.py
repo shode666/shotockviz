@@ -159,6 +159,7 @@ class TransactionCreate(BaseModel):
     qty: float
     price: float
     fee: float = 0.0
+    currency: str = "THB"  # THB or USD
     date: date
     note: Optional[str] = None
 
@@ -167,6 +168,7 @@ class TransactionUpdate(BaseModel):
     qty: Optional[float] = None
     price: Optional[float] = None
     fee: Optional[float] = None
+    currency: Optional[str] = None
     date: Optional[date] = None
     note: Optional[str] = None
 
@@ -178,6 +180,7 @@ class TransactionResponse(BaseModel):
     qty: float
     price: float
     fee: float
+    currency: str
     date: date
     note: Optional[str] = None
     created_at: datetime
@@ -190,6 +193,7 @@ class HoldingResponse(BaseModel):
     symbol: str
     qty: float
     avg_cost: float
+    currency: str = "THB"
     current_price: Optional[float] = None
     current_value: Optional[float] = None
     unrealized_pl: Optional[float] = None
