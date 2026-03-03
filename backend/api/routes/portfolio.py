@@ -1,8 +1,12 @@
+import asyncio
+import json as _json
+import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from core.database import get_db
+from core import cache_keys
 from models.user import User
 from models.portfolio import Transaction
 from models.schemas import (
@@ -12,6 +16,16 @@ from api.middleware.auth import get_current_user
 from services import stock_service
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+
+# Yahoo Finance only accepts simple ticker symbols (letters, digits, dots, hyphens, carets).
+# Thai mutual fund names like "SCBS&P500", "PRINCIPAL IPROP-D", "MPDIVMF" that contain
+# spaces, &, or are known local-only funds will never resolve — skip them immediately
+# rather than waiting for a 20 s Yahoo timeout.
+_YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
+
+def _is_yahoo_fetchable(symbol: str) -> bool:
+    """Return True if the symbol looks like a real Yahoo Finance ticker."""
+    return bool(_YAHOO_SYMBOL_RE.match(symbol.upper()))
 
 
 @router.get("", response_model=list[TransactionResponse])
@@ -66,15 +80,83 @@ async def get_analytics(
     # Filter out sold positions
     active = {s: h for s, h in holdings.items() if h["qty"] > 0}
 
-    # Enrich with current prices
+    # Enrich with current prices.
+    # Three-stage strategy:
+    #   0. Pre-filter: skip symbols that Yahoo Finance can never resolve (Thai mutual funds
+    #      with spaces / special chars like "SCBS&P500", "PRINCIPAL IPROP-D", "MPDIVMF").
+    #      These would wait the full 20 s httpx timeout on every cold start — skip them now.
+    #   1. Redis pipeline: check remaining symbols in one round-trip (sub-ms).
+    #   2. Fetch only true cache misses from Yahoo Finance in parallel.
+    symbols_list = list(active.keys())
+    # Use simple dict {price, change_pct, ...} instead of StockQuote to handle
+    # the simplified JSON format cached by on_demand_listener and price_fetcher.
+    quote_map: dict[str, dict | None] = {sym: None for sym in symbols_list}
+
+    # Stage 1: Redis pipeline — check quote:{symbol} for ALL symbols in one round-trip
+    misses = list(symbols_list)
+    try:
+        r = await stock_service.get_redis()
+        pipe = r.pipeline()
+        for sym in symbols_list:
+            pipe.get(cache_keys.quote(sym))
+        cached_values = await pipe.execute()
+
+        misses = []
+        for sym, raw in zip(symbols_list, cached_values):
+            if raw:
+                try:
+                    data = _json.loads(raw)
+                    if data.get("price") is not None:
+                        quote_map[sym] = data
+                    else:
+                        misses.append(sym)
+                except Exception:
+                    misses.append(sym)
+            else:
+                misses.append(sym)
+    except Exception:
+        misses = list(symbols_list)
+
+    # Stage 2: For remaining misses, check fund:{symbol} cache (Thai mutual funds)
+    fund_misses = list(misses)
+    if fund_misses:
+        try:
+            r = await stock_service.get_redis()
+            pipe = r.pipeline()
+            for sym in fund_misses:
+                pipe.get(cache_keys.fund(sym))
+            fund_values = await pipe.execute()
+            for sym, raw in zip(fund_misses, fund_values):
+                if raw:
+                    try:
+                        fund_data = _json.loads(raw)
+                        nav = fund_data.get("nav")
+                        if nav is not None:
+                            quote_map[sym] = {
+                                "symbol": sym, "price": float(nav),
+                                "change": 0.0, "change_pct": 0.0, "volume": 0,
+                                "type": "fund_nav",
+                            }
+                            misses = [m for m in misses if m != sym]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # Stage 3: Request background fetch for fetchable misses (skip unfetchable fund symbols)
+    if misses:
+        fetchable_misses = [sym for sym in misses if _is_yahoo_fetchable(sym)]
+        for sym in fetchable_misses:
+            await stock_service.request_data_fetch(sym, "quote")
+
     holding_responses = []
     total_value = 0.0
     total_cost = 0.0
 
     for symbol, h in active.items():
         avg_cost = h["total_cost"] / h["qty"] if h["qty"] else 0
-        quote = await stock_service.fetch_stock_quote(symbol)
-        current_price = quote.price if quote else None
+        quote = quote_map.get(symbol)
+        current_price = float(quote["price"]) if quote and quote.get("price") is not None else None
         current_value = current_price * h["qty"] if current_price else None
         cost_basis = h["total_cost"]
 
@@ -105,6 +187,7 @@ async def get_analytics(
         unrealized_pl=round(unrealized_pl, 2),
         unrealized_pl_pct=unrealized_pl_pct,
         holdings=holding_responses,
+        has_pending_prices=len(misses) > 0,
     )
 
 
@@ -129,6 +212,14 @@ async def add_transaction(
     db.add(txn)
     await db.flush()
     await db.refresh(txn)
+
+    # Fire-and-forget: ensure symbol is registered in stocks table
+    try:
+        from workers.symbol_registrar import register_symbol
+        register_symbol.delay(body.symbol.upper())
+    except Exception:
+        pass  # Non-critical — scan_unregistered will catch it later
+
     return txn
 
 

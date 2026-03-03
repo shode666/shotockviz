@@ -7,4 +7,5 @@ const alertService = {
     toggle: (id) => api.patch(`/alerts/${id}/toggle`),
 };
 
+export { alertService };
 export default alertService;

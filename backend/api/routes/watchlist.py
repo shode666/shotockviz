@@ -107,6 +107,15 @@ async def add_stock(
 
     item = WatchlistItem(watchlist_id=watchlist_id, symbol=body.symbol.upper())
     db.add(item)
+
+    # Fire-and-forget: ensure symbol is registered in stocks table
+    # (needed for name_fetcher, fund_fetcher to pick it up)
+    try:
+        from workers.symbol_registrar import register_symbol
+        register_symbol.delay(body.symbol.upper())
+    except Exception:
+        pass  # Non-critical — scan_unregistered will catch it later
+
     return {"message": "Stock added"}
 
 

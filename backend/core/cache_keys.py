@@ -76,3 +76,17 @@ def lock(data_key: str) -> str:
     requests for the same key trigger only ONE upstream fetch.
     """
     return f"lock:{data_key}"
+
+
+def name(symbol: str) -> str:
+    """Stock short name cache key (from Yahoo Finance meta.shortName)."""
+    return f"cache:name:{symbol}"
+
+
+def quote_not_found(symbol: str) -> str:
+    """Negative cache key for symbols that don't exist on Yahoo Finance.
+
+    Used to avoid hammering Yahoo for mutual funds or delisted symbols
+    that will never return data.
+    """
+    return f"cache:quote:notfound:{symbol}"

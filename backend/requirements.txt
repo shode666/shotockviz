@@ -43,6 +43,8 @@ python-telegram-bot==22.6
 # Feed parsing
 feedparser==6.0.11
 
+# Thai mutual fund NAV — fetched directly from SEC Open Data API (no pythainav dep)
+
 # Testing
 pytest==8.3.5
 pytest-asyncio==0.25.3

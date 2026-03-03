@@ -17,6 +17,22 @@ export default function RightPanel({ selectedStock }) {
     const [rsi, setRsi] = useState<number | null>(null);
     const [timedOut, setTimedOut] = useState(false);
 
+    // Fetch quote — single blocking call (backend fetch_quote_now blocks up to 7s server-side).
+    // 404 → symbol not found → quote stays null (stockService.getQuote returns {data:null}).
+    // Timeout → show retry UI.  No 202 retry loop needed anymore.
+    const fetchQuote = useCallback((sym: string, signal: AbortSignal) => {
+        stockService.getQuote(sym)
+            .then(res => {
+                if (signal.aborted) return;
+                if (res.data?.price != null) setQuote(res.data);
+                // else: not found or no live price — quote stays null, panel shows "—"
+            })
+            .catch((err) => {
+                if (signal.aborted) return;
+                if (isTimeoutError(err)) setTimedOut(true);
+            });
+    }, []);
+
     const fetchAll = useCallback((sym: string, signal: AbortSignal) => {
         setTimedOut(false);
 
@@ -28,13 +44,7 @@ export default function RightPanel({ selectedStock }) {
                 setFundamentals(null);
             });
 
-        stockService.getQuote(sym)
-            .then(res => { if (!signal.aborted) setQuote(res.data); })
-            .catch((err) => {
-                if (signal.aborted) return;
-                if (isTimeoutError(err)) setTimedOut(true);
-                setQuote(null);
-            });
+        fetchQuote(sym, signal);
 
         // Compute real RSI(14) from 1D history bars
         stockService.getHistory(sym, '1D')
@@ -65,12 +75,14 @@ export default function RightPanel({ selectedStock }) {
         const controller = new AbortController();
         fetchAll(selectedStock.sym, controller.signal);
 
-        return () => controller.abort();
+        return () => {
+            controller.abort();
+        };
     }, [selectedStock?.sym, fetchAll]);
 
     const stats = [
-        ['52W High', fundamentals?.high_52week?.toFixed(2) ?? '—'],
-        ['52W Low', fundamentals?.low_52week?.toFixed(2) ?? '—'],
+        ['52W High', fundamentals?.week_52_high?.toFixed(2) ?? '—'],
+        ['52W Low', fundamentals?.week_52_low?.toFixed(2) ?? '—'],
         ['Avg Vol', fundamentals?.avg_volume ? (fundamentals.avg_volume / 1000000).toFixed(1) + 'M' : '—'],
         ['Beta', fundamentals?.beta?.toFixed(2) ?? '—'],
         ['EPS', fundamentals?.eps?.toFixed(2) ?? '—'],

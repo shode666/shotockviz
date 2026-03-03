@@ -135,7 +135,10 @@ async def _redis_price_broadcaster() -> None:
 
                     if msg_type == "alert_triggered":
                         # Alert notifications go to ALL connected clients
-                        # (each client's frontend hook filters by user context)
+                        await manager.broadcast_all(data)
+                    elif msg_type == "data_ready":
+                        # Backend finished fetching external data — tell ALL clients
+                        # to re-fetch. Sent by stock_service._notify_data_ready()
                         await manager.broadcast_all(data)
                     elif symbol:
                         # Price updates go only to symbol subscribers
@@ -156,6 +159,40 @@ async def _redis_price_broadcaster() -> None:
                     pass
 
 
+# ─── DB Enum Sync ──────────────────────────────────────────────────────────
+
+async def _sync_markettype_enum() -> None:
+    """Add any missing MarketType values to the PostgreSQL enum.
+
+    SQLAlchemy's create_all() won't alter existing enum types, so new values
+    (JP, CN, HK, etc.) must be added explicitly via ALTER TYPE.
+    Also syncs AlertType and AlertChannel enums.
+    """
+    from sqlalchemy import text
+    from core.database import engine
+    from models.stock import MarketType
+    from models.alert import AlertType, AlertChannel
+
+    enum_map = {
+        "markettype": [e.value for e in MarketType],
+        "alerttype": [e.value for e in AlertType],
+        "alertchannel": [e.value for e in AlertChannel],
+    }
+
+    async with engine.begin() as conn:
+        for pg_type, values in enum_map.items():
+            for val in values:
+                try:
+                    # DDL: can't use parameter binding for enum values
+                    safe_val = val.replace("'", "''")
+                    await conn.execute(
+                        text(f"ALTER TYPE {pg_type} ADD VALUE IF NOT EXISTS '{safe_val}'")
+                    )
+                except Exception:
+                    pass  # already exists or type doesn't exist yet
+    logger.info("PostgreSQL enum types synced")
+
+
 # ─── App Lifecycle ──────────────────────────────────────────────────────────
 
 @asynccontextmanager
@@ -166,6 +203,9 @@ async def lifespan(app: FastAPI):
     # Create tables on startup (dev only; use Alembic in prod)
     if settings.app_env == "development":
         await create_tables()
+        # Ensure all MarketType enum values exist in PostgreSQL
+        # (create_all only creates new types, doesn't add values to existing enums)
+        await _sync_markettype_enum()
         logger.info("Database tables created")
 
     # Shared Redis connection pool

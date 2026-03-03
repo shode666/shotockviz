@@ -24,11 +24,11 @@ router = APIRouter(prefix="/api", tags=["system"])
 # Key symbols that must be in cache for us to declare "ready"
 # Now includes both Thai (SET) and US stocks
 _READY_PROBE_KEYS = [
-    "cache:quote:PTT.BK",  # Thai stock
-    "cache:quote:^GSPC",   # US S&P 500
-    "cache:quote:^IXIC",   # US NASDAQ
-    "cache:quote:NVDA",    # US stock (Nvidia)
-    "cache:quote:AAPL",    # US stock (Apple)
+    "quote:PTT.BK",  # Thai stock
+    "quote:^GSPC",   # US S&P 500
+    "quote:^IXIC",   # US NASDAQ
+    "quote:NVDA",    # US stock (Nvidia)
+    "quote:AAPL",    # US stock (Apple)
 ]
 _READY_THRESHOLD = 3  # at least 3 of the probe keys must be cached
 

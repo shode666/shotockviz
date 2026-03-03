@@ -5,6 +5,7 @@ import useAuthStore from '@/store/authStore';
 import stockService from '@/services/stockService';
 import portfolioService from '@/services/portfolioService';
 import notesService from '@/services/notesService';
+import { displaySymbol } from '@/utils/formatters';
 
 const TABS = [
     { key: 'news', Icon: Newspaper, label: 'News' },
@@ -173,7 +174,7 @@ export default function BottomPanel() {
                                     </div>
                                 ) : (
                                     <div className="text-[11px] text-center" style={{ color: 'var(--color-text-sub)' }}>
-                                        ไม่มีหุ้น {selectedStock?.sym} ในพอร์ต
+                                        ไม่มีหุ้น {displaySymbol(selectedStock?.sym)} ในพอร์ต
                                     </div>
                                 )}
                             </div>
@@ -189,7 +190,7 @@ export default function BottomPanel() {
                                     <>
                                         <div className="flex items-center justify-between">
                                             <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
-                                                บันทึก thesis สำหรับ {selectedStock?.sym}
+                                                บันทึก thesis สำหรับ {displaySymbol(selectedStock?.sym)}
                                             </span>
                                             <div className="flex items-center gap-1.5">
                                                 {noteSaved && <span className="text-[10px]" style={{ color: 'var(--color-green)' }}>✓ บันทึกแล้ว</span>}
@@ -207,7 +208,7 @@ export default function BottomPanel() {
                                                 border: '1px solid var(--color-border)',
                                                 color: 'var(--color-text)',
                                             }}
-                                            placeholder={`เหตุผลที่ซื้อ ${selectedStock?.sym}, จุดเข้า, เป้าหมายราคา, ความเสี่ยง...`}
+                                            placeholder={`เหตุผลที่ซื้อ ${displaySymbol(selectedStock?.sym)}, จุดเข้า, เป้าหมายราคา, ความเสี่ยง...`}
                                             value={noteContent}
                                             onChange={e => handleNoteChange(e.target.value)}
                                         />

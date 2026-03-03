@@ -66,7 +66,9 @@ export default function ScreenerPage() {
     };
 
     const handleRowClick = (r) => {
-        setSelectedStock({ sym: r.sym, name: r.name, price: r.price, chg: r.chg, pct: r.chg, up: r.up });
+        // Fix: format pct field as percentage string, not duplicate r.chg
+        const pctStr = typeof r.pct === 'number' ? `${r.pct >= 0 ? '+' : ''}${r.pct.toFixed(2)}%` : r.pct ?? '—';
+        setSelectedStock({ sym: r.sym, name: r.name, price: r.price.toFixed(2), chg: r.chg.toFixed(2), pct: pctStr, up: r.up });
         navigate({ to: '/' });
     };
 

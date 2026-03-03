@@ -8,6 +8,328 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Refactored (2026-03-03 — Round-Robin Price Fetcher)
+
+**price_fetcher.py — unified round-robin across all markets:**
+- Replaced 2 separate tasks (`fetch_set_prices` + `fetch_us_prices`) with 1 unified `fetch_prices` task
+- 5 market slots rotate every 1 minute: SET → US → Asia (JP/HK/CN/KR) → Europe (UK/DE/FR/NL) → Overview
+- Each market updates every ~5 min; closed markets auto-skip → open markets get more frequent updates
+- Redis atomic counter (`price_fetcher:slot_idx`) tracks rotation across restarts
+- Market-hours awareness: SET 09:30-16:30 ICT, US 09:30-16:00 ET, Asia 09:00-17:00 JST/HKT, EU 08:00-17:00 CET
+- Fallback: if all markets closed (weekend) → still fetches overview (indices/FX/gold)
+- Legacy aliases `fetch_set_prices` / `fetch_us_prices` kept for backward compat
+
+**celery_app.py — simplified beat schedule:**
+- Removed `fetch-set-prices` and `fetch-us-prices` crontab entries
+- Added `fetch-prices` running every 60s (round-robin)
+- `fetch-overview-prices` reduced to every 5 min (backup for indices)
+
+**Scripts added:**
+- `scripts/fetch_real_constituents.py` — fetch real index constituents from Wikipedia (Nikkei/HSI/FTSE/DAX/SSE/CAC/AEX)
+- `scripts/seed_international.py` — direct DB seed for international symbols (no Celery dependency)
+- `scripts/check_intl_symbols.py` — diagnostic query for international market data
+
+### Enhanced (2026-03-03 — Symbol Autocomplete + Currency Display)
+
+**AlertsPage.tsx — Symbol autocomplete with market/currency awareness:**
+- Replaced plain text input with debounced search autocomplete (300ms, reuses `stockService.search`)
+- Dropdown shows company name, market badge (SET/US/JP/etc.), and currency code
+- Currency sign prefix on value input for price alerts (e.g., ฿ for SET, $ for US, ¥ for JP)
+- Market badge + currency code on alert list items
+- Direct ticker fallback when search returns no results
+
+**AddTransactionModal.tsx — Same autocomplete pattern:**
+- Replaced plain text input with search autocomplete dropdown
+- Auto-detects currency from selected market (SET→THB, US/JP/HK/etc.→USD)
+- Currency sign updates dynamically on price & fee inputs
+- Market badge + currency code shown next to Symbol label
+- Currency toggle still available for manual override
+
+**formatters.js — New MARKET_CURRENCY mapping:**
+- Added `MARKET_CURRENCY` export: maps market codes to `{ sign, code }` (e.g., SET→{฿,THB}, JP→{¥,JPY})
+- Used by both AlertsPage and AddTransactionModal
+
+### Refactored (2026-03-03 — Phase 6: Store & Hook Optimization)
+
+**New custom hooks (SRP — extract data-fetching from components):**
+- `hooks/usePriceUpdates.ts` (119 lines) — reusable price polling hook with configurable interval, auto-retry on partial data/network error, dataVersion reactivity. Replaces ~80 lines of inline logic in Sidebar.
+- `hooks/usePortfolioData.ts` (90 lines) — portfolio analytics + transactions fetching with auto-retry for pending prices (6× every 5s), dataVersion reactivity. Replaces ~50 lines of inline logic in PortfolioPage.
+- `hooks/useChartData.ts` (181 lines) — chart OHLCV data fetching with retry, normalization, timeout detection (created in Phase 4).
+
+**Component simplification via hooks:**
+- `Sidebar.tsx`: 402 → 326 lines — replaced inline price polling + indices fetching with 2× `usePriceUpdates()` calls
+- `PortfolioPage.tsx`: 373 → 319 lines — replaced inline analytics/txns fetching + retry logic with `usePortfolioData()`
+
+**Store named exports (tree-shaking):**
+- `appStore.js`: added `export { useAppStore }` alongside default export
+- `authStore.js`: added `export { useAuthStore }` alongside default export
+
+### Refactored (2026-03-03 — Backend Route Refactoring: SOLID Principles + Guard Clauses)
+
+**Dashboard.py (317 lines — was deeply nested):**
+- Extracted `_fetch_indices_cached()` — pure helper for market index cards, returns (indices, misses)
+- Extracted `_build_portfolio_summary()` — encapsulated portfolio aggregation + holdings calculation, returns (summary, misses)
+- Extracted `_find_alerts_near_target()` — proximity-based alert detection, returns (count, triggered_alerts, misses)
+- Extracted `_get_user_watchlist()` — watchlist fetching with guest default fallback
+- Extracted `_get_top_movers()` — movers data aggregation sorted by change_pct
+- Main `get_dashboard()` now an orchestrator calling 5 helpers (clean, readable, testable)
+- All helpers follow SOLID: single responsibility, guard clauses, early returns, type hints
+- File size reduction: nested blocks flattened, complexity moved to composable helpers
+
+**Screener.py (345 lines — was monolithic _run_screener_db):**
+- Extracted `_compute_sma()` — pure function for simple moving average (50/200 period)
+- Extracted `_fetch_symbol_bars()` — database query with 30-bar minimum guard clause
+- Extracted `_evaluate_symbol()` — pure function takes bars + filters, returns result or None (early exit on filter fail)
+- All indicator helpers already existed (_compute_rsi, _compute_macd, _compute_signal)
+- _run_screener_db now: iterate → fetch_bars (guard) → evaluate (pure, early return) → collect → sort
+- Flattened try/except blocks using guard clauses (early continue on fetch/eval fail)
+
+**AI Chat.py (408 lines — was deeply nested context builder):**
+- Extracted `_fetch_quote_context()` — cache-first quote fetching, non-blocking fallback, returns formatted string or ""
+- Extracted `_fetch_fundamentals_context()` — fundamentals retrieval + formatting, 3s timeout cap, returns "" on miss
+- Extracted `_fetch_portfolio_context()` — user portfolio aggregation from transactions, returns "" if no holdings
+- Extracted `_fetch_watchlist_context()` — watchlist retrieval, returns "" if empty
+- Main `_build_context()` now: init base prompt → await 4 helpers → append non-empty results → join
+- All helpers use guard clauses: `if not symbol: return ""` to skip processing on falsy input
+- Context building is now linear, non-blocking (no nested try/except blocks)
+
+**Refactoring Principles Applied:**
+- Guard clauses: Early exit on falsy input, missing data, or filter failures
+- Type hints: All helpers have full Callable signatures with Args and Returns docstrings
+- Single responsibility: Each helper does ONE thing (fetch, compute, aggregate, or format)
+- Pure functions: Indicator computation and evaluation have no side effects
+- DRY: Eliminated code duplication across context building
+- Error handling: Try/except flattened into guard clauses and helper boundaries
+- Composability: Main endpoints now orchestrate simple, testable helpers
+
+### Added (2026-03-03 — International Market Support + Symbol Display Cleanup)
+
+**International market support (Japan, Hong Kong, UK, Germany, China, Korea, etc.):**
+- **models/stock.py MarketType enum** — Added 13 new market types: JP, CN, HK, UK, DE, FR, NL, KR, AU, CA, TW, SG, IT
+- **workers/index_populator.py** — Pre-populates DB with international index constituents:
+  - Nikkei 225 (top 30 JP stocks), Hang Seng (top 26 HK stocks), FTSE 100 (top 24 UK stocks), DAX (top 20 DE stocks), SSE 50 (top 16 CN stocks)
+  - Overview indices: ^N225, ^HSI, 000001.SS, ^FTSE, ^GDAXI, ^FCHI, ^KS11, ^TWII, ^STI, ^AEX, ^DJI
+  - Auto-creates MarketType enum values in PostgreSQL via `ALTER TYPE ... ADD VALUE IF NOT EXISTS`
+- **workers/price_fetcher.py FALLBACK_IDX** — Extended from 5 to 16 indices: added ^N225, ^HSI, 000001.SS, ^KS11, ^TWII, ^STI, ^FTSE, ^GDAXI, ^FCHI, ^AEX, ^DJI
+- **services/stock_service.py `_search_yahoo_direct()`** — Auto-detects international market from Yahoo suffix (.T→JP, .HK→HK, .L→UK, .DE→DE, .SS→CN, etc.)
+- **api/routes/screener.py** — Dynamic MarketType enum lookup instead of hardcoded SET/US only
+
+**Symbol display cleanup — strip exchange suffixes, show market badge:**
+- **utils/formatters.js** — New utilities: `parseSymbol(symbol)` strips suffix + detects market, `displaySymbol(symbol)` shorthand, `MARKET_COLORS` for badge colors
+- **Sidebar.tsx** — Uses `parseSymbol()` for watchlist items + search results, shows colored market badge
+- **ChartToolbar.tsx** — Shows clean symbol + market badge (e.g., "ADVANC" + green "SET" badge)
+- **DashboardPage.tsx** — Updated Top Holdings, MoverRow, AlertNearTarget to use `displaySymbol()`
+- **PortfolioPage.tsx** — Holdings + transactions tables use `displaySymbol()`
+- **AlertsPage.tsx** — Alert list uses `displaySymbol()`
+- **BottomPanel.tsx** — Portfolio tab + notes use `displaySymbol()`
+- **SearchModal.tsx** — Uses `parseSymbol()` for display, added international MARKET_META colors (JP, CN, HK, UK, DE, FR, KR), updated popular stocks to include Toyota (.T) and Tencent (.HK)
+
+### Added (2026-03-03 — Thai Fund NAV via SEC Open Data API)
+
+**Thai mutual fund NAV data source — SEC API + Finnomena fallback:**
+- **workers/fund_fetcher.py** — Complete rewrite:
+  - Primary source: SEC Open Data API (api.sec.or.th) — Fund Factsheet for proj_id mapping + Fund Daily Info for daily NAV
+  - Fallback: Finnomena public API (no auth required)
+  - `_build_proj_id_map()`: Enumerates all Thai AMCs → all funds → builds `{fund_abbr_name → proj_id}` mapping (cached 24h in Redis)
+  - `_resolve_proj_id()`: Fuzzy-matches user-entered symbols to SEC names (exact → suffix add/strip → prefix match → manual aliases)
+  - `_fetch_nav_sec()`: Fetches daily NAV with share class matching (-A, -C, -D, -R) to get correct class
+  - Dual-write: writes both `fund:{symbol}` (fund-specific) AND `quote:{symbol}` (same format as price_fetcher) so portfolio/sidebar read without special logic
+- **core/config.py** — Added `sec_fund_factsheet_key` and `sec_fund_daily_info_key` settings
+- **docker-compose.dev.yml** — Added `SEC_FUND_FACTSHEET_KEY` and `SEC_FUND_DAILY_INFO_KEY` env vars to celery-worker and celery-beat services
+- **`_find_prev_nav()`** — Fetches previous day NAV from SEC API to calculate daily change/change_pct for fund quotes
+- **`_fetch_nav_sec()`** — Share class matching: SEC returns multiple classes per proj_id (-A, -C, -D, -R), now matches by `class_abbr_name` to pick correct class
+
+**Thai stock search fix:**
+- **services/stock_service.py `_search_yahoo_direct()`** — Now searches both raw query AND query+".BK" to find Thai SET/MAI stocks. Detects Thai exchange from Yahoo `exchange` field and normalizes symbol with .BK suffix
+
+**Data fixes:**
+- Fixed ADVANC: market US → SET, symbol ADVANC → ADVANC.BK (stocks table + watchlist_items)
+
+### Fixed (2026-03-03 — Portfolio ฿0.00, chart fund loading, symbol auto-registration)
+
+**Critical fix — Portfolio มูลค่ารวม ฿0.00:**
+- **portfolio.py analytics** — `StockQuote(**json)` failed silently because cached quote JSON (from on_demand_listener) is missing `open, high, low, prev_close, timestamp` fields. Changed to use raw dict parsing with `quote.get("price")` instead of `StockQuote` schema. All holdings now show correct current price and P&L.
+
+**Critical fix — Chart loading forever for Thai funds:**
+- **stocks.py `/history`** — Returns `is_fund: true` flag for non-Yahoo-fetchable symbols
+- **schemas.py StockHistory** — Added `is_fund: bool = False` field
+- **TradingChart.tsx** — Detects `is_fund` flag and immediately shows "กองทุนรวม — ไม่มีข้อมูลกราฟ" instead of retrying endlessly
+
+**New feature — Symbol auto-registration (CQRS write side):**
+- **workers/symbol_registrar.py** — New Celery worker with 2 tasks:
+  - `register_symbol(symbol)`: fetches metadata from Yahoo Finance (name, sector, exchange), classifies market type (SET/US/FUND), upserts into `stocks` table
+  - `scan_unregistered()`: periodic task (every 15 min) scans `watchlist_items` + `transactions` for symbols not yet in `stocks` table, dispatches `register_symbol` for each
+- **watchlist.py `add_stock`** — fires `register_symbol.delay()` on stock add
+- **portfolio.py `add_transaction`** — fires `register_symbol.delay()` on transaction add
+- **celery_app.py** — registered `symbol_registrar` + beat schedule
+
+**Portfolio performance 500 error:**
+- **portfolio_performance.py** — Fixed: was calling `fetch_stock_history()` with unsupported `from_ts`/`to_ts` kwargs. Changed to CQRS-compliant `read_history()` (Redis/PostgreSQL only). Handles both dict and OHLCVBar bar formats.
+
+**Dashboard TOP MOVERS layout:**
+- **DashboardPage.tsx MoverRow** — Items without price data now show placeholder icon + "รอข้อมูล…" instead of bare "—" with no icon (was causing visual misalignment)
+
+### Fixed (2026-03-03 — Data gaps: fund NAV, stock names, symbol mapping, chart reload)
+
+**Frontend fixes:**
+- **TradingChart.tsx** — Added `normalizeBarTime()` to convert unix timestamps to `yyyy-mm-dd` (fixes "Invalid date string" crash). Chart now re-fetches on `dataVersion` change (WS `data_ready` → chart auto-updates without page refresh).
+- **Sidebar.tsx** — Thai mutual funds now display NAV with date label instead of "—". Names API returns `{name, market}` so sidebar knows which symbols are funds. Removed broken `searchResults`-based fund filter.
+- **PortfolioPage.tsx** — Auto-retry timer (5s × 6 = 30s) fetches analytics when `has_pending_prices` is true. Also re-fetches on WS `data_ready` via `dataVersion` listener. Removed incorrect "กองทุน" badge that appeared for ALL null-price symbols. Now shows currency badge always, "รอข้อมูล..." for pending, "ไม่มีข้อมูล" for confirmed unavailable.
+- **Caddyfile.dev** — Added Google OAuth domains to CSP (`accounts.google.com`, `apis.google.com`, `frame-src`).
+
+**Backend fixes:**
+- **stocks.py `/names`** — Now returns `{symbol: {name, market}}` with market type so frontend can distinguish FUND vs stock.
+- **stocks.py `/quotes`** — Now checks `fund:{symbol}` Redis cache for FUND symbols. Returns fund NAV as quote-like format with `type: "fund_nav"`. Added `_is_yahoo_fetchable()` filter + DB market=FUND check to prevent sending Thai mutual funds to Yahoo (avoids 20s timeout per symbol).
+- **stocks.py `/{symbol}/quote`** — Added fund cache check (L1.5) before requesting background fetch. Only sends Yahoo-fetchable symbols to on_demand_listener.
+- **stocks.py history/fundamentals** — Added `_is_yahoo_fetchable()` guard before requesting background fetch.
+- **portfolio.py** — 3-stage price enrichment: Redis quote → Redis fund NAV → Celery `request_data_fetch()`. Only sends Yahoo-fetchable symbols to on_demand_listener. `has_pending_prices` flag enables frontend auto-retry.
+- **Yahoo symbol mapping** — Added `BRK.B→BRK-B`, `BRK.A→BRK-A`, `BF.B→BF-B`, `BF.A→BF-A` in all 5 Celery workers + on_demand_listener.
+- **fund_fetcher.py** — Removed `pythainav` dependency (incompatible with FastAPI's typing-extensions). Now fetches directly from SEC Open Data API + yfinance fallback.
+- **workers/__init__.py** — Fixed `task_success_handler` signal signature (Celery `task_success` passes kwargs, not positional args).
+- **requirements.txt** — Removed `pythainav` (dependency conflict with `typing-extensions>=4.8`).
+
+### Refactored (2026-03-03 — Backend API: pure-read architecture, NO external API calls from endpoints)
+
+**Major architecture refactor:** Every API endpoint is now "pure read" — NO endpoint calls external APIs (Yahoo Finance, Stooq, etc.). All data comes exclusively from Redis (L1) → PostgreSQL (L2). Missing data triggers a Celery background task via `request_data_fetch()`.
+
+**Rationale:** Separates concerns cleanly. Data fetching is handled by Celery workers (background). API endpoints focus on fast reads + returning data status (empty/pending). This unblocks the event loop and prevents external API failures from blocking user responses.
+
+- **stock_service.py** — Added 4 pure-read functions:
+  - `async read_quote(symbol)` — Redis cache only, returns None on miss
+  - `async read_history(symbol, tf)` — Redis → PostgreSQL ohlcv_bars table, returns list[dict] or []
+  - `async read_fundamentals(symbol)` — Redis cache only, returns dict or None
+  - `async request_data_fetch(symbol, data_type)` — Publishes to "fetch_requests" Redis channel (deduplicated 30s), triggers Celery worker to fetch + cache data asynchronously
+
+- **stocks.py `/quotes` batch** — Refactored to pure-read:
+  - Removed all calls to `_cache_quote_background()`
+  - Now: 1. Redis pipeline all symbols (one round-trip) 2. Return cached immediately 3. Request background fetch for misses via `request_data_fetch()`
+
+- **stocks.py `/{symbol}/quote`** — Simplified to pure-read:
+  - Removed `_fetch_quote_direct()` direct call with 4s timeout
+  - Now: 1. Read Redis cache (sub-ms) 2. Return 202 pending + request background fetch if miss
+
+- **stocks.py `/{symbol}/history`** — Refactored to pure-read:
+  - Removed `fetch_stock_history()` direct call with 4.5s timeout
+  - Now: 1. Read from Redis → PostgreSQL via `read_history()` 2. Return empty bars + request background fetch if miss
+
+- **stocks.py `/{symbol}/fundamentals`** — Refactored to pure-read:
+  - Removed `fetch_stock_fundamentals()` direct call with 4s timeout
+  - Now: 1. Read Redis cache only via `read_fundamentals()` 2. Return empty + request background fetch if miss
+
+- **screener.py** — Complete rewrite, now pure-read from PostgreSQL:
+  - Removed all httpx.Client calls to Yahoo Finance (was fetching live 6mo daily data per symbol)
+  - Refactored `_run_screener()` → `_run_screener_db()`: accepts AsyncSession, queries ohlcv_bars table for daily bars, computes indicators (RSI, MACD, MA50/MA200) entirely from stored data
+  - Replaced pandas Series `.ewm()/.diff()` with pure Python list comprehensions for RSI/MACD (no pandas dependency in screener logic)
+  - EMA calculation implemented as helper function using standard Wilder smoothing
+  - Endpoint now awaits `_run_screener_db()` directly (no executor thread needed) with 4.5s timeout
+
+**Important:** Existing Celery worker code (`_fetch_quote_direct()`, `fetch_stock_history()`, `fetch_stock_fundamentals()`, `_cache_quote_background()`, etc.) is preserved unchanged. Workers still call these functions to populate Redis/PostgreSQL. Only the API layer changed.
+
+### Added (2026-03-03 — CQRS Write Side: 5 new Celery workers for complete data ingestion)
+
+**5 new Celery workers** created as the sole data ingesters (CQRS write side). API endpoints no longer fetch external data — these workers do it all.
+
+- **`workers/name_fetcher.py`** — `prefetch_names()`: Fetches company names (Yahoo Finance `shortName`) for ALL active symbols in DB. Caches in Redis `cache:name:{symbol}` (24h TTL) + updates `stocks.name` in PostgreSQL. Schedule: every 6 hours.
+- **`workers/fundamentals_fetcher.py`** — `prefetch_fundamentals()`: Fetches PE, PB, EPS, marketCap, dividendYield, beta, 52W high/low from yfinance `.info`. Caches in Redis `fundamentals:{symbol}` (4h TTL). Schedule: every 4 hours.
+- **`workers/fund_fetcher.py`** — `fetch_thai_fund_navs()`: Fetches Thai mutual fund NAV via `pythainav` library (wraps SEC Thailand API + บลจ. websites). Caches in Redis `fund:{symbol}` (24h TTL). Schedule: daily at 19:00 ICT (12:00 UTC). Gracefully handles missing pythainav.
+- **`workers/history_prefetcher.py`** — `prefetch_history()`: Pre-fetches 6-month 1D OHLCV history for all watched symbols with expired cache. Caches in Redis `ohlcv:{symbol}:1D` (6h TTL) + upserts to PostgreSQL `ohlcv_bars`. Schedule: every 30 minutes.
+- **`workers/on_demand_listener.py`** — `process_fetch_request(symbol, data_type)`: Handles API cache-miss fetch requests. Triggered directly via Celery `.delay()` from `request_data_fetch()`. Supports: quote, history, fundamentals, all. Redis NX deduplication (30s lock).
+- **`workers/celery_app.py`** — Added 5 new modules to `include=[]`, 4 new beat schedule entries.
+- **`stock_service.py`** — Updated `request_data_fetch()` to use Celery `.delay()` instead of Redis pub/sub.
+- **`requirements.txt`** — Added `pythainav==0.2.8` for Thai fund NAV.
+
+### Fixed (2026-03-02 — ALL APIs < 5s: fast-response + WebSocket data_ready pattern)
+
+**Architecture change:** Every API endpoint now responds within 5 seconds. External API calls (Yahoo Finance) that would block the response are moved to background tasks. When background data is ready, the server notifies the client via WebSocket `data_ready` message, and the client automatically re-fetches.
+
+- **stock_service.py** — Added `_notify_data_ready(data_type, symbol)` function: publishes `{type: "data_ready", data_type, symbol}` on Redis pub/sub `price_updates` channel. Called after `_cache_quote_background()` completes.
+- **dashboard.py** — Complete rewrite to cache-only pattern: all 4 sections (indices, portfolio, alerts, movers) use new `_fast_quote()` helper (Redis-only, sub-ms). Cache misses trigger `_ensure_quotes_cached()` background task which fetches then publishes WS `data_ready`. Response includes `has_pending_data` flag.
+- **stocks.py `/quotes` batch** — Changed from blocking 12s gather to instant return: cached data returned immediately, cache misses fire individual `_cache_quote_background()` tasks (non-blocking).
+- **stocks.py `/{symbol}/quote`** — 3-tier fast response: L1 Redis cache (sub-ms) → L2 quick fetch with 4s cap → L3 return 202 + trigger background fetch + WS notify.
+- **stocks.py `/{symbol}/history`** — Added 4.5s timeout cap. On timeout: returns empty bars + fires background fetch + WS `data_ready` notification when bars are cached.
+- **stocks.py `/{symbol}/fundamentals`** — Added 4s timeout cap. Returns empty fundamentals on timeout.
+- **stocks.py `/{symbol}/news`** — Reduced feedparser timeout from 8s to 4s per feed.
+- **stocks.py** — Added missing logger import (was referenced in history timeout handler).
+- **portfolio.py `/analytics`** — Replaced blocking 12s `asyncio.gather(fetch_quote_now×N)` with non-blocking background tasks. Returns cached prices immediately, `has_pending_prices: true` flag tells frontend to expect updates.
+- **portfolio_performance.py `/performance`** — Added 4.5s timeout cap on history gather.
+- **ai_chat.py `_build_context()`** — Replaced blocking `fetch_quote_now()` (20s timeout) with Redis cache-only read (sub-ms). On cache miss: triggers background fetch (non-blocking). Fundamentals capped at 3s.
+- **auth.py Google OAuth** — Wrapped `verify_oauth2_token` executor in `asyncio.wait_for(timeout=5.0)` to prevent 10-15s hangs on slow Google key fetch.
+- **screener.py** — Reduced per-symbol Yahoo Finance timeout from 15s to 4s. Added 4.5s total timeout cap on the executor.
+- **schemas.py `PortfolioAnalytics`** — Added `has_pending_prices: bool = False` field.
+- **main.py** — Added `data_ready` message type handling in Redis pub/sub broadcaster: broadcasts to ALL connected WebSocket clients.
+- **useWebSocket.ts** — Added `data_ready` message handler: calls `bumpDataVersion()` from `appStore` to trigger React re-renders in all data-dependent components.
+
+### Fixed (2026-03-02 — Critical frontend bugs: stale closures, missing error UI, fund badge, pct format)
+- **Sidebar.tsx** — Fixed stale closure in price refresh interval. The 60s interval was calling a stale reference of `refreshPrices`. Already using useRef pattern (`refreshPricesRef`) correctly, no change needed. Additionally added FUND symbol filter: before calling `getQuotesBatch`, filter out symbols with market type "FUND" to avoid wasting API calls on unfetchable mutual fund symbols.
+- **PortfolioPage.tsx** — Fixed fund badge display. When a holding has `current_price == null` (mutual funds), now displays "กองทุน" (Fund) yellow badge instead of currency code, and shows "ไม่มี NAV" in price column instead of dash to clarify why price is missing.
+- **ScreenerPage.tsx** — Fixed pct field format in `handleRowClick`. Was incorrectly setting `pct: r.chg` (duplicating change amount) instead of formatting the percentage. Now formats as `"±X.XX%"` string with proper sign prefix. Also added `.toFixed(2)` to price and chg fields for consistency.
+- **DashboardPage.tsx** — Added error state handling. Previously when dashboard API failed, showed blank loading indefinitely. Now captures error message, displays centered error card with warning icon and "Retry" button. Error state checked before loading state, preventing infinite loading loop on persistent failures.
+
+### Fixed (2026-03-02 — PTT.BK retry logic uses 'data' in locals() incorrectly)
+- **stock_service.py `_fetch_yahoo_direct()`** — Fixed critical bug in Thai .BK stock fallback period retry logic. The code checked `if 'data' in locals()` to determine if fresh HTTP data was received, but after the first period iteration, the `data` variable persisted in local scope, causing subsequent period attempts to parse OLD data from the previous iteration instead of fresh data. Fixed with explicit `data_received = False` flag (initialized per period) set to `True` only after successful HTTP response + JSON parse. This ensures each fallback period (1y → 6mo → 3mo → 1mo → 5d) gets tested with fresh data.
+- **stock_service.py `_fetch_yahoo_direct()`** — Improved logging throughout the period fallback flow: added debug logs showing which periods are being tried, warnings when a period returns 0 bars, debug logs showing transitions to next fallback period, and error logs when all periods are exhausted with the full list of attempted periods.
+
+### Fixed (2026-03-02 — Alert field name bug: target_price → value)
+- **dashboard.py** — Fixed crash in alert proximity check: references to non-existent `a.target_price` replaced with correct `a.value` field from Alert model (lines 140, 145, 148). Added null check for RSI/indicator alerts where `a.value` is None. Alert checker worker was already correct; dashboard was the only file with this bug.
+
+### Fixed (2026-03-02 — Portfolio analytics slow + mutual fund symbols blocking Yahoo fetch)
+- **portfolio.py `/analytics`** — Added `_is_yahoo_fetchable()` pre-filter: symbols with spaces, `&`, or other chars that Yahoo Finance rejects (Thai mutual funds: "SCBS&P500", "PRINCIPAL IPROP-D", "MPDIVMF") are immediately excluded from the Yahoo fetch pipeline. Previously each would wait the full 20 s httpx timeout on every cold-cache request, making the endpoint take 20+ s.
+- **portfolio.py `/analytics`** — Added 12 s `asyncio.wait_for` guard around the entire `asyncio.gather` Yahoo batch. Endpoint now returns partial data (prices for whatever completed) within 12 s rather than potentially blocking for 20 s per slow symbol.
+- **stocks.py `/quotes` batch** — Same 12 s `asyncio.wait_for` guard added for cold-cache Sidebar requests.
+- **portfolioService.js** — Reduced frontend timeout 45 s → 20 s (backend now guarantees response within 12 s; 20 s gives 8 s buffer).
+
+### Fixed (2026-03-02 — Portfolio analytics all current_price null)
+- **portfolio.py `/analytics` endpoint** — Same semaphore starvation bug as the batch quotes endpoint: `asyncio.gather(fetch_quote_now×13)` competed for 8 semaphore slots simultaneously. Fixed with the same two-stage Redis pipeline strategy: (1) read all holdings from Redis in one pipeline round-trip; (2) only symbols missing from cache go to `fetch_quote_now()`. In steady state (Celery running), portfolio prices are served entirely from Redis cache in milliseconds.
+
+### Fixed (2026-03-02 — Batch quotes all-null + company names missing for US stocks)
+- **stocks.py `/quotes` batch endpoint** — Complete rewrite to two-stage strategy: (1) Redis pipeline checks ALL symbols in one round-trip — if Celery keeps cache warm this returns instantly with zero Yahoo requests; (2) only true cache misses go to `fetch_quote_now()` in parallel. Previously all 13 symbols hit `asyncio.gather(fetch_quote_now×13)` simultaneously, competing for 8 semaphore slots — the last 5 waited 4-6s for slots, leaving <3s for Yahoo, causing cascade timeouts and "all null" response.
+- **stock_service.py `fetch_quote_now()`** — Raised hard cap from 7s → 20s to match the `httpx.Timeout(20.0)` inside `_fetch_quote_direct`. 7s was too tight when semaphore wait is included in the budget.
+- **stock_service.py `_fetch_quote_direct()`** — Now caches `meta.shortName` from Yahoo chart API response into Redis `cache:name:{symbol}` (24h TTL). This populates company names for US stocks/ETFs not in the local PostgreSQL DB.
+- **stocks.py `/names` endpoint** — Added Redis name cache fallback: for symbols not found in local DB (US ETFs like VOO, SCHD, BRK.B), reads from `cache:name:{symbol}` populated by `_fetch_quote_direct`. Sidebar now shows "Vanguard S&P 500 ETF" instead of "VOO" once the quote has been fetched at least once.
+
+### Fixed (2026-03-02 — Not-found cache poisoning valid symbols like NVDA)
+- **stock_service.py `fetch_quote_now()`** — Critical cache poisoning bug: `asyncio.TimeoutError` (7s hard cap exceeded) was treated identically to "symbol not found", setting `cache:quote:notfound:{sym}` for 5 minutes. So if Yahoo was slow once for NVDA, all `/quote/NVDA` requests returned 404 for 5 minutes. Fixed: only set not-found key when `_fetch_quote_direct()` returns `None` cleanly (Yahoo explicitly returned empty data) — not on `asyncio.TimeoutError` or any `Exception` (`is_transient_failure` flag). Timeouts and network errors now bypass the cache, allowing the next request to retry Yahoo immediately.
+
+### Fixed (2026-03-02 — RightPanel quote & 52W data)
+- **stockService.js `getQuote()`** — Dead-code bug: `if (res.status === 404)` was unreachable because axios throws on 4xx before returning. Fixed with try/catch: 404 now returns `{ data: null }` so the component sees "not found" cleanly; all other errors (timeout, network) are re-thrown for the caller's `.catch()` to handle
+- **RightPanel.tsx `fetchQuote()`** — Removed obsolete 202-retry loop (6 retries × 5s = 30s of pointless polling). Backend `fetch_quote_now()` now blocks server-side for up to 7s and returns data or 404 — client-side polling is redundant and was masking the silent 404 failure
+- **RightPanel.tsx `fetchQuote()`** — 404 from `getQuote` was silently swallowed: `.catch()` only set `timedOut` for ECONNABORTED, so quote stayed `null` forever with no error shown. Now handled cleanly: `{ data: null }` → quote stays null (panel shows "—"), real errors → setTimedOut
+- **RightPanel.tsx stats** — Field name mismatch: `fundamentals?.high_52week` and `fundamentals?.low_52week` were referencing non-existent fields. Backend Pydantic schema exports `week_52_high` / `week_52_low`. Fixed to match — 52W High/Low now display actual data
+- **RightPanel.tsx** — Removed unused `useRef` import and `quoteRetryRef` (only existed to support the now-deleted retry timer)
+
+### Fixed (2026-03-02 — Quote timeouts + Vite HMR CSP)
+- **stock_service.py `fetch_quote_now()`** — Added 7s hard cap via `asyncio.wait_for()`. Without this, batch calls block 20+ s waiting for invalid symbols (e.g. Thai mutual funds MPDIVMF, SCBS&P500 that don't exist on Yahoo Finance)
+- **stock_service.py `fetch_quote_now()`** — Added "not-found" cache (Redis key `cache:quote:notfound:{sym}`, TTL 5 min): first miss fetches from Yahoo; subsequent calls return `None` instantly, preventing repeat hammering of Yahoo for invalid tickers
+- **stock_service.py `_fetch_quote_direct()`** — Reduced .BK timeout from 20s → 8s, retries from 3 → 2 (faster fail, within the 7s fetch_quote_now hard cap)
+- **caddy/Caddyfile.dev** — Removed strict CSP headers that blocked Vite HMR module injection (`(blocked:csp)` in network tab). Dev CSP now allows `blob:`, `https:`, `http:`, `worker-src blob:` so Vite hot-reload works properly. **Production Caddyfile unchanged.**
+
+### Fixed (2026-03-02 — News page overhaul + backend async fix)
+- **stocks.py `/news` endpoint** — Fixed sync-blocking `feedparser.parse()` running in async handler; now uses `asyncio.to_thread()` to prevent event loop stall
+- **stocks.py `/news` endpoint** — Robust symbol sanitisation: strips `^`, `=X`, `=F`, `.BK`/`.MAI` and special chars; maps known index aliases to readable queries (GSPC → "S&P 500")
+- **stocks.py `/news` endpoint** — 8s timeout per fetch + Thai-first / English-fallback dual-language strategy
+- **NewsPage.tsx** — Full rewrite: search bar, tab-based symbol routing (SET/US/Watchlist), symbol validation (rejects garbage like "SCBS&P500"), sentiment summary counts, empty-state fallback button, refresh button
+
+### Fixed (2026-03-02 — Dashboard prices & UI)
+- **dashboard.py** — Replaced all `fetch_stock_quote()` (fire-and-forget → None on cache miss) with `fetch_quote_now()` (blocking, always returns data) for indices, portfolio summary, alert proximity checks, and movers
+- **dashboard.py** — Alert proximity checks now run in parallel via `asyncio.gather` instead of sequential `for` loop (faster dashboard load)
+- **dashboardService.js** — Increased timeout from 12s → 30s to accommodate parallel Yahoo Finance fetches
+- **portfolioService.js** — Increased analytics timeout from 12s → 45s for portfolios with many holdings
+- **DashboardPage.tsx** — Complete UI refresh:
+  - `IndexCard`: added directional arrow icon (ArrowUpRight/ArrowDownRight), tighter spacing, % on own line
+  - `MoverRow`: added colored TrendingUp/Down icon badge, better alignment, right-align % column
+  - Portfolio card: side-by-side layout (value+sparkline left, top holdings right)
+  - Market Status card: added trading hours text (10:00–16:30 / 21:30–04:00 ICT), divider between markets
+  - Alerts section: horizontal layout (count left, content right) instead of stacked
+  - Movers grid: sorted with data-available stocks first; xl:col-span-4 → md:col-span-3 xl:col-span-4
+
+### Changed (2026-03-02 — Portfolio Tab Layout)
+- **PortfolioPage.tsx** — Converted from stacked sections to tab-based layout
+  - Tab bar with "Holdings" (BarChart2 icon + badge count) and "ประวัติธุรกรรม" (History icon + badge count)
+  - Active tab shows accent underline indicator + accent-colored badge
+  - Holdings tab: table with hover rows, empty state with CTA button
+  - History tab: filter bar (ทั้งหมด/ซื้อ/ขาย) + transaction table + empty state
+  - Removed collapsible toggle (ChevronUp/Down); tabs replace the show/hide mechanic
+
 ### Added (2026-03-02 — Frontend UI Design System)
 - **frontend/src/styles/glass.css** — Global CSS design tokens & semantic color system
   - Color tokens: `--color-positive` (#10b981), `--color-negative` (#f43f5e), `--color-neutral`

@@ -60,4 +60,5 @@ const useAppStore = create((set) => ({
     bumpDataVersion: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
 }));
 
+export { useAppStore };
 export default useAppStore;

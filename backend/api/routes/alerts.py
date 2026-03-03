@@ -4,9 +4,39 @@ from sqlalchemy import select
 
 from core.database import get_db
 from models.user import User
-from models.alert import Alert
+from models.alert import Alert, AlertType, AlertChannel
 from models.schemas import AlertCreate, AlertUpdate, AlertResponse
 from api.middleware.auth import get_current_user
+
+
+def _resolve_alert_type(raw: str) -> AlertType:
+    """Normalize frontend alert_type to DB enum.
+
+    Accepts: "Price Above", "PRICE_ABOVE", "price_above", etc.
+    """
+    key = raw.strip().upper().replace(" ", "_")
+    try:
+        return AlertType(key)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid alert_type '{raw}'. Valid: {[e.value for e in AlertType]}",
+        )
+
+
+def _resolve_channel(raw: str) -> AlertChannel:
+    """Normalize frontend channel to DB enum.
+
+    Accepts: "in_app", "IN_APP", "telegram", etc.
+    """
+    key = raw.strip().upper()
+    try:
+        return AlertChannel(key)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Invalid channel '{raw}'. Valid: {[e.value for e in AlertChannel]}",
+        )
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -33,10 +63,10 @@ async def create_alert(
     alert = Alert(
         user_id=user.id,
         symbol=body.symbol.upper(),
-        alert_type=body.alert_type,
+        alert_type=_resolve_alert_type(body.alert_type),
         condition=body.condition,
         value=body.value,
-        channel=body.channel,
+        channel=_resolve_channel(body.channel),
     )
     db.add(alert)
     await db.flush()

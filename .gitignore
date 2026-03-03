@@ -42,6 +42,7 @@ yarn-debug.log*
 yarn-error.log*
 .pnp
 .pnp.js
+package-lock.json
 
 # ===== Vite / Build Output =====
 frontend/dist/
@@ -67,6 +68,12 @@ frontend/.playwright/
 pgdata/
 redisdata/
 backup*.sql
+backend/db/migrations/
+
+# ===== Docker volumes =====
+ollama_data/
+postgres_data/
+redis_data/
 
 # ===== OS =====
 .DS_Store
@@ -92,3 +99,24 @@ logs/
 # ===== Skills (local dev tool ไม่ต้องขึ้น repo) =====
 *.skill
 .skills/
+
+# ===== Claude / AI agent artifacts =====
+.claude/
+CELERY_ARCHITECTURE_DIAGRAM.txt
+CELERY_INTEGRATION_EXAMPLES.md
+CELERY_WORKERS_QUICK_REFERENCE.md
+CELERY_WORKERS_SUMMARY.md
+CHANGES_MANIFEST.md
+COMPONENT_SPLIT_SUMMARY.md
+DEVOPS_MONITORING.md
+FILES_CREATED_AND_MODIFIED.txt
+IMPORTS_AND_EXPORTS.md
+PRODUCTION_DEPLOY.md
+REFACTORING_QUICK_REFERENCE.md
+TESTING.md
+TESTING_QUICK_START.md
+
+# ===== Binary / large docs (ใช้ Google Drive แทน) =====
+*.docx
+*.xlsx
+*.pptx

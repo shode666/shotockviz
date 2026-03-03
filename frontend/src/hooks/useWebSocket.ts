@@ -1,13 +1,28 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import useAuthStore from '@/store/authStore';
+import useAppStore from '@/store/appStore';
 import toast from 'react-hot-toast';
 
+/**
+ * WebSocket hook for real-time updates.
+ *
+ * Handles 3 message types from backend:
+ *   - 'alert_triggered' → show toast notification
+ *   - 'price_update'    → update live prices in sidebar
+ *   - 'data_ready'      → backend finished fetching external data,
+ *                          bump dataVersion so React components re-fetch
+ */
 export default function useWebSocket() {
     const { token, user } = useAuthStore();
+    const bumpDataVersion = useAppStore(s => s.bumpDataVersion);
     const [isConnected, setIsConnected] = useState(false);
     const wsRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const reconnectAttemptsRef = useRef(0);
+
+    // Store latest bumpDataVersion in ref to avoid stale closure
+    const bumpRef = useRef(bumpDataVersion);
+    bumpRef.current = bumpDataVersion;
 
     useEffect(() => {
         if (!token || !user?.id) {
@@ -20,17 +35,14 @@ export default function useWebSocket() {
         }
 
         const connect = () => {
-            // Determine WS URL based on current protocol
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            // Use same host to pass through Caddy/Vite proxy
-            // Backend route is /api/ws/prices (unified endpoint for all subscriptions)
             const wsUrl = `${protocol}//${window.location.host}/api/ws/prices`;
 
             const ws = new WebSocket(wsUrl);
 
             ws.onopen = () => {
                 setIsConnected(true);
-                reconnectAttemptsRef.current = 0; // reset backoff on success
+                reconnectAttemptsRef.current = 0;
                 if (reconnectTimeoutRef.current) {
                     clearTimeout(reconnectTimeoutRef.current);
                     reconnectTimeoutRef.current = null;
@@ -40,13 +52,23 @@ export default function useWebSocket() {
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
+
                     if (data.type === 'alert_triggered') {
                         toast.success(
-                            `${data.data.symbol} Alert Triggered! - ${data.data.condition}`,
+                            `${data.data?.symbol ?? data.symbol} Alert Triggered!`,
                             { duration: 5000, position: 'top-right' }
                         );
+                    } else if (data.type === 'data_ready') {
+                        // Backend finished fetching external data → tell React to re-fetch
+                        // data_type can be: "quote", "history", "fundamentals", "dashboard"
+                        // symbol can be: specific symbol or "*" (broadcast)
+                        console.debug('[WS] data_ready:', data.data_type, data.symbol);
+                        if (bumpRef.current) {
+                            bumpRef.current();
+                        }
                     } else if (data.type === 'price_update') {
-                        // Optional: Handle live price updates if pushed via WS
+                        // Live price push from Celery worker
+                        // Components can listen to appStore.dataVersion for refresh
                     }
                 } catch (e) {
                     console.error('Failed to parse WS message', e);
@@ -55,7 +77,6 @@ export default function useWebSocket() {
 
             ws.onclose = () => {
                 setIsConnected(false);
-                // Exponential backoff: 2s, 4s, 8s, 16s, 30s (max)
                 const delay = Math.min(2000 * Math.pow(2, reconnectAttemptsRef.current), 30_000);
                 reconnectAttemptsRef.current += 1;
                 reconnectTimeoutRef.current = setTimeout(connect, delay);

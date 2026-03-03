@@ -1,4 +1,6 @@
 import asyncio
+import json as _json
+import re
 
 from fastapi import APIRouter, Query, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -6,15 +8,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_
 
 from core.database import get_db
+from core import cache_keys
 from models.user import User
 from models.stock import Stock
 from models.schemas import StockQuote, StockHistory, StockFundamentals, OHLCVBar
 from api.middleware.auth import get_optional_user
 from services import stock_service
+from core.logger import get_logger
 
 router = APIRouter(prefix="/api/stocks", tags=["stocks"])
+logger = get_logger(__name__)
 
 VALID_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"}
+
+# Yahoo Finance only accepts simple ticker symbols (letters, digits, dots, hyphens, carets).
+# Thai mutual fund names like "SCBS&P500", "PRINCIPAL IPROP-D", "MPDIVMF" that contain
+# spaces or & will never resolve — skip them to avoid 20s timeout per symbol.
+_YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
+
+def _is_yahoo_fetchable(symbol: str) -> bool:
+    """Return True if the symbol looks like a real Yahoo Finance ticker."""
+    return bool(_YAHOO_SYMBOL_RE.match(symbol.upper()))
 
 
 @router.get("/search")
@@ -86,50 +100,197 @@ async def get_stock_names(
     symbols: str = Query(..., description="Comma-separated list of symbols, e.g. PTT.BK,AAPL,NVDA"),
     db: AsyncSession = Depends(get_db),
 ):
-    """Batch name lookup from the local DB.
+    """Batch name + market type lookup from the local DB.
 
-    Returns ``{symbol: name}`` for every requested symbol.
-    Symbols not found in the DB fall back to the raw symbol string.
-    Used by the Sidebar to display company names instead of tickers.
+    Returns ``{symbol: {name, market}}`` for every requested symbol.
+    Symbols not found in the DB fall back to the raw symbol string with market=null.
+    Used by the Sidebar to display company names instead of tickers,
+    and to distinguish FUND symbols (show NAV) from stocks (show price).
     """
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:50]
     if not sym_list:
         return {}
 
     result = await db.execute(
-        select(Stock.symbol, Stock.name, Stock.name_th)
+        select(Stock.symbol, Stock.name, Stock.name_th, Stock.market)
         .where(Stock.symbol.in_(sym_list))
     )
     rows = result.all()
 
-    name_map: dict[str, str] = {sym: sym for sym in sym_list}  # default: symbol itself
+    # Build response: {symbol: {name, market}}
+    name_map: dict[str, dict] = {sym: {"name": sym, "market": None} for sym in sym_list}
     for row in rows:
         # Prefer Thai name for .BK/.MAI symbols, English otherwise
         if row.symbol.endswith(".BK") or row.symbol.endswith(".MAI"):
-            name_map[row.symbol] = row.name_th or row.name or row.symbol
+            display_name = row.name_th or row.name or row.symbol
         else:
-            name_map[row.symbol] = row.name or row.symbol
+            display_name = row.name or row.symbol
+        name_map[row.symbol] = {
+            "name": display_name,
+            "market": row.market.value if row.market else None,
+        }
+
+    # For symbols still showing raw ticker (not in local DB — e.g. US ETFs VOO, SCHD),
+    # check Redis name cache populated by name_fetcher worker.
+    db_misses = [sym for sym in sym_list if name_map[sym]["name"] == sym]
+    if db_misses:
+        try:
+            r = await stock_service.get_redis()
+            pipe = r.pipeline()
+            for sym in db_misses:
+                pipe.get(cache_keys.name(sym))
+            name_values = await pipe.execute()
+            for sym, cached_name in zip(db_misses, name_values):
+                if cached_name:
+                    name_map[sym]["name"] = cached_name
+        except Exception:
+            pass  # Redis unavailable — keep raw symbol as fallback
 
     return name_map
 
 
+@router.get("/quotes")
+async def get_quotes_batch(symbols: str = Query(..., description="Comma-separated symbols, e.g. NVDA,VOO,PTT.BK")):
+    """Batch quote fetch — returns a dict {symbol: quote} for all requested symbols.
+
+    Pure-read: reads from Redis cache ONLY. For cache misses, triggers background
+    Celery fetch via request_data_fetch() without blocking.
+
+    Strategy:
+      1. Redis pipeline: check all symbols in ONE round-trip (sub-millisecond).
+         In steady state Celery keeps the cache warm, so nearly all hits land here.
+      2. Cache misses: request background fetch via Celery (non-blocking).
+         Client gets notified via WebSocket 'data_ready' when quotes arrive.
+    """
+    sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()][:30]
+    result: dict = {sym: None for sym in sym_list}
+
+    # ── Stage 1: Redis pipeline (all symbols, one round-trip) ─────────────────
+    misses = list(sym_list)
+    try:
+        r = await stock_service.get_redis()
+        pipe = r.pipeline()
+        for sym in sym_list:
+            pipe.get(cache_keys.quote(sym))
+        cached_values = await pipe.execute()
+
+        misses = []
+        for sym, raw in zip(sym_list, cached_values):
+            if raw:
+                try:
+                    result[sym] = _json.loads(raw)
+                except Exception:
+                    misses.append(sym)
+            else:
+                misses.append(sym)
+    except Exception:
+        misses = list(sym_list)   # Redis down — return empty, request fetches
+
+    # ── Stage 2: Check fund NAV cache for symbols still missing ─────────────
+    # Thai mutual funds don't exist on Yahoo Finance, so check fund:{symbol} cache
+    fund_misses = [sym for sym in misses if result[sym] is None]
+    if fund_misses:
+        try:
+            r = await stock_service.get_redis()
+            pipe = r.pipeline()
+            for sym in fund_misses:
+                pipe.get(cache_keys.fund(sym))
+            fund_values = await pipe.execute()
+            for sym, raw in zip(fund_misses, fund_values):
+                if raw:
+                    try:
+                        fund_data = _json.loads(raw)
+                        # Convert fund NAV to quote-like format for sidebar compatibility
+                        result[sym] = {
+                            "symbol": sym,
+                            "price": fund_data.get("nav"),
+                            "change": 0,
+                            "change_pct": 0,
+                            "volume": 0,
+                            "type": "fund_nav",
+                            "nav_date": fund_data.get("date"),
+                            "ts": fund_data.get("ts", 0),
+                        }
+                        # Remove from misses since we found fund data
+                        misses = [m for m in misses if m != sym]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    # ── Stage 3: Request background fetch for remaining misses ────────────
+    # Instead of blocking, return cached data NOW and request BG fetch for misses.
+    # Client gets notified via WebSocket 'data_ready' when quotes arrive.
+    # Skip: (a) symbols with bad chars for Yahoo, (b) DB market=FUND symbols.
+    if misses:
+        # Check DB for FUND market type to avoid sending Thai mutual funds to Yahoo
+        fund_symbols: set[str] = set()
+        try:
+            from core.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as db_check:
+                res = await db_check.execute(
+                    select(Stock.symbol).where(
+                        Stock.symbol.in_(misses),
+                        Stock.market == "FUND",
+                    )
+                )
+                fund_symbols = {r[0] for r in res.all()}
+        except Exception:
+            pass
+
+        fetchable = [sym for sym in misses if _is_yahoo_fetchable(sym) and sym not in fund_symbols]
+        for sym in fetchable:
+            await stock_service.request_data_fetch(sym, "quote")
+
+    return result
+
+
 @router.get("/{symbol}/quote")
 async def get_quote(symbol: str):
-    """Get current stock quote — served from Redis cache only.
+    """Get current stock quote — pure-read fast response pattern.
 
-    Returns the cached quote if available, or {"status": "pending"} with
-    HTTP 202 if the background worker hasn't fetched the symbol yet.
-    External APIs are never called inside this request.
+    Pure-read: reads from Redis cache ONLY. Never calls external APIs.
+
+    1. Check Redis cache (sub-ms) → return immediately if available
+    2. Cache miss → request background fetch (non-blocking)
+    3. Return 202 pending status + trigger Celery fetch + WS notify when ready
     """
-    quote = await stock_service.fetch_stock_quote(symbol.upper())
-    if not quote:
-        # Background fetch has been triggered — tell the client to retry
-        return JSONResponse(
-            status_code=202,
-            content={"status": "pending", "symbol": symbol.upper(),
-                     "message": "Data is being fetched. Retry in a few seconds."},
-        )
-    return quote
+    sym = symbol.upper()
+
+    # L1: Cache check (instant)
+    quote = await stock_service.read_quote(sym)
+    if quote:
+        return JSONResponse(content=quote)
+
+    # L1.5: Check fund NAV cache (Thai mutual funds)
+    try:
+        r = await stock_service.get_redis()
+        fund_raw = await r.get(cache_keys.fund(sym))
+        if fund_raw:
+            fund_data = _json.loads(fund_raw)
+            nav = fund_data.get("nav")
+            if nav is not None:
+                return JSONResponse(content={
+                    "symbol": sym, "price": nav,
+                    "change": 0, "change_pct": 0, "volume": 0,
+                    "type": "fund_nav", "nav_date": fund_data.get("date"),
+                })
+    except Exception:
+        pass
+
+    # L2: No cache — request background fetch (non-blocking)
+    # Only for Yahoo-fetchable symbols — Thai mutual funds won't resolve
+    if _is_yahoo_fetchable(sym):
+        await stock_service.request_data_fetch(sym, "quote")
+
+    return JSONResponse(
+        status_code=202,
+        content={
+            "status": "pending",
+            "symbol": sym,
+            "message": "กำลังดึงข้อมูล — จะแจ้งผ่าน WebSocket เมื่อพร้อม",
+        },
+    )
 
 
 @router.get("/{symbol}/history", response_model=StockHistory)
@@ -138,14 +299,31 @@ async def get_history(
     tf: str = Query("1D", description="Timeframe: 1m,5m,15m,1h,4h,1D,1W,1M"),
     _user: User | None = Depends(get_optional_user),
 ):
-    """Get OHLCV history for a symbol and timeframe."""
+    """Get OHLCV history for a symbol and timeframe — pure-read.
+
+    Pure-read: reads from Redis/PostgreSQL ONLY. Never calls external APIs.
+    Fast-response: reads cache first (< 100ms).
+    If data missing, requests background fetch and returns empty bars.
+    Client gets WS 'data_ready' notification when bars are available.
+    """
     if tf not in VALID_TIMEFRAMES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid timeframe. Choose from: {', '.join(VALID_TIMEFRAMES)}",
         )
-    bars = await stock_service.fetch_stock_history(symbol.upper(), tf)
-    return StockHistory(symbol=symbol.upper(), timeframe=tf, bars=bars)
+    sym = symbol.upper()
+
+    # Pure-read: Redis → PostgreSQL only
+    bars = await stock_service.read_history(sym, tf)
+
+    # Detect Thai mutual funds that have no chart data on Yahoo Finance
+    is_fund = not _is_yahoo_fetchable(sym)
+
+    if not bars and not is_fund:
+        # No data — request background fetch (only for Yahoo-resolvable symbols)
+        await stock_service.request_data_fetch(sym, "history")
+
+    return StockHistory(symbol=sym, timeframe=tf, bars=bars, is_fund=is_fund)
 
 
 @router.get("/{symbol}/fundamentals", response_model=StockFundamentals)
@@ -153,16 +331,24 @@ async def get_fundamentals(
     symbol: str,
     _user: User | None = Depends(get_optional_user),
 ):
-    """Get fundamental data for a stock.
+    """Get fundamental data for a stock — pure-read.
 
-    Returns empty (all-null) fundamentals when data is unavailable (e.g. Yahoo
-    Finance rate-limiting) so the frontend shows '—' instead of an error state.
+    Pure-read: reads from Redis cache ONLY. Never calls external APIs.
+    Returns empty (all-null) fundamentals when data is unavailable in cache.
+    For missing data, requests background fetch via Celery.
     """
-    data = await stock_service.fetch_stock_fundamentals(symbol.upper())
+    sym = symbol.upper()
+
+    # Pure-read: Redis cache only
+    data = await stock_service.read_fundamentals(sym)
+
     if not data:
-        # Return shell object with null fields — 200 keeps the frontend quiet
-        return StockFundamentals(symbol=symbol.upper())
-    return data
+        # No cache — request background fetch (only for Yahoo-resolvable symbols)
+        if _is_yahoo_fetchable(sym):
+            await stock_service.request_data_fetch(sym, "fundamentals")
+        return StockFundamentals(symbol=sym)
+
+    return StockFundamentals(**data)
 
 
 @router.get("/{symbol}/news")
@@ -170,24 +356,71 @@ async def get_stock_news(
     symbol: str,
     _user: User | None = Depends(get_optional_user),
 ):
-    """Get recent news for a symbol via RSS."""
+    """Get recent news for a symbol via Google News RSS.
+
+    Runs feedparser in a thread so it never blocks the async event loop.
+    Symbol is sanitised before use: strips exchange suffixes, index prefixes,
+    forex suffixes, and special chars that Google News would reject.
+    """
+    import re
     import feedparser
-    query = symbol.replace(".BK", "") + " stock"
-    url = f"https://news.google.com/rss/search?q={query}&hl=th&gl=TH&ceid=TH:th"
-    try:
-        feed = feedparser.parse(url)
-        items = []
-        for entry in feed.entries[:10]:
-            items.append({
-                "title": entry.get("title", ""),
-                "url": entry.get("link", ""),
-                "source": entry.get("source", {}).get("title", "Google News"),
-                "published_at": entry.get("published", ""),
-                "summary": entry.get("summary", ""),
-            })
-        return items
-    except Exception:
+
+    # ── 1. Sanitise the symbol ────────────────────────────────────────────
+    raw = symbol.upper().strip()
+
+    # Strip common Yahoo Finance suffixes / prefixes
+    clean = raw
+    clean = re.sub(r"\^", "", clean)           # index prefix  ^GSPC → GSPC
+    clean = re.sub(r"=X$", "", clean)          # forex suffix  THBUSD=X → THBUSD
+    clean = re.sub(r"=F$", "", clean)          # futures       GC=F → GC
+    clean = re.sub(r"\.BK$", "", clean)        # SET suffix    PTT.BK → PTT
+    clean = re.sub(r"\.MAI$", "", clean)       # MAI suffix
+    clean = re.sub(r"[^A-Z0-9/\- ]", "", clean)  # remove any remaining junk
+
+    if not clean or len(clean) < 1:
         return []
+
+    # ── 2. Build search query ─────────────────────────────────────────────
+    # For index shorthands give a more meaningful query
+    SYMBOL_ALIAS = {
+        "GSPC": "S&P 500",
+        "IXIC": "NASDAQ",
+        "DJI": "Dow Jones",
+        "SETBK": "SET index Thailand",
+        "THBUSD": "USD THB exchange rate",
+        "GC": "gold price",
+    }
+    query_term = SYMBOL_ALIAS.get(clean, f"{clean} stock")
+
+    # ── 3. Fetch from Google News RSS (async — run in thread) ─────────────
+    async def _fetch(url: str):
+        return await asyncio.to_thread(feedparser.parse, url)
+
+    items = []
+    tried_langs = [
+        # Thai results first (relevant for SET stocks)
+        f"https://news.google.com/rss/search?q={query_term}&hl=th&gl=TH&ceid=TH:th",
+        # English fallback (broader, better for US stocks)
+        f"https://news.google.com/rss/search?q={query_term}&hl=en-US&gl=US&ceid=US:en",
+    ]
+
+    for url in tried_langs:
+        try:
+            feed = await asyncio.wait_for(_fetch(url), timeout=4.0)
+            for entry in feed.entries[:12]:
+                items.append({
+                    "title": entry.get("title", ""),
+                    "url": entry.get("link", ""),
+                    "source": entry.get("source", {}).get("title", "Google News"),
+                    "published_at": entry.get("published", ""),
+                    "summary": entry.get("summary", ""),
+                })
+            if items:
+                break  # got results from this language, no need for fallback
+        except Exception:
+            continue
+
+    return items
 
 
 @router.get("/{symbol}/events")

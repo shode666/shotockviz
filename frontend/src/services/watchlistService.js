@@ -16,4 +16,5 @@ const watchlistService = {
     ),
 };
 
+export { watchlistService };
 export default watchlistService;

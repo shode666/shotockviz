@@ -88,6 +88,7 @@ class StockHistory(BaseModel):
     symbol: str
     timeframe: str
     bars: List[OHLCVBar]
+    is_fund: bool = False  # True for Thai mutual funds — no chart data available
 
 
 class StockFundamentals(BaseModel):
@@ -207,6 +208,7 @@ class PortfolioAnalytics(BaseModel):
     unrealized_pl_pct: float
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
+    has_pending_prices: bool = False
 
 
 # ─── Alert ─────────────────────────────────────────────────────────────────

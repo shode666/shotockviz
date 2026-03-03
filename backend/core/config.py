@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     telegram_bot_token: str = ""
 
+    # SEC Open Data API (Thai mutual fund NAV)
+    # Register free at https://api-portal.sec.or.th
+    sec_fund_factsheet_key: str = ""   # Subscribe to "Fund Factsheet" API
+    sec_fund_daily_info_key: str = ""  # Subscribe to "Fund Daily Info" API
+
     # CORS
     cors_origins: str = "http://localhost:5173"
 

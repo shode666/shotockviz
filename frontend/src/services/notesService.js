@@ -6,4 +6,5 @@ const notesService = {
     delete: (symbol) => api.delete(`/notes/${symbol}`),
 };
 
+export { notesService };
 export default notesService;

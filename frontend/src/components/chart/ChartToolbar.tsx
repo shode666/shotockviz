@@ -1,4 +1,5 @@
 import { CandlestickChart, TrendingUp, AreaChart, Loader2 } from 'lucide-react';
+import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 const chartTypes = [
@@ -25,7 +26,10 @@ export default function ChartToolbar({
         >
             {/* Stock info */}
             <div className="flex items-center gap-2 mr-2">
-                <span className="font-bold text-sm">{selectedStock.sym}</span>
+                <span className="font-bold text-sm">{parseSymbol(selectedStock.sym).display}</span>
+                {(() => { const p = parseSymbol(selectedStock.sym); const c = MARKET_COLORS[p.market]; return c ? (
+                    <span className="badge text-[9px]" style={{ background: c.bg, color: c.text }}>{p.market}</span>
+                ) : null; })()}
                 <span
                     className="text-sm font-bold"
                     style={{ color: selectedStock.up ? 'var(--color-green)' : 'var(--color-red)' }}

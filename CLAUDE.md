@@ -25,9 +25,9 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
 | Backend | FastAPI (Python 3.13) + SQLAlchemy 2 + Pydantic 2 |
 | Database | PostgreSQL 16 + TimescaleDB (time-series) |
 | Cache | Redis 7 (caching + Celery broker + WebSocket pub/sub) |
-| Background | Celery 5.6 + Beat (price fetching, alert checking) |
+| Background | Celery 5.6 + Beat (price, names, fundamentals, fund NAV, history prefetch, alerts) |
 | AI | Ollama (llama3.2) — local LLM, no cloud |
-| Data | Yahoo Finance + Finnhub (free tier) |
+| Data | Yahoo Finance + pythainav (Thai fund NAV) + Stooq (US fallback) |
 | Proxy | Caddy 2 (reverse proxy + auto TLS) |
 
 ## Docker Commands
@@ -48,7 +48,7 @@ ShotockViz/
 │   ├── api/routes/          # 13 endpoint modules (auth, stocks, watchlist, portfolio, alerts, screener, ai_chat, etc.)
 │   ├── models/              # SQLAlchemy ORM (User, Stock, StockPrice1m, Transaction, Alert, Drawing, Note, StockEvent)
 │   ├── services/            # stock_service.py (47KB), cache_service.py
-│   ├── workers/             # Celery: price_fetcher, alert_checker, housekeeping
+│   ├── workers/             # Celery: price_fetcher, name_fetcher, fundamentals_fetcher, fund_fetcher, history_prefetcher, on_demand_listener, alert_checker, housekeeping
 │   ├── core/                # config, database, redis, security
 │   └── main.py              # FastAPI app + WebSocket manager
 ├── frontend/
@@ -83,19 +83,24 @@ ShotockViz/
 
 ## Current Status & Priorities
 
-**Phase 1 (Stabilization):** In progress — critical fixes applied but frontend Docker rebuild pending.
+**Phase 1 (Stabilization):** ✅ Complete — critical fixes applied, fast-response pattern implemented.
+**Phase 2 (CQRS Refactor):** ✅ Complete — API pure-read, 5 new Celery workers created.
+**Phase 3 (Data Completeness):** 🔧 In progress — Thai fund NAV + data gaps.
 
-### Immediate Blockers (Week 1)
+### Current Priorities
 1. **Frontend Docker rebuild** — compiled bundle outdated, source fixes not active
-2. **Verify live WebSocket prices** during market hours (20:30-03:00 ICT for US)
-3. **Fix Thai .BK stock data** — PTT.BK returning empty history
-4. **System health monitoring** — Celery failures are silent
+2. **Backend Docker rebuild** — new Celery workers need to be registered
+3. **Verify CQRS flow** — API returns cache-only → Celery fetches → WS notifies → client re-fetches
+4. **Thai Fund NAV** — pythainav integration via `fund_fetcher.py` (daily at 19:00 ICT)
+5. **Fix sidebar names** — `name_fetcher.py` pre-populates all company names
 
-### High Value (Week 2-3)
-5. XD/XR corporate event markers on chart
-6. Price alerts + Telegram delivery
-7. Portfolio page (transactions + P&L)
-8. Indicator verification (RSI gauge broken)
+### Completed
+- ✅ All API endpoints respond < 5s (cache-only reads)
+- ✅ WebSocket `data_ready` notification pattern
+- ✅ PTT.BK retry logic fixed
+- ✅ Cache key consistency fixed across 5 files
+- ✅ Memory leak fixes in 4 frontend components
+- ✅ 5 new Celery workers (name, fundamentals, fund, history, on-demand)
 
 ### See Also
 - Full priority breakdown → `ShotockViz_Development_Plan.docx`
@@ -104,11 +109,14 @@ ShotockViz/
 
 ## Key Architecture Decisions
 
+- **CQRS (Command Query Responsibility Segregation)** — API endpoints are pure-read (Redis/PostgreSQL only). Celery workers are the sole data ingesters (Yahoo Finance, pythainav, Stooq). On cache miss, API triggers Celery task via `request_data_fetch()` → worker fetches → caches → publishes WS `data_ready` → frontend re-fetches automatically.
 - **SSE for AI Chat** — `ai_chat.py` streams via Server-Sent Events with `asyncio.wait_for` keepalive heartbeat every 15s
-- **4-layer cache** — Redis → PostgreSQL → Yahoo Finance → synthetic Brownian bridge
-- **TimescaleDB hypertable** — `StockPrice1m` for efficient time-series queries with auto-compression
-- **WebSocket prices** — Redis pub/sub `price_updates` channel → WebSocket broadcast to frontend
+- **2-layer read cache (API side)** — Redis L1 (sub-ms) → PostgreSQL L2 (10-50ms). API never touches external services.
+- **Celery write side** — 8 workers: `price_fetcher` (quotes), `name_fetcher` (company names), `fundamentals_fetcher` (PE/PB/EPS), `fund_fetcher` (Thai NAV via pythainav), `history_prefetcher` (OHLCV warm cache), `on_demand_listener` (API cache-miss handler), `alert_checker`, `housekeeping`
+- **TimescaleDB hypertable** — `StockPrice1m` + `ohlcv_bars` for efficient time-series queries with auto-compression
+- **WebSocket push** — Redis pub/sub `price_updates` channel → WebSocket broadcast: `price_update`, `data_ready`, `nav_update`, `alert_triggered`, `names_ready`
 - **Google OAuth** — `@react-oauth/google` with `useGoogleOneTapLogin` in `__root.tsx` for seamless re-auth. **NO custom token management code on frontend.**
+- **Thai Fund NAV** — `pythainav` library fetches from SEC Thailand / บลจ. websites. Daily at 19:00 ICT (T+1 delay acceptable).
 
 ## Market Hours (ICT timezone)
 
@@ -117,6 +125,10 @@ ShotockViz/
 | SET | 10:00-12:30, 14:00-16:30 | Break 12:30-14:00 |
 | US (NYSE/NASDAQ) | 21:30-04:00 (next day) | Pre-market from 20:00 |
 | Celery price fetch | Every 1 min during market hours | via celery-beat schedule |
+| Celery names | Every 6 hours | prefetch_names |
+| Celery fundamentals | Every 4 hours | prefetch_fundamentals |
+| Celery fund NAV | Daily 19:00 ICT | fetch_thai_fund_navs |
+| Celery history | Every 30 min | prefetch_history |
 
 ## Environment Variables
 
@@ -135,8 +147,25 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 
 ## Known Issues & Recent Fixes
 
+- **CQRS refactor (2026-03-03)** — API endpoints no longer call external APIs. All data from cache/DB. Celery workers are sole data ingesters. 5 new workers created.
+- **Fast-response pattern (2026-03-02)** — All API endpoints respond < 5s. Background fetch + WS `data_ready` notification.
+- **Cache key mismatch** — Fixed: all endpoints now use `cache_keys.*()` functions (was using hardcoded f-strings).
 - **AI chat freeze** — Fixed: immediate SSE flush + keepalive heartbeat + frontend error propagation
 - **Memory leaks** — Fixed in source: setInterval leaks in Sidebar, Dashboard, TradingChart, AIChatPanel
 - **Race condition** — Fixed: AbortController in RightPanel for stale XHR after symbol change
-- **SyntaxError ai_chat.py** — Fixed: missing `try:` before `async with httpx.AsyncClient` block
+- **PTT.BK empty data** — Fixed: explicit `data_received` flag in retry loop
+- **Alert field crash** — Fixed: `a.target_price` → `a.value` in dashboard.py
 - **Hydration mismatch** — Harmless: browser extension `cz-shortcut-listen` attribute on body
+
+## Celery Workers (CQRS Write Side)
+
+| Worker | Schedule | Data Source | Cache Key |
+|--------|----------|-------------|-----------|
+| `price_fetcher` | 1min (market hours) | yfinance batch | `quote:{symbol}` |
+| `name_fetcher` | 6h | yfinance info | `cache:name:{symbol}` |
+| `fundamentals_fetcher` | 4h | yfinance info | `fundamentals:{symbol}` |
+| `fund_fetcher` | Daily 19:00 ICT | pythainav (SEC) | `fund:{symbol}` |
+| `history_prefetcher` | 30min | yfinance history | `ohlcv:{symbol}:{tf}` |
+| `on_demand_listener` | On API cache miss | yfinance | varies |
+| `alert_checker` | 60s | Redis cache read | — |
+| `housekeeping` | Daily 03:00 ICT | PostgreSQL | — |

@@ -90,15 +90,19 @@ async def google_auth(body: GoogleAuthRequest, db: AsyncSession = Depends(get_db
     try:
         # verify_oauth2_token uses a synchronous HTTP client to fetch Google's
         # public keys — run it in a thread pool so it doesn't block the event loop.
+        # Cap at 5s to respect our <5s SLA; Google keys are usually cached.
         loop = asyncio.get_event_loop()
-        idinfo = await loop.run_in_executor(
-            None,
-            lambda: id_token.verify_oauth2_token(
-                body.credential,
-                google_requests.Request(),
-                settings.google_client_id,
-                clock_skew_in_seconds=60,
+        idinfo = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: id_token.verify_oauth2_token(
+                    body.credential,
+                    google_requests.Request(),
+                    settings.google_client_id,
+                    clock_skew_in_seconds=60,
+                ),
             ),
+            timeout=5.0,
         )
     except (ValueError, google_exceptions.GoogleAuthError, google_exceptions.TransportError) as e:
         logger.warning(

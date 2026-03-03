@@ -101,4 +101,6 @@ api.interceptors.response.use(
     }
 );
 
+// Export both default and named for backward compatibility
+export { api };
 export default api;

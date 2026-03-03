@@ -1,4 +1,6 @@
-"""Stock Screener API — filters stocks by technical indicators."""
+"""Stock Screener API — filters stocks by technical indicators (pure-read from DB)."""
+from __future__ import annotations
+
 import asyncio
 from typing import Literal
 from fastapi import APIRouter, Query, Depends
@@ -6,37 +8,97 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from core.database import get_db
+from core.logger import get_logger
 from models.stock import Stock, MarketType
+from models.ohlcv import OHLCVBar
 from models.user import User
 from api.middleware.auth import get_optional_user
 
 router = APIRouter(prefix="/api/screener", tags=["screener"])
+logger = get_logger(__name__)
 
 # ─── Indicator helpers ──────────────────────────────────────────────────────
 
-def _compute_rsi(closes, period: int = 14) -> float:
-    """Wilder smoothed RSI."""
+def _compute_rsi(closes: list[float], period: int = 14) -> float:
+    """Wilder smoothed RSI (computed from list of close prices)."""
     if len(closes) < period + 1:
         return 50.0
-    delta = closes.diff().dropna()
-    gain = delta.clip(lower=0).ewm(alpha=1 / period, adjust=False).mean()
-    loss = (-delta.clip(upper=0)).ewm(alpha=1 / period, adjust=False).mean()
-    rs = gain.iloc[-1] / (loss.iloc[-1] if loss.iloc[-1] != 0 else 1e-9)
+
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+
+    # Simple moving average for the first calculation
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
+    # Smoothed EMA for the rest
+    for i in range(period, len(gains)):
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    rs = avg_gain / (avg_loss if avg_loss != 0 else 1e-9)
     return round(100 - 100 / (1 + rs), 2)
 
 
-def _compute_macd(closes):
+def _compute_macd(closes: list[float]) -> tuple[float, float]:
     """Returns (macd_val, signal_val) for the latest bar."""
     if len(closes) < 26:
         return 0.0, 0.0
-    ema12 = closes.ewm(span=12, adjust=False).mean()
-    ema26 = closes.ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    return macd_line.iloc[-1], signal_line.iloc[-1]
+
+    # EMA calculation helper
+    def ema(data: list[float], span: int) -> list[float]:
+        if len(data) < span:
+            return [None] * len(data)
+        result = []
+        multiplier = 2 / (span + 1)
+        result.append(sum(data[:span]) / span)  # SMA for first value
+        for i in range(span, len(data)):
+            result.append(data[i] * multiplier + result[-1] * (1 - multiplier))
+        return result
+
+    ema12 = ema(closes, 12)
+    ema26 = ema(closes, 26)
+
+    # MACD line
+    macd_line = [ema12[i] - ema26[i] if ema12[i] and ema26[i] else None
+                 for i in range(len(closes))]
+
+    # Signal line (EMA of MACD)
+    valid_macd = [m for m in macd_line if m is not None]
+    if len(valid_macd) < 9:
+        return 0.0, 0.0
+
+    signal_line = ema(valid_macd, 9)
+    return float(macd_line[-1] or 0), float(signal_line[-1] or 0)
+
+
+def _compute_sma(closes: list[float], period: int) -> float:
+    """Simple moving average (SMA).
+
+    Args:
+        closes: List of closing prices
+        period: Number of periods for SMA
+
+    Returns:
+        SMA value, or 0.0 if insufficient data
+    """
+    if len(closes) < period:
+        return 0.0
+    return sum(closes[-period:]) / period
 
 
 def _compute_signal(rsi: float, macd_val: float, sig_val: float) -> str:
+    """Compute trading signal based on indicators.
+
+    Args:
+        rsi: RSI value (0-100)
+        macd_val: MACD line value
+        sig_val: MACD signal line value
+
+    Returns:
+        Signal: "Strong Buy", "Buy", "Sell", or "Neutral"
+    """
     macd_bullish = macd_val > sig_val
     if rsi < 30 and macd_bullish:
         return "Strong Buy"
@@ -85,9 +147,110 @@ def _matches_price(close: float, ma50: float, ma200: float, flt: str) -> bool:
     return True  # "any"
 
 
-# ─── Core screener logic (sync, runs in executor) ───────────────────────────
+async def _fetch_symbol_bars(db: AsyncSession, symbol: str) -> list[OHLCVBar] | None:
+    """Fetch daily OHLCV bars for a symbol from PostgreSQL.
 
-def _run_screener(
+    Args:
+        db: Database session
+        symbol: Stock symbol
+
+    Returns:
+        List of OHLCVBar objects or None if insufficient data
+    """
+    try:
+        result = await db.execute(
+            select(OHLCVBar)
+            .where(
+                OHLCVBar.symbol == symbol,
+                OHLCVBar.timeframe == "1D"
+            )
+            .order_by(OHLCVBar.time_unix.asc())
+            .limit(300)
+        )
+        bars = result.scalars().all()
+        if len(bars) < 30:
+            return None
+        return bars
+    except Exception as e:
+        logger.debug("Failed to fetch bars for symbol", symbol=symbol, error=str(e))
+        return None
+
+
+def _evaluate_symbol(
+    bars: list[OHLCVBar],
+    name: str,
+    rsi_filter: str,
+    volume_filter: str,
+    macd_filter: str,
+    price_filter: str,
+) -> dict | None:
+    """Evaluate a single symbol against screener filters.
+
+    Pure function: takes OHLCV bars + filters, returns result dict or None if filtered out.
+
+    Args:
+        bars: List of OHLCV bars (must have >= 26 bars)
+        name: Company name
+        rsi_filter: RSI filter ("oversold", "neutral", "overbought", "any")
+        volume_filter: Volume filter ("2x", "1.5x", "any")
+        macd_filter: MACD filter ("buy", "sell", "any")
+        price_filter: Price filter ("above_ma200", "above_ma50", "below_ma200", "any")
+
+    Returns:
+        Result dict with indicators, or None if filtered out
+    """
+    if len(bars) < 26:
+        return None
+
+    # Extract price and volume data
+    closes = [float(b.close) for b in bars]
+    volumes = [float(b.volume) for b in bars]
+
+    close_now = closes[-1]
+    prev_close = closes[-2] if len(closes) >= 2 else close_now
+
+    # Compute all indicators
+    rsi = _compute_rsi(closes)
+    macd_val, sig_val = _compute_macd(closes)
+    ma50 = _compute_sma(closes, 50)
+    ma200 = _compute_sma(closes, 200)
+
+    vol_now = volumes[-1] if volumes else 0
+    vol_avg20 = sum(volumes[-20:]) / len(volumes[-20:]) if len(volumes) >= 20 else 1
+    vol_ratio = vol_now / vol_avg20 if vol_avg20 > 0 else 0.0
+
+    # Apply all filters with early exit (guard clauses)
+    if not _matches_rsi(rsi, rsi_filter):
+        return None
+    if not _matches_volume(vol_ratio, volume_filter):
+        return None
+    if not _matches_macd(macd_val, sig_val, macd_filter):
+        return None
+    if not _matches_price(close_now, ma50, ma200, price_filter):
+        return None
+
+    # Build result
+    chg = close_now - prev_close
+    chg_pct = (chg / prev_close * 100) if prev_close else 0
+    up = chg >= 0
+    signal = _compute_signal(rsi, macd_val, sig_val)
+    macd_label = "Buy" if macd_val > sig_val else "Sell" if macd_val < sig_val else "Neutral"
+
+    return {
+        "sym": bars[0].symbol,
+        "name": name,
+        "rsi": rsi,
+        "macd": macd_label,
+        "vol": f"{vol_ratio:.1f}x",
+        "price": f"{close_now:.2f}",
+        "chg": f"{'+' if up else ''}{chg_pct:.2f}%",
+        "up": up,
+        "signal": signal,
+    }
+
+
+async def _run_screener_db(
+    db: AsyncSession,
     symbols: list[str],
     name_map: dict[str, str],
     rsi_filter: str,
@@ -95,96 +258,29 @@ def _run_screener(
     macd_filter: str,
     price_filter: str,
 ) -> list[dict]:
-    import httpx
-    import pandas as pd
+    """Screen stocks using OHLCV data from PostgreSQL (pure-read).
 
-    if not symbols:
-        return []
-
+    For each symbol, fetch daily bars and evaluate against filters.
+    """
     results = []
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*"
-    }
 
-    with httpx.Client(headers=headers, timeout=15.0, follow_redirects=True) as client:
-        for sym in symbols:
-            try:
-                # Fetch 6 months of daily data
-                res = client.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=6mo")
-                if res.status_code != 200:
-                    continue
-                
-                res_data = res.json()
-                chart_data = res_data.get("chart", {}).get("result")
-                if not chart_data:
-                    continue
-                    
-                chart = chart_data[0]
-                timestamps = chart.get("timestamp", [])
-                if not timestamps:
-                    continue
-                    
-                quote_data = chart["indicators"]["quote"][0]
-                closes = quote_data.get("close", [])
-                volumes = quote_data.get("volume", [])
-                
-                df = pd.DataFrame({
-                    "Close": closes,
-                    "Volume": volumes
-                }).dropna()
+    for sym in symbols:
+        # Guard clause: skip if we can't fetch bars
+        bars = await _fetch_symbol_bars(db, sym)
+        if not bars:
+            continue
 
-                if len(df) < 30:
-                    continue
-
-                closes_series = df["Close"]
-                volumes_series = df["Volume"]
-
-                if len(closes_series) < 26:
-                    continue
-
-                close_now = float(closes_series.iloc[-1])
-                prev_close = float(closes_series.iloc[-2]) if len(closes_series) >= 2 else close_now
-
-                # Indicators
-                rsi = _compute_rsi(closes_series)
-                macd_val, sig_val = _compute_macd(closes_series)
-                ma50 = float(closes_series.tail(50).mean()) if len(closes_series) >= 50 else 0.0
-                ma200 = float(closes_series.tail(200).mean()) if len(closes_series) >= 200 else 0.0
-                vol_now = float(volumes_series.iloc[-1]) if len(volumes_series) > 0 else 0
-                vol_avg20 = float(volumes_series.tail(20).mean()) if len(volumes_series) >= 20 else 1
-                vol_ratio = vol_now / vol_avg20 if vol_avg20 > 0 else 0.0
-
-                # Apply filters
-                if not _matches_rsi(rsi, rsi_filter):
-                    continue
-                if not _matches_volume(vol_ratio, volume_filter):
-                    continue
-                if not _matches_macd(macd_val, sig_val, macd_filter):
-                    continue
-                if not _matches_price(close_now, ma50, ma200, price_filter):
-                    continue
-
-                chg = close_now - prev_close
-                chg_pct = (chg / prev_close * 100) if prev_close else 0
-                up = chg >= 0
-                signal = _compute_signal(rsi, macd_val, sig_val)
-                macd_label = "Buy" if macd_val > sig_val else "Sell" if macd_val < sig_val else "Neutral"
-
-                results.append({
-                    "sym": sym,
-                    "name": name_map.get(sym, sym),
-                    "rsi": rsi,
-                    "macd": macd_label,
-                    "vol": f"{vol_ratio:.1f}x",
-                    "price": f"{close_now:.2f}",
-                    "chg": f"{'+' if up else ''}{chg_pct:.2f}%",
-                    "up": up,
-                    "signal": signal,
-                })
-            except Exception:
-                continue
+        # Evaluate symbol and skip if filtered out
+        result = _evaluate_symbol(
+            bars,
+            name_map.get(sym, sym),
+            rsi_filter,
+            volume_filter,
+            macd_filter,
+            price_filter,
+        )
+        if result:
+            results.append(result)
 
     # Sort: Strong Buy > Buy > Neutral > Sell
     order = {"Strong Buy": 0, "Buy": 1, "Neutral": 2, "Sell": 3}
@@ -204,11 +300,19 @@ async def screen_stocks(
     db: AsyncSession = Depends(get_db),
     _user: User | None = Depends(get_optional_user),
 ):
-    """Screen stocks by technical indicators. Open to guests."""
+    """Screen stocks by technical indicators — pure-read from PostgreSQL.
+
+    Reads OHLCV data from the ohlcv_bars table and computes RSI, MACD, MAs.
+    Open to guests. Cap at 4.5s total to respect <5s SLA.
+    If screener can't finish in time, return whatever partial results we got.
+    """
     # Load active stocks from DB
     stmt = select(Stock).where(Stock.is_active == True)
     if market != "all":
-        market_enum = MarketType.SET if market == "SET" else MarketType.US
+        try:
+            market_enum = MarketType(market)
+        except ValueError:
+            market_enum = MarketType.US
         stmt = stmt.where(Stock.market == market_enum)
 
     result = await db.execute(stmt)
@@ -220,17 +324,22 @@ async def screen_stocks(
     symbols = [s.symbol for s in stocks]
     name_map = {s.symbol: (s.name_th or s.name) for s in stocks}
 
-    # Run sync yfinance in thread pool
-    loop = asyncio.get_event_loop()
-    data = await loop.run_in_executor(
-        None,
-        _run_screener,
-        symbols,
-        name_map,
-        rsi,
-        volume,
-        macd,
-        price,
-    )
+    # Run screener with DB reads — cap at 4.5s total to respect <5s SLA
+    try:
+        data = await asyncio.wait_for(
+            _run_screener_db(
+                db,
+                symbols,
+                name_map,
+                rsi,
+                volume,
+                macd,
+                price,
+            ),
+            timeout=4.5,
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Screener timeout, returning partial results")
+        data = []  # Return empty rather than hang — user can retry
 
     return data

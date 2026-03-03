@@ -1,10 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useMatchRoute } from '@tanstack/react-router';
-import { Plus, X, Loader2, GripVertical } from 'lucide-react';
+import { Plus, GripVertical, Loader2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
 import watchlistService from '@/services/watchlistService';
 import stockService from '@/services/stockService';
+import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
+import { WatchlistSearch } from './WatchlistSearch';
+import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 
 const INDICES_SYMS = [
     { key: '^SET', label: 'SET' },
@@ -39,20 +42,17 @@ export default function Sidebar() {
     // Watchlist state
     const [watchlistId, setWatchlistId] = useState(null);
     const [symbols, setSymbols] = useState([]);
-    const [prices, setPrices] = useState({});
-    const [names, setNames] = useState<Record<string, string>>({});
-    const priceTimerRef = useRef(null);
-    const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [names, setNames] = useState<Record<string, { name: string; market?: string | null }>>({});
 
-    // Indices state (real data)
-    const [indicesData, setIndicesData] = useState({});
+    // Price polling via shared hook
+    const { prices } = usePriceUpdates(symbols, { enabled: isAuthenticated });
 
-    // Add-stock / autocomplete state
+    // Indices price polling via same hook (always enabled)
+    const indicesSyms = INDICES_SYMS.map(i => i.key);
+    const { prices: indicesData } = usePriceUpdates(indicesSyms, { enabled: true });
+
+    // Add-stock UI state
     const [adding, setAdding] = useState(false);
-    const [searchQuery, setSearchQuery] = useState('');
-    const [searchResults, setSearchResults] = useState([]);
-    const [searchLoading, setSearchLoading] = useState(false);
-    const searchTimerRef = useRef(null);
 
     // Symbols currently being deleted (shows spinner, disables button)
     const [deletingSyms, setDeletingSyms] = useState<Set<string>>(new Set());
@@ -82,95 +82,25 @@ export default function Sidebar() {
 
     useEffect(() => { loadWatchlist(); }, [loadWatchlist]);
 
-    // ── Fetch company names for watchlist symbols ──────────────────────────────
+    // ── Fetch company names + market type for watchlist symbols ─────────────────
     useEffect(() => {
         if (!symbols.length) return;
         stockService.getNames(symbols)
-            .then((res) => setNames((prev) => ({ ...prev, ...res.data })))
+            .then((res) => {
+                const data = res.data ?? {};
+                // API now returns {symbol: {name, market}} — handle both old (string) and new format
+                const parsed: Record<string, { name: string; market?: string | null }> = {};
+                for (const [sym, val] of Object.entries(data)) {
+                    if (typeof val === 'string') {
+                        parsed[sym] = { name: val, market: null };
+                    } else {
+                        parsed[sym] = val as { name: string; market?: string | null };
+                    }
+                }
+                setNames((prev) => ({ ...prev, ...parsed }));
+            })
             .catch(() => { /* names are optional — fall back to symbol */ });
     }, [symbols]);
-
-    // ── Refresh live prices — sequential queue, auto-retries on 202 ────────────
-    const refreshPrices = useCallback(async () => {
-        if (!isAuthenticated) return;   // guests see static symbol list, no price fetching
-        const syms = symbols;
-        if (!syms.length) return;
-        // Cancel any pending retry — this run supersedes it
-        if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
-        let anyMissing = false;
-        for (const s of syms) {
-            try {
-                const r = await stockService.getQuote(s);
-                if (r.data) setPrices((prev) => ({ ...prev, [s]: r.data }));
-                else anyMissing = true;   // 202 — backend still warming cache
-            } catch { anyMissing = true; }
-        }
-        // If any symbols still pending, retry in 8s (cache filling up)
-        if (anyMissing) {
-            retryTimerRef.current = setTimeout(() => refreshPricesRef.current(), 8000);
-        }
-    }, [symbols, isAuthenticated]);
-
-    // Keep a ref to the latest refreshPrices so the interval never needs to be recreated
-    const refreshPricesRef = useRef(refreshPrices);
-    useEffect(() => { refreshPricesRef.current = refreshPrices; }, [refreshPrices]);
-
-    // Interval set up ONCE — calls the ref so it always uses the latest symbols/auth state
-    useEffect(() => {
-        priceTimerRef.current = setInterval(() => refreshPricesRef.current(), 60000);
-        return () => {
-            clearInterval(priceTimerRef.current);
-            if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-        };
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Immediate fetch when symbols/auth change OR when backend cache becomes ready
-    useEffect(() => {
-        refreshPricesRef.current();
-    }, [refreshPrices, dataVersion]);
-
-    // ── Fetch real index quotes — sequential queue ─────────────────────────────
-    const refreshIndices = useCallback(async () => {
-        for (const { key } of INDICES_SYMS) {
-            try {
-                const r = await stockService.getQuote(key);
-                if (r.data) setIndicesData((prev) => ({ ...prev, [key]: r.data }));
-            } catch { /* ignore */ }
-        }
-    }, []);
-
-    const refreshIndicesRef = useRef(refreshIndices);
-    // Interval set up ONCE for indices (60 s)
-    useEffect(() => {
-        const t = setInterval(() => refreshIndicesRef.current(), 60_000);
-        return () => clearInterval(t);
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Immediate fetch on mount or when backend cache becomes ready
-    useEffect(() => {
-        refreshIndicesRef.current();
-    }, [dataVersion]);
-
-    // ── Autocomplete search (debounced 300 ms) ────────────────────────────────
-    useEffect(() => {
-        if (!searchQuery.trim()) {
-            setSearchResults([]);
-            return;
-        }
-        setSearchLoading(true);
-        clearTimeout(searchTimerRef.current);
-        searchTimerRef.current = setTimeout(async () => {
-            try {
-                const res = await stockService.search(searchQuery);
-                setSearchResults(res.data?.results ?? res.data ?? []);
-            } catch {
-                setSearchResults([]);
-            } finally {
-                setSearchLoading(false);
-            }
-        }, 300);
-        return () => clearTimeout(searchTimerRef.current);
-    }, [searchQuery]);
 
     // ── Handlers ───────────────────────────────────────────────────────────────
     const handleSelect = (sym, name) => {
@@ -185,20 +115,12 @@ export default function Sidebar() {
         navigate({ to: '/' });
     };
 
-    const handleAddStock = async (sym?: string) => {
-        const s = sym ?? searchQuery.trim().toUpperCase();
-        if (!s || !watchlistId) return;
+    const handleAddStock = async (sym: string) => {
+        if (!sym || !watchlistId) return;
         try {
-            await watchlistService.addStock(watchlistId, s);
-            setSymbols((prev) => (prev.includes(s) ? prev : [...prev, s]));
-            // If the name came from a search result, cache it immediately
-            const hit = searchResults.find((r) => r.symbol === s);
-            if (hit) {
-                setNames((prev) => ({ ...prev, [s]: hit.name_th || hit.name || s }));
-            }
+            await watchlistService.addStock(watchlistId, sym);
+            setSymbols((prev) => (prev.includes(sym) ? prev : [...prev, sym]));
         } catch { /* duplicate or error */ }
-        setSearchQuery('');
-        setSearchResults([]);
         setAdding(false);
     };
 
@@ -257,14 +179,13 @@ export default function Sidebar() {
         }, 300);
     };
 
-    const cancelAdding = () => {
-        setAdding(false);
-        setSearchQuery('');
-        setSearchResults([]);
-    };
 
     const displayList = isAuthenticated
-        ? symbols.map((sym) => ({ sym, name: names[sym] || sym }))
+        ? symbols.map((sym) => ({
+            sym,
+            name: names[sym]?.name || sym,
+            market: names[sym]?.market || null,
+        }))
         : GUEST_SYMBOLS;
 
     return (
@@ -281,91 +202,10 @@ export default function Sidebar() {
 
             {/* Add stock with autocomplete */}
             {adding && (
-                <div className="relative border-b" style={{ borderColor: 'var(--color-border)' }}>
-                    <div className="px-3 py-2 flex gap-1 items-center">
-                        <div className="relative flex-1">
-                            <input
-                                autoFocus
-                                className="input-field text-xs py-1 w-full pr-6"
-                                placeholder="PTT.BK, AAPL..."
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') handleAddStock();
-                                    if (e.key === 'Escape') cancelAdding();
-                                }}
-                            />
-                            {searchLoading && (
-                                <Loader2 size={11} className="absolute right-2 top-1/2 -translate-y-1/2 animate-spin" style={{ color: 'var(--color-text-sub)' }} />
-                            )}
-                        </div>
-                        <button onClick={cancelAdding} className="p-1 rounded hover:bg-[var(--color-hover)] transition-colors" style={{ color: 'var(--color-text-sub)' }}>
-                            <X size={12} />
-                        </button>
-                    </div>
-
-                    {/* Autocomplete dropdown */}
-                    {/* Show "add directly" button when: query typed, not loading, search returned empty */}
-                    {searchQuery.trim() && !searchLoading && searchResults.length === 0 && (
-                        <div
-                            className="glass-dropdown absolute left-0 right-0 z-50 rounded-b-xl overflow-hidden"
-                            style={{ top: '100%' }}
-                        >
-                            <button
-                                onClick={() => handleAddStock(searchQuery.trim().toUpperCase())}
-                                className="w-full flex items-center gap-2 px-3 py-2.5 text-left transition-colors hover:bg-[var(--color-hover)]"
-                            >
-                                <Plus size={12} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
-                                <div>
-                                    <div className="text-[11px] font-semibold" style={{ color: 'var(--color-text)' }}>
-                                        เพิ่ม {searchQuery.trim().toUpperCase()} โดยตรง
-                                    </div>
-                                    <div className="text-[10px]" style={{ color: 'var(--color-text-sub)', opacity: 0.7 }}>
-                                        ไม่พบในฐานข้อมูล · เพิ่มด้วย ticker โดยตรง
-                                    </div>
-                                </div>
-                            </button>
-                        </div>
-                    )}
-                    {searchResults.length > 0 && (
-                        <div
-                            className="glass-dropdown absolute left-0 right-0 z-50 rounded-b-xl overflow-hidden"
-                            style={{ top: '100%' }}
-                        >
-                            {searchResults.slice(0, 6).map((r) => (
-                                <button
-                                    key={r.symbol}
-                                    onClick={() => handleAddStock(r.symbol)}
-                                    className="w-full flex items-center justify-between px-3 py-2 text-left transition-colors hover:bg-[var(--color-hover)]"
-                                >
-                                    <div className="flex-1 min-w-0">
-                                        <div className="text-[11px] font-semibold" style={{ color: 'var(--color-text)' }}>{r.symbol}</div>
-                                        <div className="text-[10px] truncate" style={{ color: 'var(--color-text-sub)', maxWidth: 120 }}>
-                                            {r.name_th || r.name}
-                                        </div>
-                                    </div>
-                                    <span
-                                        className="badge text-[9px] ml-2 flex-shrink-0"
-                                        style={{
-                                            background: r.market === 'FUND'
-                                                ? 'rgba(251,191,36,0.15)'
-                                                : r.market === 'SET'
-                                                    ? 'rgba(52,211,153,0.15)'
-                                                    : 'rgba(124,92,252,0.15)',
-                                            color: r.market === 'FUND'
-                                                ? 'var(--color-yellow)'
-                                                : r.market === 'SET'
-                                                    ? 'var(--color-green)'
-                                                    : 'var(--color-accent)',
-                                        }}
-                                    >
-                                        {r.market || 'US'}
-                                    </span>
-                                </button>
-                            ))}
-                        </div>
-                    )}
-                </div>
+                <WatchlistSearch
+                    onSelect={handleAddStock}
+                    onCancel={() => setAdding(false)}
+                />
             )}
 
             {/* Market Indices — real data */}
@@ -397,11 +237,14 @@ export default function Sidebar() {
                 {displayList.map((s) => {
                     const q = prices[s.sym];
                     const isActive = selectedStock?.sym === s.sym && isChart;
+                    const isFund = s.market === 'FUND' || q?.type === 'fund_nav';
                     const up = q ? q.change >= 0 : true;
                     const price = q?.price != null ? q.price.toFixed(2) : '—';
-                    const pct = q?.change_pct != null
+                    const pct = q?.change_pct != null && q.change_pct !== 0
                         ? `${q.change_pct >= 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`
-                        : '';
+                        : isFund
+                            ? (q?.nav_date ? `NAV ${q.nav_date}` : 'NAV')
+                            : '';
 
                     const isDragOver = dragOverSym === s.sym;
                     return (
@@ -439,12 +282,12 @@ export default function Sidebar() {
                                 onMouseLeave={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'transparent'; }}
                             >
                                 <div>
-                                    <div className="text-[11px] font-semibold">{s.sym.replace('.BK', '')}</div>
+                                    <div className="text-[11px] font-semibold">{parseSymbol(s.sym).display}</div>
                                     <div className="text-[10px] truncate" style={{ maxWidth: 80, color: 'var(--color-text-sub)' }}>{s.name}</div>
                                 </div>
                                 <div className="text-right">
                                     <div className="text-[11px] font-medium tabular-nums">{price}</div>
-                                    <div className="text-[10px] tabular-nums" style={{ color: up ? 'var(--color-green)' : 'var(--color-red)' }}>{pct}</div>
+                                    <div className="text-[10px] tabular-nums" style={{ color: (isFund && (!q?.change_pct || q.change_pct === 0)) ? 'var(--color-text-sub)' : (up ? 'var(--color-green)' : 'var(--color-red)') }}>{pct}</div>
                                 </div>
                             </button>
                             {isAuthenticated && (
@@ -456,7 +299,7 @@ export default function Sidebar() {
                                 >
                                     {deletingSyms.has(s.sym)
                                         ? <Loader2 size={11} className="animate-spin" />
-                                        : <X size={11} />
+                                        : <span style={{ fontSize: '10px' }}>✕</span>
                                     }
                                 </button>
                             )}

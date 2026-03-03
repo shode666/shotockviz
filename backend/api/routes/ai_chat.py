@@ -38,14 +38,178 @@ class ChatRequest(BaseModel):
     stream: bool = True
 
 
-# ── Context builder ────────────────────────────────────────────────────────
+# ── Context builder helpers ───────────────────────────────────────────────
+
+async def _fetch_quote_context(symbol: str | None) -> str:
+    """Fetch and format stock quote for LLM context.
+
+    Args:
+        symbol: Stock symbol (must not be None)
+
+    Returns:
+        Formatted quote text, or empty string if unavailable
+    """
+    if not symbol:
+        return ""
+
+    try:
+        from core import cache_keys
+        import json as _json
+        r = await stock_service.get_redis()
+
+        # Try quote from cache first (sub-ms)
+        cached_quote = await r.get(cache_keys.quote(symbol))
+        if not cached_quote:
+            # Cache miss: trigger background fetch (non-blocking)
+            asyncio.create_task(stock_service._cache_quote_background(symbol))
+            return ""
+
+        quote_data = _json.loads(cached_quote)
+        return (
+            f"\nข้อมูลหุ้น {symbol} ณ ปัจจุบัน:"
+            f"\n  ราคา: {quote_data.get('price', 0):.2f}  เปลี่ยนแปลง: {quote_data.get('change', 0):+.2f} ({quote_data.get('change_pct', 0):+.2f}%)"
+            f"\n  Open: {quote_data.get('open')}  High: {quote_data.get('high')}  Low: {quote_data.get('low')}  Volume: {quote_data.get('volume', 0):,}"
+        )
+    except Exception:
+        return ""
+
+
+async def _fetch_fundamentals_context(symbol: str | None) -> str:
+    """Fetch and format stock fundamentals for LLM context.
+
+    Args:
+        symbol: Stock symbol (must not be None)
+
+    Returns:
+        Formatted fundamentals text, or empty string if unavailable
+    """
+    if not symbol:
+        return ""
+
+    try:
+        from core import cache_keys
+        import json as _json
+        from models.schemas import StockFundamentals
+
+        r = await stock_service.get_redis()
+
+        # Try fundamentals from cache first (sub-ms)
+        cached_fund = await r.get(cache_keys.fundamentals(symbol))
+        if cached_fund:
+            fundamentals = StockFundamentals(**_json.loads(cached_fund))
+        else:
+            # Fallback to 3s capped fetch
+            try:
+                fundamentals = await asyncio.wait_for(
+                    stock_service.fetch_stock_fundamentals(symbol), timeout=3.0
+                )
+            except (asyncio.TimeoutError, Exception):
+                return ""
+
+        if not fundamentals:
+            return ""
+
+        f_parts = []
+        if fundamentals.pe_ratio:
+            f_parts.append(f"P/E={fundamentals.pe_ratio:.1f}")
+        if fundamentals.pb_ratio:
+            f_parts.append(f"P/B={fundamentals.pb_ratio:.1f}")
+        if fundamentals.eps:
+            f_parts.append(f"EPS={fundamentals.eps:.2f}")
+        if fundamentals.dividend_yield:
+            f_parts.append(f"Div={fundamentals.dividend_yield:.2f}%")
+        if fundamentals.market_cap:
+            cap = fundamentals.market_cap
+            cap_str = f"{cap/1e12:.2f}T" if cap > 1e12 else f"{cap/1e9:.1f}B" if cap > 1e9 else f"{cap/1e6:.0f}M"
+            f_parts.append(f"Mkt Cap={cap_str}")
+
+        return f"  Fundamentals: {', '.join(f_parts)}" if f_parts else ""
+    except Exception:
+        return ""
+
+
+async def _fetch_portfolio_context(user: User | None, db: AsyncSession) -> str:
+    """Fetch and format user portfolio for LLM context.
+
+    Args:
+        user: Current user (may be None)
+        db: Database session
+
+    Returns:
+        Formatted portfolio text, or empty string if no portfolio
+    """
+    if not user:
+        return ""
+
+    try:
+        result = await db.execute(
+            select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
+        )
+        txns = result.scalars().all()
+        if not txns:
+            return ""
+
+        holdings: dict[str, float] = {}
+        for t in txns:
+            mult = 1 if t.type.value == "BUY" else -1
+            holdings[t.symbol] = holdings.get(t.symbol, 0) + t.qty * mult
+
+        active = {s: q for s, q in holdings.items() if q > 0.001}
+        if not active:
+            return ""
+
+        ctx_lines = [f"\nพอร์ตปัจจุบันของผู้ใช้ ({len(active)} หลักทรัพย์):"]
+        for sym, qty in list(active.items())[:10]:
+            ctx_lines.append(f"  {sym}: {qty:,.0f} หน่วย")
+
+        return "\n".join(ctx_lines)
+    except Exception:
+        return ""
+
+
+async def _fetch_watchlist_context(user: User | None, db: AsyncSession) -> str:
+    """Fetch and format user watchlist for LLM context.
+
+    Args:
+        user: Current user (may be None)
+        db: Database session
+
+    Returns:
+        Formatted watchlist text, or empty string if no watchlist
+    """
+    if not user:
+        return ""
+
+    try:
+        wres = await db.execute(
+            select(WatchlistItem.symbol).where(WatchlistItem.user_id == user.id).limit(10)
+        )
+        wsyms = [r[0] for r in wres.all()]
+        if not wsyms:
+            return ""
+        return f"\nWatchlist: {', '.join(wsyms)}"
+    except Exception:
+        return ""
+
 
 async def _build_context(
     user: User | None,
     symbol: str | None,
     db: AsyncSession,
 ) -> str:
-    """Build rich context string for the LLM system prompt."""
+    """Build rich context string for the LLM system prompt.
+
+    Fetches quote, fundamentals, portfolio, and watchlist data.
+    Uses cache-only reads to avoid blocking chat responses.
+
+    Args:
+        user: Current user (may be None for guests)
+        symbol: Current chart symbol (optional)
+        db: Database session
+
+    Returns:
+        Complete context string for LLM system prompt
+    """
     ctx_parts = [
         "คุณคือผู้ช่วยการลงทุนส่วนตัว สำหรับตลาดหุ้นไทย (SET) และสหรัฐฯ (US).",
         "ตอบเป็นภาษาไทยหรืออังกฤษตามที่ผู้ใช้ถาม ใช้ภาษากระชับ ชัดเจน และไม่ต้องมีคำนำยาวๆ",
@@ -53,65 +217,23 @@ async def _build_context(
         f"วันที่ปัจจุบัน: {date.today().isoformat()}",
     ]
 
-    # Current stock data
-    if symbol:
-        try:
-            quote = await stock_service.fetch_stock_quote(symbol)
-            fundamentals = await stock_service.fetch_stock_fundamentals(symbol)
-            if quote:
-                ctx_parts.append(
-                    f"\nข้อมูลหุ้น {symbol} ณ ปัจจุบัน:"
-                    f"\n  ราคา: {quote.price:.2f}  เปลี่ยนแปลง: {quote.change:+.2f} ({quote.change_pct:+.2f}%)"
-                    f"\n  Open: {quote.open}  High: {quote.high}  Low: {quote.low}  Volume: {quote.volume:,}"
-                )
-            if fundamentals:
-                f_parts = []
-                if fundamentals.pe_ratio:
-                    f_parts.append(f"P/E={fundamentals.pe_ratio:.1f}")
-                if fundamentals.pb_ratio:
-                    f_parts.append(f"P/B={fundamentals.pb_ratio:.1f}")
-                if fundamentals.eps:
-                    f_parts.append(f"EPS={fundamentals.eps:.2f}")
-                if fundamentals.dividend_yield:
-                    f_parts.append(f"Div={fundamentals.dividend_yield:.2f}%")
-                if fundamentals.market_cap:
-                    cap = fundamentals.market_cap
-                    cap_str = f"{cap/1e12:.2f}T" if cap > 1e12 else f"{cap/1e9:.1f}B" if cap > 1e9 else f"{cap/1e6:.0f}M"
-                    f_parts.append(f"Mkt Cap={cap_str}")
-                if f_parts:
-                    ctx_parts.append(f"  Fundamentals: {', '.join(f_parts)}")
-        except Exception:
-            pass
+    # Fetch stock quote and fundamentals (cache-first, non-blocking)
+    quote_ctx = await _fetch_quote_context(symbol)
+    if quote_ctx:
+        ctx_parts.append(quote_ctx)
 
-    # User portfolio
-    if user:
-        try:
-            result = await db.execute(
-                select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
-            )
-            txns = result.scalars().all()
-            holdings: dict[str, float] = {}
-            for t in txns:
-                mult = 1 if t.type.value == "BUY" else -1
-                holdings[t.symbol] = holdings.get(t.symbol, 0) + t.qty * mult
-            active = {s: q for s, q in holdings.items() if q > 0.001}
-            if active:
-                ctx_parts.append(f"\nพอร์ตปัจจุบันของผู้ใช้ ({len(active)} หลักทรัพย์):")
-                for sym, qty in list(active.items())[:10]:
-                    ctx_parts.append(f"  {sym}: {qty:,.0f} หน่วย")
-        except Exception:
-            pass
+    fund_ctx = await _fetch_fundamentals_context(symbol)
+    if fund_ctx:
+        ctx_parts.append(fund_ctx)
 
-        # Watchlist
-        try:
-            wres = await db.execute(
-                select(WatchlistItem.symbol).where(WatchlistItem.user_id == user.id).limit(10)
-            )
-            wsyms = [r[0] for r in wres.all()]
-            if wsyms:
-                ctx_parts.append(f"\nWatchlist: {', '.join(wsyms)}")
-        except Exception:
-            pass
+    # Fetch user portfolio and watchlist
+    portfolio_ctx = await _fetch_portfolio_context(user, db)
+    if portfolio_ctx:
+        ctx_parts.append(portfolio_ctx)
+
+    watchlist_ctx = await _fetch_watchlist_context(user, db)
+    if watchlist_ctx:
+        ctx_parts.append(watchlist_ctx)
 
     return "\n".join(ctx_parts)
 
@@ -141,6 +263,11 @@ async def chat(
         "model": body.model,
         "messages": messages,
         "stream": body.stream,
+        "options": {
+            "num_predict": 600,    # cap response length → faster completion
+            "temperature": 0.7,
+            "num_ctx": 4096,       # context window
+        },
     }
 
     if not body.stream:

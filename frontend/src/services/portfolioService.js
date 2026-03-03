@@ -2,11 +2,12 @@ import api from '@/services/api';
 
 const portfolioService = {
     getTransactions: () => api.get('/portfolio'),
-    getAnalytics: () => api.get('/portfolio/analytics'),
+    getAnalytics: () => api.get('/portfolio/analytics', { timeout: 20_000 }),
     addTransaction: (body) => api.post('/portfolio/transactions', body),
     updateTransaction: (id, body) => api.put(`/portfolio/transactions/${id}`, body),
     deleteTransaction: (id) => api.delete(`/portfolio/transactions/${id}`),
     getPerformance: (period = '6M') => api.get(`/portfolio/performance?period=${period}`),
 };
 
+export { portfolioService };
 export default portfolioService;

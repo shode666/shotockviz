@@ -9,6 +9,19 @@ class MarketType(str, PyEnum):
     SET = "SET"
     US = "US"
     FUND = "FUND"  # Thai mutual funds (กองทุนรวม)
+    JP = "JP"      # Tokyo Stock Exchange (.T)
+    CN = "CN"      # Shanghai (.SS) / Shenzhen (.SZ)
+    HK = "HK"      # Hong Kong Stock Exchange (.HK)
+    UK = "UK"      # London Stock Exchange (.L)
+    DE = "DE"      # XETRA / Frankfurt (.DE)
+    FR = "FR"      # Euronext Paris (.PA)
+    NL = "NL"      # Euronext Amsterdam (.AS)
+    KR = "KR"      # Korea Exchange (.KS)
+    AU = "AU"      # Australian Securities Exchange (.AX)
+    CA = "CA"      # Toronto Stock Exchange (.TO)
+    TW = "TW"      # Taiwan Stock Exchange (.TW)
+    SG = "SG"      # Singapore Exchange (.SI)
+    IT = "IT"      # Borsa Italiana (.MI)
 
 
 class Stock(Base):

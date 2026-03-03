@@ -28,11 +28,17 @@ async def get_portfolio_performance(
     Calculate portfolio equity curve.
     Returns daily portfolio value from the first transaction date
     up to today, calculated from stored OHLCV history.
+    CQRS: reads from Redis/PostgreSQL cache only. No external API calls.
     """
-    result = await db.execute(
-        select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
-    )
-    txns = result.scalars().all()
+    try:
+        result = await db.execute(
+            select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
+        )
+        txns = result.scalars().all()
+    except Exception as e:
+        logger.error("portfolio performance DB error", error=str(e))
+        return {"points": [], "period": period}
+
     if not txns:
         return {"points": [], "period": period}
 
@@ -50,24 +56,39 @@ async def get_portfolio_performance(
     # Get all unique symbols
     symbols = list({t.symbol for t in txns})
 
-    # Fetch daily history for each symbol (covers the full performance period)
+    # CQRS: read history from Redis/PostgreSQL cache only (no external API calls)
     history_map: dict[str, dict[str, float]] = {}
-    hist_tasks = [
-        stock_service.fetch_stock_history(
-            sym, "1D",
-            from_ts=int(datetime.combine(effective_start, datetime.min.time()).timestamp()),
-            to_ts=int(datetime.combine(today, datetime.max.time()).timestamp()),
+    hist_tasks = [stock_service.read_history(sym, "1D") for sym in symbols]
+    try:
+        histories = await asyncio.wait_for(
+            asyncio.gather(*hist_tasks, return_exceptions=True),
+            timeout=4.5,
         )
-        for sym in symbols
-    ]
-    histories = await asyncio.gather(*hist_tasks, return_exceptions=True)
+    except asyncio.TimeoutError:
+        logger.warning("Portfolio performance history read timeout", symbols=symbols[:5])
+        histories = [Exception("timeout")] * len(symbols)
+
+    # Trigger background fetch for symbols with no cached history
     for sym, bars in zip(symbols, histories):
         if isinstance(bars, Exception) or not bars:
+            # Request background fetch for missing history
+            try:
+                await stock_service.request_data_fetch(sym, "history")
+            except Exception:
+                pass
             continue
         history_map[sym] = {}
         for bar in bars:
-            bar_date = bar.time if isinstance(bar.time, str) else str(bar.time)[:10]
-            history_map[sym][bar_date] = bar.close
+            # Handle both dict and OHLCVBar objects
+            if isinstance(bar, dict):
+                bar_date = bar.get("time", "")
+                bar_close = bar.get("close", 0)
+            else:
+                bar_date = bar.time if isinstance(bar.time, str) else str(bar.time)[:10]
+                bar_close = bar.close
+            # Normalize date string (strip time component if present)
+            bar_date = str(bar_date)[:10]
+            history_map[sym][bar_date] = float(bar_close)
 
     # Walk day by day and compute portfolio value
     def compute_holdings_on(target_date: date) -> dict[str, float]:

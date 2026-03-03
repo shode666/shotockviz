@@ -1,26 +1,8 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
 import useAppStore from '@/store/appStore';
-import stockService from '@/services/stockService';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP } from '@/utils/indicators';
-
-/** Sort bars ascending by time — safety net for mismatched API ordering */
-function sortBarsAsc(bars: any[]) {
-    return [...bars].sort((a, b) => {
-        const ta = typeof a.time === 'string' ? a.time : String(a.time);
-        const tb = typeof b.time === 'string' ? b.time : String(b.time);
-        return ta < tb ? -1 : ta > tb ? 1 : 0;
-    });
-}
-
-// Minimal fallback shown ONLY on network error (not on empty API response)
-const ERROR_BARS = [
-    { time: 1700000000, open: 60, high: 75, low: 55, close: 70 },
-    { time: 1700086400, open: 70, high: 80, low: 65, close: 72 },
-    { time: 1700172800, open: 72, high: 85, low: 68, close: 80 },
-    { time: 1700259200, open: 80, high: 88, low: 70, close: 68 },
-    { time: 1700345600, open: 68, high: 74, low: 60, close: 65 },
-];
+import { useChartData } from '@/hooks/useChartData';
 
 export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null }) {
     const containerRef = useRef(null);
@@ -29,94 +11,16 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     const volumeRef = useRef(null);
     const indicatorsRef = useRef({}); // Store references to indicator series
     const { selectedStock, darkMode } = useAppStore();
-    const [bars, setBars] = useState<any[]>([]);
-    const [noData, setNoData] = useState(false);
-    const [loading, setLoading] = useState(false);
-    const [isTimeout, setIsTimeout] = useState(false);
 
-    // loadData is exposed via ref so the retry button can call it outside useEffect
-    const loadDataRef = useRef<() => void>(() => {});
+    // Fetch chart data using custom hook
+    const { bars, isLoading, isTimeout, isFund, refetch } = useChartData({
+        timeframe,
+        onLoadingChange
+    });
 
-    // Fetch data when stock or timeframe changes — auto-retries up to 3× if empty
-    useEffect(() => {
-        let cancelled = false;
-        let retryCount = 0;
-        let retryTimer: ReturnType<typeof setTimeout> | null = null;
-        const MAX_RETRIES = 3;
-        const RETRY_DELAY_MS = 4000;
-
-        async function loadData() {
-            if (retryCount === 0) {
-                setLoading(true);
-                onLoadingChange?.(true);
-                setNoData(false);
-                setIsTimeout(false); // reset timeout on each fresh load
-                setBars([]); // Clear immediately so old chart doesn't linger
-            }
-            try {
-                const { data } = await stockService.getHistory(selectedStock.sym, timeframe);
-                if (cancelled) return;
-                if (data.bars?.length > 0) {
-                    setBars(sortBarsAsc(data.bars));
-                    setNoData(false);
-                    setIsTimeout(false);
-                    setLoading(false);
-                    onLoadingChange?.(false);
-                } else if (retryCount < MAX_RETRIES) {
-                    // Empty response — backend may still be fetching history; retry
-                    retryCount++;
-                    console.info(`[TradingChart] No bars for ${selectedStock.sym} ${timeframe}, retry ${retryCount}/${MAX_RETRIES} in ${RETRY_DELAY_MS / 1000}s`);
-                    retryTimer = setTimeout(() => { if (!cancelled) loadData(); }, RETRY_DELAY_MS);
-                } else {
-                    console.warn(`[TradingChart] No bars returned for ${selectedStock.sym} ${timeframe}`);
-                    setBars([]);
-                    setNoData(true);
-                    setIsTimeout(false);
-                    setLoading(false);
-                    onLoadingChange?.(false);
-                }
-            } catch (err: any) {
-                if (!cancelled) {
-                    const isTimeoutErr = err?.code === 'ECONNABORTED' || err?.message?.includes('timeout');
-                    if (isTimeoutErr) {
-                        console.warn(`[TradingChart] Request timed out for ${selectedStock.sym} ${timeframe}`);
-                        setIsTimeout(true);
-                        setBars([]);
-                        setNoData(false);
-                        setLoading(false);
-                        onLoadingChange?.(false);
-                    } else {
-                        console.error(`[TradingChart] Failed to fetch ${selectedStock.sym} ${timeframe}:`, err);
-                        setBars(ERROR_BARS);
-                        setIsTimeout(false);
-                        setNoData(false);
-                        setLoading(false);
-                        onLoadingChange?.(false);
-                    }
-                }
-            }
-        }
-
-        // Expose loadData so the retry button can trigger it
-        loadDataRef.current = () => {
-            if (cancelled) return;
-            retryCount = 0;
-            loadData();
-        };
-
-        loadData();
-        return () => {
-            cancelled = true;
-            if (retryTimer) clearTimeout(retryTimer);
-        };
-    }, [selectedStock.sym, timeframe]);
-
-    const retry = useCallback(() => {
-        setIsTimeout(false);
-        setLoading(true);
-        setBars([]);
-        loadDataRef.current();
-    }, []);
+    // Determine if we should show "no data" state
+    // Show it when: bars are empty AND (it's a fund OR there's an error AND not loading/timeout)
+    const noData = bars.length === 0 && (isFund || (isLoading === false && isTimeout === false));
 
     // Create chart
     useEffect(() => {
@@ -380,7 +284,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             <div ref={containerRef} className="w-full h-full" />
 
             {/* Loading overlay — semi-opaque so user knows something is happening */}
-            {loading && (
+            {isLoading && (
                 <div
                     className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none z-10"
                     style={{ background: 'rgba(13,15,23,0.72)', backdropFilter: 'blur(2px)' }}
@@ -408,19 +312,19 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             )}
 
             {/* Timeout overlay — distinct from noData */}
-            {isTimeout && !loading && (
+            {isTimeout && !isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'var(--color-bg)', opacity: 0.92 }}>
                     <div className="text-center">
                         <div className="text-2xl mb-2">⏱</div>
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-3" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
-                        <button onClick={retry} className="btn-accent text-xs px-3 py-1.5">Retry</button>
+                        <button onClick={refetch} className="btn-accent text-xs px-3 py-1.5">Retry</button>
                     </div>
                 </div>
             )}
 
             {/* No data state — distinct from timeout */}
-            {!loading && !isTimeout && noData && (
+            {!isLoading && !isTimeout && noData && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 pointer-events-none">
                     <div
                         className="glass-panel rounded-2xl px-6 py-5 pointer-events-auto text-center"
@@ -429,42 +333,45 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                             border: '1px solid var(--color-border)',
                         }}
                     >
-                        <span className="text-4xl block mb-3">📊</span>
-                        <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
-                            No data available
-                        </div>
-                        <div className="text-xs mt-2 mb-4" style={{ color: 'var(--color-text-sub)' }}>
-                            Yahoo Finance may be rate limiting.
-                            <br />
-                            Try clicking a US stock like <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>NVDA</span> or <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>AAPL</span>.
-                        </div>
-                        <button
-                            className="text-xs px-3 py-1.5 rounded-lg transition-all"
-                            style={{
-                                background: 'var(--color-accent)',
-                                color: '#fff',
-                                cursor: 'pointer',
-                                border: 'none',
-                            }}
-                            onClick={() => {
-                                // Force re-fetch
-                                setNoData(false);
-                                setLoading(true);
-                                stockService.getHistory(selectedStock.sym, timeframe)
-                                    .then(({ data }) => {
-                                        if (data.bars?.length > 0) {
-                                            setBars(sortBarsAsc(data.bars));
-                                            setNoData(false);
-                                        } else {
-                                            setNoData(true);
-                                        }
-                                    })
-                                    .catch(() => { setBars(ERROR_BARS); })
-                                    .finally(() => setLoading(false));
-                            }}
-                        >
-                            Try Again
-                        </button>
+                        {isFund ? (
+                            <>
+                                <span className="text-4xl block mb-3">🏦</span>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
+                                    กองทุนรวม — ไม่มีข้อมูลกราฟ
+                                </div>
+                                <div className="text-xs mt-2 mb-4" style={{ color: 'var(--color-text-sub)' }}>
+                                    กองทุนไทยไม่มีข้อมูล OHLCV แบบ real-time
+                                    <br />
+                                    ดูมูลค่า NAV ได้ที่หน้า <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>Portfolio</span>
+                                </div>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-4xl block mb-3">📊</span>
+                                <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
+                                    No data available
+                                </div>
+                                <div className="text-xs mt-2 mb-4" style={{ color: 'var(--color-text-sub)' }}>
+                                    Yahoo Finance may be rate limiting.
+                                    <br />
+                                    Try clicking a US stock like <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>NVDA</span> or <span style={{ color: 'var(--color-accent)', fontWeight: 600 }}>AAPL</span>.
+                                </div>
+                            </>
+                        )}
+                        {!isFund && (
+                            <button
+                                className="text-xs px-3 py-1.5 rounded-lg transition-all"
+                                style={{
+                                    background: 'var(--color-accent)',
+                                    color: '#fff',
+                                    cursor: 'pointer',
+                                    border: 'none',
+                                }}
+                                onClick={refetch}
+                            >
+                                Try Again
+                            </button>
+                        )}
                     </div>
                 </div>
             )}

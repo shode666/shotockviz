@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router';
 import { Search, Clock, X, TrendingUp, Star, ArrowRight, Zap } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
+import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 
 // ── Local-storage helpers ─────────────────────────────────────────────────────
 const RECENT_KEY = 'shotock_recent_searches';
@@ -21,10 +22,10 @@ function saveRecent(items: SearchResult[]) {
 const POPULAR: SearchResult[] = [
     { symbol: 'PTT.BK',  name: 'ปตท.',            market: 'SET' },
     { symbol: 'KBANK.BK',name: 'กสิกรไทย',        market: 'SET' },
-    { symbol: 'AOT.BK',  name: 'ท่าอากาศยานไทย',  market: 'SET' },
     { symbol: 'NVDA',    name: 'NVIDIA',            market: 'US'  },
     { symbol: 'AAPL',    name: 'Apple Inc.',        market: 'US'  },
-    { symbol: 'TSLA',    name: 'Tesla, Inc.',       market: 'US'  },
+    { symbol: '7203.T',  name: 'Toyota Motor',      market: 'JP'  },
+    { symbol: '0700.HK', name: 'Tencent',           market: 'HK'  },
 ];
 
 interface SearchResult {
@@ -34,18 +35,26 @@ interface SearchResult {
     market?: string;
 }
 
-type MarketFilter = 'ALL' | 'SET' | 'US' | 'FUND';
+type MarketFilter = 'ALL' | 'SET' | 'US' | 'FUND' | 'JP' | 'HK' | 'UK' | 'CN' | 'DE' | 'KR';
 
-// ── Market badge config ───────────────────────────────────────────────────────
+// ── Market badge config (uses MARKET_COLORS from formatters + extras) ────────
 const MARKET_META: Record<string, { bg: string; color: string; label: string }> = {
     SET:  { bg: 'rgba(52,211,153,0.15)',  color: 'var(--color-green)',  label: 'SET'  },
     US:   { bg: 'rgba(124,92,252,0.15)',  color: 'var(--color-accent)', label: 'US'   },
     FUND: { bg: 'rgba(251,191,36,0.15)', color: 'var(--color-yellow)', label: 'FUND' },
     IDX:  { bg: 'rgba(96,165,250,0.15)', color: 'var(--color-blue)',   label: 'IDX'  },
+    JP:   { bg: 'rgba(248,113,113,0.15)', color: '#f87171',            label: 'JP'   },
+    CN:   { bg: 'rgba(251,146,60,0.15)',  color: '#fb923c',            label: 'CN'   },
+    HK:   { bg: 'rgba(251,146,60,0.15)',  color: '#fb923c',            label: 'HK'   },
+    UK:   { bg: 'rgba(96,165,250,0.15)',  color: '#60a5fa',            label: 'UK'   },
+    DE:   { bg: 'rgba(96,165,250,0.15)',  color: '#60a5fa',            label: 'DE'   },
+    FR:   { bg: 'rgba(96,165,250,0.15)',  color: '#60a5fa',            label: 'FR'   },
+    KR:   { bg: 'rgba(248,113,113,0.15)', color: '#f87171',            label: 'KR'   },
 };
 
 function getMarketMeta(market?: string) {
-    return MARKET_META[market || 'US'] ?? MARKET_META['US'];
+    if (!market) return MARKET_META['US'];
+    return MARKET_META[market] ?? MARKET_META['US'];
 }
 
 // ── Filter pills ──────────────────────────────────────────────────────────────
@@ -94,7 +103,7 @@ function ResultRow({
             <div className="flex-1 min-w-0">
                 <div className="flex items-baseline gap-2">
                     <span className="text-sm font-bold tracking-wide" style={{ color: 'var(--color-accent)' }}>
-                        {item.symbol}
+                        {parseSymbol(item.symbol, item.market).display}
                     </span>
                     <span className="text-xs truncate" style={{ color: 'var(--color-text-sub)' }}>
                         {item.name_th || item.name}
@@ -112,7 +121,7 @@ function ResultRow({
                 className="text-[10px] font-semibold px-2 py-0.5 rounded-full flex-shrink-0"
                 style={{ background: m.bg, color: m.color }}
             >
-                {m.label}
+                {item.market || parseSymbol(item.symbol).market}
             </span>
 
             {/* Arrow (visible on hover/highlight) */}

@@ -58,7 +58,14 @@ backend/
 - [x] Fix `setTimeout` not cleared in `TradingChart.tsx` on unmount during retry
 - [x] Fix `setTimeout` not cleaned up in `AIChatPanel.tsx` Ollama polling
 - [x] Fix `RightPanel.tsx` race condition — add `AbortController` on symbol change
+- [x] Fix `RightPanel.tsx` 52W High/Low always "—" — `high_52week`/`low_52week` → `week_52_high`/`week_52_low` (field name mismatch with backend Pydantic schema)
+- [x] Fix `RightPanel.tsx` quote never loading — removed dead 202-retry loop; `stockService.getQuote` now properly catches 404 (axios throws before the old `if (res.status === 404)` check was reached)
 - [x] Fix `ws://localhost/undefined` WebSocket error (TanStack devtools WS injected even after plugin removed)
+- [x] **Fix critical data display bugs (2026-03-02):**
+  - [x] **Sidebar.tsx** — Filter out FUND symbols before API call to avoid wasting requests on unfetchable mutual funds
+  - [x] **PortfolioPage.tsx** — Display "กองทุน" (Fund) badge and "ไม่มี NAV" label for mutual fund holdings instead of dash
+  - [x] **ScreenerPage.tsx** — Fix pct field format: was duplicating `r.chg`, now formats correctly as percentage string `"±X.XX%"`
+  - [x] **DashboardPage.tsx** — Add error state handling: capture error message, show retry button instead of infinite loading
 - [ ] **Rebuild frontend Docker image** so all source fixes take effect in the running app
   - **Why:** Memory leak fixes, AbortController, WebSocket URL — all committed in source but compiled bundle still serves old code
   - **Steps:**
@@ -88,6 +95,55 @@ backend/
 - [x] Fix `PTT.BK` Yahoo Finance empty bars — increase timeout from 6s → 15s for Thai stocks
 - [x] Add retry with exponential backoff in `_fetch_yahoo_direct` for .BK symbols
 - [x] Investigate Celery workers: verify they run in `docker-compose.dev.yml` stack
+
+## Code Quality & Refactoring
+- [x] **Refactor 3 backend route files to use guard clauses + extracted helpers (SOLID principles)**
+  - [x] **dashboard.py (317 lines)** — Extracted 5 helpers: `_fetch_indices_cached()`, `_build_portfolio_summary()`, `_find_alerts_near_target()`, `_get_user_watchlist()`, `_get_top_movers()`
+  - [x] **screener.py (345 lines)** — Extracted 2 helpers: `_fetch_symbol_bars()`, `_evaluate_symbol()` + added `_compute_sma()` utility
+  - [x] **ai_chat.py (408 lines)** — Extracted 4 helpers: `_fetch_quote_context()`, `_fetch_fundamentals_context()`, `_fetch_portfolio_context()`, `_fetch_watchlist_context()`
+  - All files < 500 lines, all compiled successfully
+  - All helpers have type hints + docstrings with Args/Returns
+  - Main endpoints now act as clean orchestrators
+  - Flattened nested try/except blocks → guard clauses + early returns
+
+## Fast-Response Pattern (ALL APIs < 5s)
+- [x] Add `_notify_data_ready()` to stock_service.py — publishes WS notification via Redis pub/sub
+- [x] Rewrite dashboard.py — cache-only reads + background fetch + WS `data_ready`
+- [x] Fix batch quotes (`/quotes`) — return cached immediately, BG fetch for misses
+- [x] Fix single quote (`/{symbol}/quote`) — 4s timeout + 202 + BG fetch
+- [x] Fix history (`/{symbol}/history`) — 4.5s timeout + BG fetch + WS notify
+- [x] Fix fundamentals (`/{symbol}/fundamentals`) — 4s timeout
+- [x] Fix news (`/{symbol}/news`) — reduce feedparser timeout 8s → 4s
+- [x] Fix portfolio analytics (`/analytics`) — replace 12s blocking gather with BG tasks
+- [x] Fix portfolio performance (`/performance`) — 4.5s timeout on history gather
+- [x] Fix AI chat context (`_build_context`) — cache-only quote read + 3s fundamentals cap
+- [x] Fix Google OAuth — 5s timeout on verify_oauth2_token
+- [x] Fix screener — 4s per-symbol timeout, 4.5s total timeout
+- [x] Add `data_ready` message handling in main.py Redis broadcaster
+- [x] Add `data_ready` handler in useWebSocket.ts → bumpDataVersion()
+- [x] Add `has_pending_prices` to PortfolioAnalytics schema
+- [x] **Pure-read refactor: NO external API calls from endpoints** (2026-03-03)
+  - [x] Add 4 pure-read functions to stock_service.py: `read_quote()`, `read_history()`, `read_fundamentals()`, `request_data_fetch()`
+  - [x] Refactor `/{symbol}/quote` — remove direct `_fetch_quote_direct()`, use `read_quote()` only
+  - [x] Refactor `/quotes` batch — remove direct calls, use Redis pipeline + `request_data_fetch()` for misses
+  - [x] Refactor `/{symbol}/history` — remove `fetch_stock_history()` call, use `read_history()` (Redis → PostgreSQL)
+  - [x] Refactor `/{symbol}/fundamentals` — remove direct call, use `read_fundamentals()` (Redis only)
+  - [x] Refactor screener.py — remove Yahoo Finance httpx.Client calls, implement `_run_screener_db()` reading from PostgreSQL ohlcv_bars table, compute indicators (RSI, MACD, MAs) in pure Python (no pandas)
+- [ ] **Rebuild frontend Docker image** to activate useWebSocket.ts changes
+- [ ] **Verify all endpoints < 5s** during live testing
+
+## CQRS Write Side — Celery Workers (2026-03-03)
+- [x] Create `workers/name_fetcher.py` — prefetch company names every 6h
+- [x] Create `workers/fundamentals_fetcher.py` — prefetch PE/PB/EPS every 4h
+- [x] Create `workers/fund_fetcher.py` — fetch Thai fund NAV daily 19:00 ICT via pythainav
+- [x] Create `workers/history_prefetcher.py` — warm OHLCV cache every 30min
+- [x] Create `workers/on_demand_listener.py` — handle API cache-miss via Celery .delay()
+- [x] Update `celery_app.py` — register 5 new workers + 4 beat schedules
+- [x] Update `stock_service.py request_data_fetch()` — Celery .delay() instead of Redis pub/sub
+- [x] Add `pythainav==0.2.8` to requirements.txt
+- [ ] **Rebuild backend Docker image** to register new workers
+- [ ] **Verify Celery Beat picks up new schedules** (`celery inspect registered`)
+- [ ] **Test on-demand flow**: clear cache → load page → verify 202 → verify WS data_ready → verify re-fetch
 
 ## System Health
 - [x] Add `/api/system/ready` endpoint (checks Redis probe keys)
@@ -169,6 +225,7 @@ backend/
     - [x] Add fallback: if yfinance returns 0 bars, try alternative period (3mo → 1mo → 5d)
     - [x] Cache last-known-good data in Redis with 24h TTL as stale fallback
     - [x] Test with PTT.BK, KBANK.BK, AOT.BK, CPALL.BK, TRUE.BK
+    - [x] **Fix Bug #5: PTT.BK retry logic uses 'data' in locals() incorrectly (2026-03-02)** — The fallback period retry was reusing old `data` variable from previous period iteration instead of fresh data. Fixed with explicit `data_received` flag. Added detailed logging showing period chain traversal.
   - **Acceptance:** All 5 test symbols return ≥1 bar within 20s, stale data shown if live fetch fails
   - **Depends on:** Alternative data source research (ideally switch away from yfinance for .BK)
   - 📁 **Files:** `backend/services/stock_service.py` → `_fetch_yahoo_direct()`, `backend/services/cache_service.py` (stale fallback)
