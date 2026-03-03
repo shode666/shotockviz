@@ -8,6 +8,98 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Fixed (2026-03-03 — Intraday timeframe full fix: end-to-end data flow)
+
+**backend/api/routes/stocks.py — `timeframe` query param name mismatch:**
+- ROOT CAUSE: history endpoint declared `tf: str = Query("1D")` but frontend sent `?timeframe=1h`. Backend always defaulted to `1D` regardless of the requested timeframe.
+- FIX: Renamed parameter to `timeframe: str = Query("1D")` to match frontend convention.
+
+**frontend/src/services/stockService.js — frontend sent wrong param key:**
+- ROOT CAUSE: `getHistory()` used `{ params: { tf } }` → URL `?tf=1h`. Backend param was renamed so frontend needed to match.
+- FIX: Changed to `{ params: { timeframe: tf } }` → URL `?timeframe=1h`.
+
+**backend/models/ohlcv.py — `to_api_dict()` returned string timestamps for intraday (DB fallback):**
+- ROOT CAUSE: `to_api_dict()` always returned `self.time_str` (string). For intraday bars stored in PostgreSQL, `time_str` is a numeric string like `"1759761000"`. TradingView v5 requires integer `UTCTimestamp` for intraday series.
+- FIX: `is_intraday = self.time_str.isdigit()` — returns `self.time_unix` (int) for intraday rows, `self.time_str` (date string) for daily/weekly/monthly rows.
+
+**backend/workers/on_demand_listener.py — 4h fetch used `period="120d"` (yfinance 1h limit exceeded):**
+- ROOT CAUSE: 4h fetch config used `interval="1h", period="120d"`. yfinance silently returns empty data beyond 60d for 1h interval → `_fetch_history` returned False without error.
+- FIX: Changed to `period="60d"` (confirmed working limit; yields ~250 aggregated 4h candles).
+
+**backend/workers/price_fetcher.py — legacy alias tasks called `.apply().get()` inside Celery task:**
+- ROOT CAUSE: `fetch_set_prices` and `fetch_us_prices` used `fetch_prices.apply().get(timeout=120)` which is forbidden inside a Celery task (raises `RuntimeError: Never call result.get() within a task!`).
+- FIX: Changed to `fetch_prices.delay()` — fire-and-forget, no blocking.
+
+**docker-compose.dev.yml — services not accessible from host for debugging:**
+- FIX: Added `ports:` mappings to expose Redis (6379), PostgreSQL (5432), backend (8000), and Flower (5555) to the host machine for direct curl/redis-cli/psql debugging.
+
+### Fixed (2026-03-03 — TradingChart time-type crash on timeframe switch)
+
+**TradingChart.tsx — chart recreated when crossing intraday↔daily boundary:**
+- ROOT CAUSE: chart creation `useEffect` had deps `[darkMode, chartType]` only. When user switched 1D→1h, the existing TradingView series was in "BusinessDay" (date string) mode from prior 1D data. Calling `setData([{ time: 1740000000 }])` threw a v5 error: cannot mix `UTCTimestamp` (integer) and `BusinessDay` (string) in the same series.
+- FIX: Added `isIntradayMode = ['1m','5m','15m','1h','4h'].includes(timeframe)` boolean to the chart creation deps. Crossing the daily↔intraday boundary now triggers a full chart recreation with fresh series accepting the correct time type.
+- Switching within same mode (1h↔4h, 1D↔1W) does NOT recreate — no unnecessary flicker.
+
+### Fixed (2026-03-03 — Intraday timeframe display + WebSocket precision)
+
+**useChartData.ts — normalizeBarTime: intraday bars no longer converted to date strings:**
+- ROOT CAUSE: `normalizeBarTime()` converted ALL unix timestamps to `"yyyy-mm-dd"` strings, including 1m/5m/15m/1h/4h bars. Multiple same-day bars collapsed to the same string key → TradingView `data must be asc ordered by time` crash
+- NEW: Daily/Weekly/Monthly timeframes → `"yyyy-mm-dd"` string (TradingView day series requirement)
+- NEW: Intraday timeframes (1m/5m/15m/1h/4h) → integer unix timestamp (TradingView time series requirement)
+- `sortBarsAsc()` now takes `isDaily` flag and uses numeric sort for intraday, string sort for daily
+
+**useWebSocket.ts + appStore.js — precise data_ready handling:**
+- ROOT CAUSE: `data_ready` handler called `bumpDataVersion()` unconditionally → any symbol's data_ready cancelled the active retry chain on the currently viewed chart
+- NEW: Stores full `data_ready` payload as `dataReadyPayload` in Zustand (with `_key` timestamp for change detection) instead of incrementing a global counter
+- `useChartData` subscribes to `dataReadyPayload` and only re-fetches when the payload matches the current symbol AND timeframe (history data_type only)
+- Unrelated symbols or timeframes are filtered at the hook level → in-progress retries never cancelled by foreign notifications
+
+**appStore.js:**
+- Added `dataReadyPayload: null` state
+- Added `setDataReadyPayload(payload)` action (creates new object reference each time for Zustand reactivity)
+
+### Added (2026-03-03 — News Celery Worker + CQRS)
+
+**workers/news_fetcher.py — NEW Celery worker for news:**
+- `prefetch_news` task runs every 30 min via Celery Beat
+- Fetches Google News RSS (Thai + English) for all watched symbols
+- Deduplicates cleaned symbols (PTT.BK and PTT share same news cache)
+- Skips symbols with fresh cache (avoids redundant fetches)
+- Rate-limit friendly: 0.5s delay between symbols, max 30 per run
+- `fetch_news_on_demand` task for symbols not in watchlists (triggered by API cache miss)
+- Cache key: `news:{CLEAN_SYMBOL}`, TTL 30 minutes
+
+**stocks.py — News endpoint now pure-read (CQRS):**
+- Removed all feedparser/RSS logic from API endpoint
+- API reads Redis cache only → returns cached or empty []
+- On cache miss: triggers `fetch_news_on_demand` Celery task (non-blocking)
+- News is NOT user-specific — all users share same cache per symbol
+
+### Fixed (2026-03-03 — Intraday Timeframes + 4h Chart + News)
+
+**on_demand_listener.py — intraday timeframes now work (1m/5m/15m/1h/4h):**
+- ROOT CAUSE: `_fetch_history()` was hardcoded to fetch only `1D` bars regardless of requested timeframe
+- `request_data_fetch()` now accepts optional `timeframe` parameter
+- `process_fetch_request()` Celery task forwards timeframe to `_fetch_history()`
+- `_fetch_history()` uses `TF_CONFIG` mapping to determine correct yfinance interval+period per timeframe
+- Added `_aggregate_4h_sync()` for 4h aggregation inside Celery worker (sync context)
+- DB upsert uses `ON CONFLICT DO UPDATE` instead of SELECT+INSERT (more efficient)
+- Cache TTL is now timeframe-aware (1m=60s, 5m=300s, 1h=3600s, 1D=6h)
+
+**db_helpers.py — 4h chart duplicate timestamp crash fixed:**
+- OLD: chunked every 4 consecutive 1h bars → duplicate timestamps when data has gaps
+- NEW: groups 1h bars by UTC 4-hour boundary (0:00/4:00/8:00/12:00/16:00/20:00)
+- Deduplicates input bars by timestamp before grouping → guaranteed unique output timestamps
+- Fixes TradingView error: "data must be asc ordered by time"
+
+**stocks.py — News endpoint improved:**
+- Added Redis caching (10 min TTL) for news results → no repeated RSS fetches
+- Safer feedparser `source` field access (handles non-dict source gracefully)
+- URL-encodes search query properly (`quote_plus`)
+- Strips international market suffixes (.T, .HK, .SS, .SZ, .L, .DE, .PA, .AS, .KS)
+- Increased RSS timeout from 4s to 6s
+- Added error logging instead of silent `continue`
+
 ### Documentation (2026-03-03 — Full Docs Update)
 
 - **REQUIREMENTS.md** — Major rewrite: 2→10 markets, email+password→Google OAuth, Nginx→Caddy, added CQRS architecture, round-robin price fetcher, 10 Celery workers, updated schema/API/milestones

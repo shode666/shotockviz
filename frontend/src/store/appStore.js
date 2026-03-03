@@ -58,6 +58,14 @@ const useAppStore = create((set) => ({
     // Components include this in useEffect deps to auto-refresh stale data.
     dataVersion: 0,
     bumpDataVersion: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
+
+    // ── WebSocket data_ready payload ──────────────────────────────────────────
+    // Stores the latest data_ready message from the WebSocket.
+    // Each set creates a new object reference so React/Zustand detects the change.
+    // Shape: { type, data_type, symbol, timeframe?, _key: timestamp }
+    dataReadyPayload: null,
+    setDataReadyPayload: (payload) =>
+        set({ dataReadyPayload: { ...payload, _key: Date.now() } }),
 }));
 
 export { useAppStore };

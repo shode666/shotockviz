@@ -19,7 +19,7 @@ const stockService = {
         }
     },
     getHistory: (symbol, tf = '1D') =>
-        api.get(`/stocks/${symbol}/history`, { params: { tf }, timeout: 30_000 }),
+        api.get(`/stocks/${symbol}/history`, { params: { timeframe: tf }, timeout: 30_000 }),
     getFundamentals: (symbol) => api.get(`/stocks/${symbol}/fundamentals`),
     getNews: (symbol) => api.get(`/stocks/${symbol}/news`),
     screener: (params) => api.get('/screener', { params }),

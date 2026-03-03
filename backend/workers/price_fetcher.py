@@ -247,14 +247,22 @@ def fetch_prices(self):
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def fetch_set_prices(self):
-    """Legacy alias — delegates to unified fetch_prices."""
-    return fetch_prices.apply().get(timeout=120)
+    """Legacy alias — delegates to unified fetch_prices task body directly.
+
+    NOTE: Cannot use fetch_prices.apply().get() inside a Celery task (RuntimeError).
+    Instead call the task function directly via apply(args=[], kwargs={}) with no get(),
+    or simply re-use the same underlying logic inline.
+    """
+    fetch_prices.delay()
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=30)
 def fetch_us_prices(self):
-    """Legacy alias — delegates to unified fetch_prices."""
-    return fetch_prices.apply().get(timeout=120)
+    """Legacy alias — delegates to unified fetch_prices task body directly.
+
+    NOTE: Cannot use fetch_prices.apply().get() inside a Celery task (RuntimeError).
+    """
+    fetch_prices.delay()
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)

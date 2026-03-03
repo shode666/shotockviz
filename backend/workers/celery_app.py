@@ -21,6 +21,7 @@ celery_app = Celery(
         "workers.on_demand_listener",
         "workers.symbol_registrar",
         "workers.index_populator",
+        "workers.news_fetcher",
     ],
 )
 
@@ -90,6 +91,11 @@ celery_app.conf.beat_schedule = {
     "scan-unregistered-symbols": {
         "task": "workers.symbol_registrar.scan_unregistered",
         "schedule": crontab(minute="*/15"),
+    },
+    # Prefetch news for watched symbols every 30 minutes
+    "prefetch-news": {
+        "task": "workers.news_fetcher.prefetch_news",
+        "schedule": crontab(minute="*/30"),
     },
     # Refresh index constituents weekly (Sunday 00:00 UTC)
     "populate-index-constituents": {

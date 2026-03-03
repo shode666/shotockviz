@@ -22,6 +22,14 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     // Show it when: bars are empty AND (it's a fund OR there's an error AND not loading/timeout)
     const noData = bars.length === 0 && (isFund || (isLoading === false && isTimeout === false));
 
+    // TradingView v5 uses DIFFERENT time types for intraday vs daily:
+    //   intraday (1m/5m/15m/1h/4h) → integer UTCTimestamp (unix seconds)
+    //   daily/weekly/monthly        → "yyyy-mm-dd" string (BusinessDay)
+    // These CANNOT be mixed in the same series — switching between them requires
+    // a full chart recreation. We include isIntradayMode in the creation deps so the
+    // chart rebuilds automatically when the user crosses the intraday↔daily boundary.
+    const isIntradayMode = ['1m', '5m', '15m', '1h', '4h'].includes(timeframe);
+
     // Create chart
     useEffect(() => {
         if (!containerRef.current) return;
@@ -141,7 +149,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             ro.disconnect();
             chart.remove();
         };
-    }, [darkMode, chartType]);
+    }, [darkMode, chartType, isIntradayMode]); // isIntradayMode: force recreation when crossing intraday↔daily boundary
 
     // Update data
     useEffect(() => {

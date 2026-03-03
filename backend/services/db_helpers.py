@@ -93,28 +93,44 @@ def _bars_to_db_rows(bars: list[OHLCVBar], symbol: str, timeframe: str) -> list[
 
 
 def _aggregate_4h(bars: list[OHLCVBar]) -> list[OHLCVBar]:
-    """Aggregate 1-hour bars into 4-hour bars. Pure function."""
+    """Aggregate 1-hour bars into 4-hour bars aligned to UTC boundaries.
+
+    Groups 1h bars by their 4-hour boundary (0:00, 4:00, 8:00, 12:00,
+    16:00, 20:00 UTC) so timestamps are always unique and properly spaced.
+    Input bars are deduplicated by timestamp before grouping.
+    """
+    if not bars:
+        return []
+
+    FOUR_HOURS = 4 * 3600
+
+    # 1. Deduplicate input bars by timestamp (keep last occurrence)
+    seen: dict[int, OHLCVBar] = {}
+    for b in bars:
+        ts = int(b.time) if isinstance(b.time, (int, float)) else 0
+        if ts > 0:
+            seen[ts] = b
+
+    if not seen:
+        return []
+
+    # 2. Group by 4-hour boundary
+    buckets: dict[int, list[OHLCVBar]] = {}
+    for ts in sorted(seen.keys()):
+        boundary = (ts // FOUR_HOURS) * FOUR_HOURS
+        buckets.setdefault(boundary, []).append(seen[ts])
+
+    # 3. Aggregate each bucket into one 4h candle
     result = []
-    chunk: list[OHLCVBar] = []
-    for bar in bars:
-        chunk.append(bar)
-        if len(chunk) == 4:
-            result.append(OHLCVBar(
-                time=chunk[0].time,
-                open=chunk[0].open,
-                high=max(b.high for b in chunk),
-                low=min(b.low for b in chunk),
-                close=chunk[-1].close,
-                volume=sum(b.volume for b in chunk),
-            ))
-            chunk = []
-    if chunk:
+    for boundary in sorted(buckets.keys()):
+        chunk = buckets[boundary]
         result.append(OHLCVBar(
-            time=chunk[0].time,
+            time=boundary,
             open=chunk[0].open,
             high=max(b.high for b in chunk),
             low=min(b.low for b in chunk),
             close=chunk[-1].close,
             volume=sum(b.volume for b in chunk),
         ))
+
     return result

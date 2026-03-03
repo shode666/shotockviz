@@ -83,6 +83,11 @@ def name(symbol: str) -> str:
     return f"cache:name:{symbol}"
 
 
+def news(symbol: str) -> str:
+    """News articles cache key (cleaned symbol, not raw Yahoo symbol)."""
+    return f"news:{symbol}"
+
+
 def quote_not_found(symbol: str) -> str:
     """Negative cache key for symbols that don't exist on Yahoo Finance.
 

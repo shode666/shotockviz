@@ -296,7 +296,7 @@ async def get_quote(symbol: str):
 @router.get("/{symbol}/history", response_model=StockHistory)
 async def get_history(
     symbol: str,
-    tf: str = Query("1D", description="Timeframe: 1m,5m,15m,1h,4h,1D,1W,1M"),
+    timeframe: str = Query("1D", description="Timeframe: 1m,5m,15m,1h,4h,1D,1W,1M"),
     _user: User | None = Depends(get_optional_user),
 ):
     """Get OHLCV history for a symbol and timeframe — pure-read.
@@ -306,7 +306,7 @@ async def get_history(
     If data missing, requests background fetch and returns empty bars.
     Client gets WS 'data_ready' notification when bars are available.
     """
-    if tf not in VALID_TIMEFRAMES:
+    if timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid timeframe. Choose from: {', '.join(VALID_TIMEFRAMES)}",
@@ -314,16 +314,16 @@ async def get_history(
     sym = symbol.upper()
 
     # Pure-read: Redis → PostgreSQL only
-    bars = await stock_service.read_history(sym, tf)
+    bars = await stock_service.read_history(sym, timeframe)
 
     # Detect Thai mutual funds that have no chart data on Yahoo Finance
     is_fund = not _is_yahoo_fetchable(sym)
 
     if not bars and not is_fund:
-        # No data — request background fetch (only for Yahoo-resolvable symbols)
-        await stock_service.request_data_fetch(sym, "history")
+        # No data — request background fetch with timeframe
+        await stock_service.request_data_fetch(sym, "history", timeframe=timeframe)
 
-    return StockHistory(symbol=sym, timeframe=tf, bars=bars, is_fund=is_fund)
+    return StockHistory(symbol=sym, timeframe=timeframe, bars=bars, is_fund=is_fund)
 
 
 @router.get("/{symbol}/fundamentals", response_model=StockFundamentals)
@@ -356,71 +356,52 @@ async def get_stock_news(
     symbol: str,
     _user: User | None = Depends(get_optional_user),
 ):
-    """Get recent news for a symbol via Google News RSS.
+    """Get recent news for a symbol — pure-read (CQRS).
 
-    Runs feedparser in a thread so it never blocks the async event loop.
-    Symbol is sanitised before use: strips exchange suffixes, index prefixes,
-    forex suffixes, and special chars that Google News would reject.
+    Reads from Redis cache only. If cache miss, triggers Celery
+    news_fetcher on-demand task and returns empty list. News is NOT
+    user-specific — all users share the same cached results.
+
+    Cache is populated by:
+      1. Celery beat: prefetch_news (every 30 min for watched symbols)
+      2. On-demand: fetch_news_on_demand (for symbols not in watchlists)
     """
-    import re
-    import feedparser
-
-    # ── 1. Sanitise the symbol ────────────────────────────────────────────
+    # ── 1. Clean symbol for cache lookup ──────────────────────────────────
     raw = symbol.upper().strip()
-
-    # Strip common Yahoo Finance suffixes / prefixes
     clean = raw
-    clean = re.sub(r"\^", "", clean)           # index prefix  ^GSPC → GSPC
-    clean = re.sub(r"=X$", "", clean)          # forex suffix  THBUSD=X → THBUSD
-    clean = re.sub(r"=F$", "", clean)          # futures       GC=F → GC
-    clean = re.sub(r"\.BK$", "", clean)        # SET suffix    PTT.BK → PTT
-    clean = re.sub(r"\.MAI$", "", clean)       # MAI suffix
-    clean = re.sub(r"[^A-Z0-9/\- ]", "", clean)  # remove any remaining junk
+    clean = re.sub(r"\^", "", clean)
+    clean = re.sub(r"=X$", "", clean)
+    clean = re.sub(r"=F$", "", clean)
+    clean = re.sub(r"\.(BK|MAI|T|HK|SS|SZ|L|DE|PA|AS|KS)$", "", clean)
+    clean = re.sub(r"[^A-Z0-9/\- ]", "", clean)
 
     if not clean or len(clean) < 1:
         return []
 
-    # ── 2. Build search query ─────────────────────────────────────────────
-    # For index shorthands give a more meaningful query
-    SYMBOL_ALIAS = {
-        "GSPC": "S&P 500",
-        "IXIC": "NASDAQ",
-        "DJI": "Dow Jones",
-        "SETBK": "SET index Thailand",
-        "THBUSD": "USD THB exchange rate",
-        "GC": "gold price",
-    }
-    query_term = SYMBOL_ALIAS.get(clean, f"{clean} stock")
+    # ── 2. Pure-read: Redis cache only ────────────────────────────────────
+    cache_key = f"news:{clean}"
+    try:
+        r = await stock_service.get_redis()
+        cached = await r.get(cache_key)
+        if cached:
+            return _json.loads(cached)
+    except Exception:
+        pass
 
-    # ── 3. Fetch from Google News RSS (async — run in thread) ─────────────
-    async def _fetch(url: str):
-        return await asyncio.to_thread(feedparser.parse, url)
+    # ── 3. Cache miss → trigger Celery on-demand fetch (non-blocking) ─────
+    try:
+        r = await stock_service.get_redis()
+        dedup_key = f"fetch_request:news:{clean}"
+        was_set = await r.set(dedup_key, "1", ex=30, nx=True)
+        if was_set:
+            from workers.news_fetcher import fetch_news_on_demand
+            fetch_news_on_demand.delay(symbol)
+            logger.debug("News on-demand fetch triggered", symbol=clean)
+    except Exception:
+        pass
 
-    items = []
-    tried_langs = [
-        # Thai results first (relevant for SET stocks)
-        f"https://news.google.com/rss/search?q={query_term}&hl=th&gl=TH&ceid=TH:th",
-        # English fallback (broader, better for US stocks)
-        f"https://news.google.com/rss/search?q={query_term}&hl=en-US&gl=US&ceid=US:en",
-    ]
-
-    for url in tried_langs:
-        try:
-            feed = await asyncio.wait_for(_fetch(url), timeout=4.0)
-            for entry in feed.entries[:12]:
-                items.append({
-                    "title": entry.get("title", ""),
-                    "url": entry.get("link", ""),
-                    "source": entry.get("source", {}).get("title", "Google News"),
-                    "published_at": entry.get("published", ""),
-                    "summary": entry.get("summary", ""),
-                })
-            if items:
-                break  # got results from this language, no need for fallback
-        except Exception:
-            continue
-
-    return items
+    # Return empty — frontend will retry or show "loading"
+    return []
 
 
 @router.get("/{symbol}/events")

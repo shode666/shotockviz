@@ -12,14 +12,26 @@ from core import cache_keys
 logger = get_logger(__name__)
 
 # ─── Yahoo Finance symbol normalization ──────────────────────────────────────
-# Yahoo uses '-' for share classes (BRK-B), not '.' (BRK.B)
-# Also handles symbols that need special mapping
 YAHOO_SYMBOL_MAP = {
     "BRK.B": "BRK-B",
     "BRK.A": "BRK-A",
     "BF.B": "BF-B",
     "BF.A": "BF-A",
 }
+
+# ─── Timeframe → yfinance interval/period mapping ───────────────────────────
+TF_CONFIG = {
+    "1m":  {"interval": "1m",  "period": "1d"},
+    "5m":  {"interval": "5m",  "period": "5d"},
+    "15m": {"interval": "15m", "period": "15d"},
+    "1h":  {"interval": "1h",  "period": "60d"},
+    "4h":  {"interval": "1h",  "period": "60d"},    # 1h bars → aggregate to 4h (60d = yfinance safe limit)
+    "1D":  {"interval": "1d",  "period": "6mo"},
+    "1W":  {"interval": "1wk", "period": "3y"},
+    "1M":  {"interval": "1mo", "period": "10y"},
+}
+
+DAILY_TIMEFRAMES = {"1D", "1W", "1M"}
 
 
 def _to_yahoo_symbol(symbol: str) -> str:
@@ -28,7 +40,12 @@ def _to_yahoo_symbol(symbol: str) -> str:
 
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=30)
-def process_fetch_request(self, symbol: str, data_type: Literal["quote", "history", "fundamentals", "all"] = "all"):
+def process_fetch_request(
+    self,
+    symbol: str,
+    data_type: Literal["quote", "history", "fundamentals", "all"] = "all",
+    timeframe: str | None = None,
+):
     """
     Process on-demand fetch request from API layer.
 
@@ -38,14 +55,11 @@ def process_fetch_request(self, symbol: str, data_type: Literal["quote", "histor
     Args:
         symbol: Stock ticker symbol (e.g., "AAPL", "PTT.BK")
         data_type: Type of data to fetch — "quote", "history", "fundamentals", or "all"
-
-    Deduplication is handled by Redis NX flag in request_data_fetch (stock_service.py),
-    which sets a 30-second lock to prevent duplicate fetches within that window.
+        timeframe: For history requests, specifies timeframe (e.g., "1h", "4h", "1D")
     """
     start = time.time()
     try:
         import redis
-        import yfinance as yf
         from core.config import settings
 
         redis_client = redis.from_url(settings.redis_url)
@@ -53,7 +67,7 @@ def process_fetch_request(self, symbol: str, data_type: Literal["quote", "histor
         # Map of data_type handlers
         handlers = {
             "quote": lambda s: _fetch_quote(s, redis_client),
-            "history": lambda s: _fetch_history(s, redis_client),
+            "history": lambda s: _fetch_history(s, redis_client, timeframe or "1D"),
             "fundamentals": lambda s: _fetch_fundamentals(s, redis_client),
         }
 
@@ -77,6 +91,7 @@ def process_fetch_request(self, symbol: str, data_type: Literal["quote", "histor
             "On-demand fetch completed",
             symbol=symbol,
             data_type=data_type,
+            timeframe=timeframe,
             results=results,
             elapsed_sec=f"{elapsed:.2f}",
             ts=datetime.now(timezone.utc).isoformat(),
@@ -137,31 +152,53 @@ def _fetch_quote(symbol: str, redis_client) -> bool:
         return False
 
 
-def _fetch_history(symbol: str, redis_client) -> bool:
-    """Fetch 1D history via yfinance, cache in Redis and DB."""
+def _fetch_history(symbol: str, redis_client, timeframe: str = "1D") -> bool:
+    """Fetch OHLCV history via yfinance for any timeframe, cache in Redis and DB.
+
+    Supports all timeframes: 1m, 5m, 15m, 1h, 4h, 1D, 1W, 1M.
+    For 4h: fetches 1h bars and aggregates to 4-hour boundaries.
+    """
     try:
         import yfinance as yf
         from sqlalchemy import create_engine, text
         from core.config import settings
 
-        timeframe = "1D"
-        ticker = yf.Ticker(_to_yahoo_symbol(symbol))
-        hist = ticker.history(period="6mo", interval="1d")
+        tf_cfg = TF_CONFIG.get(timeframe, TF_CONFIG["1D"])
+        interval = tf_cfg["interval"]
+        period = tf_cfg["period"]
+        is_daily = timeframe in DAILY_TIMEFRAMES
+
+        # Cache TTLs by timeframe
+        cache_ttl = {
+            "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 3600,
+            "1D": 21600, "1W": 86400, "1M": 86400,
+        }.get(timeframe, 21600)
+
+        yahoo_sym = _to_yahoo_symbol(symbol)
+        ticker = yf.Ticker(yahoo_sym)
+        hist = ticker.history(period=period, interval=interval)
 
         if hist.empty:
-            logger.debug("No history data available", symbol=symbol)
+            logger.debug("No history data", symbol=symbol, timeframe=timeframe, interval=interval)
             return False
 
         engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
         bars = []
+        db_rows = []
 
         for idx, row in hist.iterrows():
             try:
-                time_str = idx.strftime("%Y-%m-%d")
-                time_unix = int(idx.timestamp())
+                ts_unix = int(idx.timestamp())
+
+                if is_daily:
+                    time_str = idx.strftime("%Y-%m-%d")
+                    time_val = time_str
+                else:
+                    time_str = str(ts_unix)
+                    time_val = ts_unix
 
                 bar = {
-                    "time": time_str,
+                    "time": time_val,
                     "open": round(float(row["Open"]), 4),
                     "high": round(float(row["High"]), 4),
                     "low": round(float(row["Low"]), 4),
@@ -170,46 +207,63 @@ def _fetch_history(symbol: str, redis_client) -> bool:
                 }
                 bars.append(bar)
 
-                # Upsert to PostgreSQL
-                with engine.connect() as conn:
-                    exists = conn.execute(text(
-                        "SELECT 1 FROM ohlcv_bars WHERE symbol = :symbol "
-                        "AND timeframe = :timeframe AND time_unix = :time_unix"
-                    ), {
-                        "symbol": symbol,
-                        "timeframe": timeframe,
-                        "time_unix": time_unix,
-                    }).first()
+                db_rows.append({
+                    "symbol": symbol,
+                    "timeframe": timeframe if timeframe != "4h" else "4h",
+                    "time_unix": ts_unix,
+                    "time_str": idx.strftime("%Y-%m-%d") if is_daily else str(ts_unix),
+                    "open": bar["open"],
+                    "high": bar["high"],
+                    "low": bar["low"],
+                    "close": bar["close"],
+                    "volume": bar["volume"],
+                })
+            except (IndexError, TypeError, ValueError):
+                continue
 
-                    if not exists:
+        # Aggregate 1h → 4h if needed
+        if timeframe == "4h" and bars:
+            bars = _aggregate_4h_sync(bars)
+            # Rebuild db_rows from aggregated bars
+            db_rows = []
+            for b in bars:
+                ts = int(b["time"]) if isinstance(b["time"], (int, float)) else 0
+                db_rows.append({
+                    "symbol": symbol,
+                    "timeframe": "4h",
+                    "time_unix": ts,
+                    "time_str": str(ts),
+                    "open": b["open"],
+                    "high": b["high"],
+                    "low": b["low"],
+                    "close": b["close"],
+                    "volume": b["volume"],
+                })
+
+        # Bulk upsert to PostgreSQL
+        if db_rows:
+            try:
+                with engine.connect() as conn:
+                    for row in db_rows:
                         conn.execute(text(
                             "INSERT INTO ohlcv_bars "
                             "(symbol, timeframe, time_unix, time_str, open, high, low, close, volume) "
                             "VALUES (:symbol, :timeframe, :time_unix, :time_str, "
-                            ":open, :high, :low, :close, :volume)"
-                        ), {
-                            "symbol": symbol,
-                            "timeframe": timeframe,
-                            "time_unix": time_unix,
-                            "time_str": time_str,
-                            "open": bar["open"],
-                            "high": bar["high"],
-                            "low": bar["low"],
-                            "close": bar["close"],
-                            "volume": bar["volume"],
-                        })
-                        conn.commit()
-
+                            ":open, :high, :low, :close, :volume) "
+                            "ON CONFLICT (symbol, timeframe, time_unix) "
+                            "DO UPDATE SET open = :open, high = :high, low = :low, "
+                            "close = :close, volume = :volume, time_str = :time_str"
+                        ), row)
+                    conn.commit()
             except Exception as e:
-                logger.debug("Error processing bar", symbol=symbol, error=str(e))
-                continue
+                logger.warning("DB upsert failed", symbol=symbol, timeframe=timeframe, error=str(e))
 
         # Cache in Redis
         if bars:
             cache_key = cache_keys.ohlcv(symbol, timeframe)
-            redis_client.setex(cache_key, 21600, json.dumps(bars))  # 6 hours
+            redis_client.setex(cache_key, cache_ttl, json.dumps(bars))
 
-            # Publish data-ready notification
+            # Publish data-ready notification with correct timeframe
             msg = {
                 "type": "data_ready",
                 "data_type": "history",
@@ -218,14 +272,56 @@ def _fetch_history(symbol: str, redis_client) -> bool:
             }
             redis_client.publish("price_updates", json.dumps(msg))
 
-            logger.debug("History fetch success", symbol=symbol, bars=len(bars))
+            logger.debug("History fetch success", symbol=symbol, timeframe=timeframe, bars=len(bars))
             return True
 
         return False
 
     except Exception as e:
-        logger.debug("History fetch error", symbol=symbol, error=str(e))
+        logger.debug("History fetch error", symbol=symbol, timeframe=timeframe, error=str(e))
         return False
+
+
+def _aggregate_4h_sync(bars: list[dict]) -> list[dict]:
+    """Aggregate 1h bar dicts into 4h bars aligned to 4-hour UTC boundaries.
+
+    Sync version for use inside Celery worker (no OHLCVBar schema dependency).
+    """
+    if not bars:
+        return []
+
+    FOUR_HOURS = 4 * 3600
+
+    # Deduplicate by timestamp
+    seen: dict[int, dict] = {}
+    for b in bars:
+        ts = int(b["time"]) if isinstance(b["time"], (int, float)) else 0
+        if ts > 0:
+            seen[ts] = b
+
+    if not seen:
+        return []
+
+    # Group by 4-hour boundary
+    buckets: dict[int, list[dict]] = {}
+    for ts in sorted(seen.keys()):
+        boundary = (ts // FOUR_HOURS) * FOUR_HOURS
+        buckets.setdefault(boundary, []).append(seen[ts])
+
+    # Aggregate each bucket
+    result = []
+    for boundary in sorted(buckets.keys()):
+        chunk = buckets[boundary]
+        result.append({
+            "time": boundary,
+            "open": chunk[0]["open"],
+            "high": max(b["high"] for b in chunk),
+            "low": min(b["low"] for b in chunk),
+            "close": chunk[-1]["close"],
+            "volume": sum(b["volume"] for b in chunk),
+        })
+
+    return result
 
 
 def _fetch_fundamentals(symbol: str, redis_client) -> bool:

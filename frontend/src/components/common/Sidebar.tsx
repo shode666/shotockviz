@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate, useMatchRoute } from '@tanstack/react-router';
+import { useNavigate, useMatchRoute, useRouterState } from '@tanstack/react-router';
 import { Plus, GripVertical, Loader2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
@@ -38,6 +38,9 @@ export default function Sidebar() {
     const navigate = useNavigate();
     const matchRoute = useMatchRoute();
     const isChart = !!matchRoute({ to: '/' });
+    const location = useRouterState({ select: s => s.location.pathname });
+    // Pages that handle selectedStock themselves — don't redirect to chart from these
+    const STAY_PUT_ROUTES = ['/news', '/screener', '/alerts', '/portfolio', '/dashboard'];
 
     // Watchlist state
     const [watchlistId, setWatchlistId] = useState(null);
@@ -112,7 +115,10 @@ export default function Sidebar() {
             pct: p?.change_pct != null ? `${p.change_pct >= 0 ? '+' : ''}${p.change_pct.toFixed(2)}%` : '—',
             up: (p?.change ?? 0) >= 0,
         });
-        navigate({ to: '/' });
+        // Only navigate to chart if not on a page that already uses selectedStock
+        if (!STAY_PUT_ROUTES.includes(location)) {
+            navigate({ to: '/' });
+        }
     };
 
     const handleAddStock = async (sym: string) => {

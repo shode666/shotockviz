@@ -41,9 +41,18 @@ class OHLCVBar(Base):
     )
 
     def to_api_dict(self) -> dict:
-        """Return dict matching OHLCVBar schema expected by frontend."""
+        """Return dict matching OHLCVBar schema expected by frontend.
+
+        Intraday timeframes (1m/5m/15m/1h/4h): returns time_unix (int) so
+        TradingView Lightweight Charts v5 receives UTCTimestamp as required.
+
+        Daily/Weekly/Monthly: returns time_str ("YYYY-MM-DD") as BusinessDay.
+        """
+        # time_str is a numeric string for intraday (e.g. "1759761000")
+        # and "YYYY-MM-DD" for daily/weekly/monthly
+        is_intraday = self.time_str and self.time_str.isdigit()
         return {
-            "time":   self.time_str,   # "YYYY-MM-DD" for daily, unix int for intraday
+            "time":   self.time_unix if is_intraday else self.time_str,
             "open":   self.open,
             "high":   self.high,
             "low":    self.low,

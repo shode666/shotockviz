@@ -2,40 +2,16 @@
  * NewsPage — ข่าวและบทวิเคราะห์
  *
  * Features:
- *  - Search bar to look up news for any symbol
- *  - Tabs: ทั้งหมด (current), SET (PTT.BK), US (AAPL/NVDA), Watchlist
+ *  - Search bar with symbol autocomplete (debounced 300ms)
+ *  - Auto-loads news for the currently selected stock
  *  - Sentiment badge derived from title keywords
- *  - Symbol is validated before being used as API param
+ *  - Works across all markets: SET, US, EU, etc.
  */
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Newspaper, ThumbsUp, ThumbsDown, Search, X, RefreshCw } from 'lucide-react';
+import { Newspaper, ThumbsUp, ThumbsDown, Search, X, RefreshCw, Loader2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
-import useAuthStore from '@/store/authStore';
 import stockService from '@/services/stockService';
-import watchlistService from '@/services/watchlistService';
-import { timeAgo } from '@/utils/formatters';
-
-/* ── Constants ─────────────────────────────────────────────────────────── */
-
-const TABS = ['ทุกข่าว', 'หุ้น SET', 'หุ้น US', 'Watchlist'] as const;
-type Tab = (typeof TABS)[number];
-
-// Default symbol per tab when no context is available
-const TAB_DEFAULT_SYM: Record<Tab, string> = {
-    'ทุกข่าว': 'NVDA',
-    'หุ้น SET': 'PTT.BK',
-    'หุ้น US': 'AAPL',
-    'Watchlist': 'NVDA',
-};
-
-// Regex to validate a reasonable stock symbol (no arbitrary garbage)
-const VALID_SYM = /^[\^]?[A-Z0-9]{1,10}(\.[A-Z]{1,4}|=[A-Z]|=F)?$/;
-
-function sanitizeSym(raw: string | undefined | null): string | null {
-    if (!raw) return null;
-    const s = raw.trim().toUpperCase();
-    return VALID_SYM.test(s) ? s : null;
-}
+import { timeAgo, parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -75,7 +51,8 @@ function NewsCard({ n }: { n: any }) {
                 <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium mb-1.5 leading-snug line-clamp-2">{n.title}</div>
                     <div className="flex items-center gap-2">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded"
+                            style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
                             {n.source || 'Google News'}
                         </span>
                         {n.published_at && (
@@ -86,7 +63,8 @@ function NewsCard({ n }: { n: any }) {
                     </div>
                 </div>
                 {sentiment !== 'neutral' && (
-                    <span className="text-[10px] font-semibold shrink-0 flex items-center gap-1" style={{ color: sentColor.text }}>
+                    <span className="text-[10px] font-semibold shrink-0 flex items-center gap-1"
+                        style={{ color: sentColor.text }}>
                         {sentiment === 'positive'
                             ? <><ThumbsUp size={10} /> Bullish</>
                             : <><ThumbsDown size={10} /> Bearish</>}
@@ -101,52 +79,24 @@ function NewsCard({ n }: { n: any }) {
 
 export default function NewsPage() {
     const { selectedStock } = useAppStore();
-    const { isAuthenticated } = useAuthStore();
 
-    const [activeTab, setActiveTab] = useState<Tab>('ทุกข่าว');
     const [searchInput, setSearchInput] = useState('');
-    const [fetchSym, setFetchSym] = useState<string>('');     // the symbol actually used to fetch
-    const [news, setNews] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [watchlistSyms, setWatchlistSyms] = useState<string[]>([]);
+    const [fetchSym, setFetchSym]       = useState('');
+    const [news, setNews]               = useState<any[]>([]);
+    const [loading, setLoading]         = useState(false);
     const searchRef = useRef<HTMLInputElement>(null);
 
-    // Load user watchlist symbols once (same format as Sidebar)
-    useEffect(() => {
-        if (!isAuthenticated) return;
-        watchlistService.getAll()
-            .then((r: any) => {
-                const lists = r.data ?? [];
-                const first = lists[0];
-                const syms = (first?.items ?? []).map((i: any) => i.symbol).filter(Boolean);
-                setWatchlistSyms(syms);
-            })
-            .catch(() => {});
-    }, [isAuthenticated]);
+    // ── Autocomplete ────────────────────────────────────────────────────────
+    const [acResults, setAcResults]   = useState<any[]>([]);
+    const [acLoading, setAcLoading]   = useState(false);
+    const [showDropdown, setShowDropdown] = useState(false);
+    const [acHighlight, setAcHighlight] = useState(-1);
+    const acTimerRef  = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const dropdownRef = useRef<HTMLDivElement>(null);
+    // Flag: suppress autocomplete when input is set programmatically (e.g. sidebar stock select)
+    const skipAcRef   = useRef(false);
 
-    // Determine symbol to fetch based on active tab + selectedStock
-    const resolveSymbol = useCallback((tab: Tab): string => {
-        if (tab === 'ทุกข่าว') {
-            return sanitizeSym(selectedStock?.sym) ?? TAB_DEFAULT_SYM[tab];
-        }
-        if (tab === 'หุ้น SET') {
-            // prefer selected if it's a Thai stock
-            if (selectedStock?.sym?.toUpperCase().endsWith('.BK')) {
-                return sanitizeSym(selectedStock.sym) ?? TAB_DEFAULT_SYM[tab];
-            }
-            return TAB_DEFAULT_SYM[tab];
-        }
-        if (tab === 'หุ้น US') {
-            const s = sanitizeSym(selectedStock?.sym);
-            if (s && !s.endsWith('.BK') && !s.startsWith('^')) return s;
-            return TAB_DEFAULT_SYM[tab];
-        }
-        if (tab === 'Watchlist') {
-            return watchlistSyms[0] ?? sanitizeSym(selectedStock?.sym) ?? TAB_DEFAULT_SYM[tab];
-        }
-        return TAB_DEFAULT_SYM[tab];
-    }, [selectedStock, watchlistSyms]);
-
+    // ── Fetch news ──────────────────────────────────────────────────────────
     const fetchNews = useCallback(async (sym: string) => {
         if (!sym) return;
         setFetchSym(sym);
@@ -154,11 +104,10 @@ export default function NewsPage() {
         setNews([]);
         try {
             const { data } = await stockService.getNews(sym);
-            const enriched = (data ?? []).map((n: any) => ({
+            setNews((data ?? []).map((n: any) => ({
                 ...n,
                 sentiment: n.sentiment || sentimentFromTitle(n.title),
-            }));
-            setNews(enriched);
+            })));
         } catch {
             setNews([]);
         } finally {
@@ -166,25 +115,89 @@ export default function NewsPage() {
         }
     }, []);
 
-    // When tab changes → resolve symbol and fetch
+    // Auto-load when selected stock changes (e.g. user clicked a symbol in sidebar)
     useEffect(() => {
-        const sym = resolveSymbol(activeTab);
+        const sym = selectedStock?.sym ?? 'NVDA';
+        skipAcRef.current = true;   // don't trigger autocomplete for this programmatic update
         setSearchInput(sym);
+        setShowDropdown(false);
+        setAcResults([]);
         fetchNews(sym);
-    }, [activeTab, resolveSymbol]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [selectedStock?.sym]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Handle manual search submit
+    // ── Autocomplete: debounced search ──────────────────────────────────────
+    useEffect(() => {
+        // Skip autocomplete when input was set programmatically (sidebar stock select)
+        if (skipAcRef.current) { skipAcRef.current = false; return; }
+        const q = searchInput.trim();
+        if (!q) { setAcResults([]); setShowDropdown(false); return; }
+        setAcLoading(true);
+        clearTimeout(acTimerRef.current ?? undefined);
+        acTimerRef.current = setTimeout(async () => {
+            try {
+                const res = await stockService.search(q);
+                const results = res.data?.results ?? res.data ?? [];
+                setAcResults(results);
+                setAcHighlight(-1);
+                setShowDropdown(results.length > 0);
+            } catch {
+                setAcResults([]);
+                setShowDropdown(false);
+            } finally {
+                setAcLoading(false);
+            }
+        }, 300);
+        return () => clearTimeout(acTimerRef.current ?? undefined);
+    }, [searchInput]);
+
+    // Close dropdown on outside click
+    useEffect(() => {
+        const handler = (e: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node))
+                setShowDropdown(false);
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, []);
+
+    const handleAcSelect = (sym: string) => {
+        setSearchInput(sym);
+        setShowDropdown(false);
+        setAcResults([]);
+        setAcHighlight(-1);
+        fetchNews(sym);
+    };
+
     const handleSearch = () => {
         const s = searchInput.trim().toUpperCase();
         if (!s) return;
+        setShowDropdown(false);
         fetchNews(s);
     };
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e.key === 'Enter') handleSearch();
+        const visible = showDropdown && acResults.length > 0;
+        if (e.key === 'ArrowDown') {
+            if (!visible) return;
+            e.preventDefault();
+            setAcHighlight(h => (h + 1) % acResults.slice(0, 7).length);
+        } else if (e.key === 'ArrowUp') {
+            if (!visible) return;
+            e.preventDefault();
+            setAcHighlight(h => (h <= 0 ? acResults.slice(0, 7).length - 1 : h - 1));
+        } else if (e.key === 'Enter') {
+            if (visible && acHighlight >= 0) {
+                handleAcSelect(acResults[acHighlight].symbol);
+            } else {
+                handleSearch();
+            }
+        } else if (e.key === 'Escape') {
+            setShowDropdown(false);
+            setAcHighlight(-1);
+        }
     };
 
-    // Sentiment breakdown counts
+    // Sentiment counts
     const pos = news.filter(n => n.sentiment === 'positive').length;
     const neg = news.filter(n => n.sentiment === 'negative').length;
     const neu = news.filter(n => n.sentiment === 'neutral').length;
@@ -199,34 +212,81 @@ export default function NewsPage() {
                         <Newspaper size={15} style={{ color: 'var(--color-accent)' }} />
                         ข่าวและบทวิเคราะห์
                     </h2>
-                    <button onClick={() => fetchNews(fetchSym || resolveSymbol(activeTab))}
-                        disabled={loading}
+                    <button
+                        onClick={() => fetchNews(fetchSym)}
+                        disabled={loading || !fetchSym}
                         className="p-1.5 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
                         style={{ color: 'var(--color-text-sub)' }}>
                         <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
                     </button>
                 </div>
 
-                {/* ── Search bar ──────────────────────────────────────────── */}
-                <div className="flex gap-2 mb-4">
-                    <div className="flex-1 flex items-center gap-2 panel border rounded-xl px-3"
-                        style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
-                        <Search size={13} style={{ color: 'var(--color-text-sub)', flexShrink: 0 }} />
-                        <input
-                            ref={searchRef}
-                            type="text"
-                            value={searchInput}
-                            onChange={e => setSearchInput(e.target.value.toUpperCase())}
-                            onKeyDown={handleKeyDown}
-                            placeholder="ค้นหาข่าว เช่น PTT.BK, AAPL, NVDA…"
-                            className="flex-1 bg-transparent outline-none text-xs py-2.5"
-                            style={{ color: 'var(--color-text)', caretColor: 'var(--color-accent)' }}
-                        />
-                        {searchInput && (
-                            <button onClick={() => setSearchInput('')}
-                                style={{ color: 'var(--color-text-sub)', flexShrink: 0 }}>
-                                <X size={12} />
-                            </button>
+                {/* ── Search bar with autocomplete ────────────────────────── */}
+                <div className="flex gap-2 mb-5">
+                    <div className="flex-1 relative" ref={dropdownRef}>
+                        <div className="flex items-center gap-2 panel border rounded-xl px-3"
+                            style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
+                            <Search size={13} style={{ color: 'var(--color-text-sub)', flexShrink: 0 }} />
+                            <input
+                                ref={searchRef}
+                                type="text"
+                                value={searchInput}
+                                onChange={e => { setSearchInput(e.target.value.toUpperCase()); setShowDropdown(true); }}
+                                onKeyDown={handleKeyDown}
+                                onFocus={() => acResults.length > 0 && setShowDropdown(true)}
+                                placeholder="ค้นหาข่าว เช่น PTT.BK, AAPL, NVDA, ADVANC…"
+                                className="flex-1 bg-transparent outline-none text-xs py-2.5"
+                                style={{ color: 'var(--color-text)', caretColor: 'var(--color-accent)' }}
+                            />
+                            {acLoading && (
+                                <Loader2 size={12} className="animate-spin shrink-0"
+                                    style={{ color: 'var(--color-text-sub)' }} />
+                            )}
+                            {searchInput && !acLoading && (
+                                <button
+                                    onClick={() => { setSearchInput(''); setShowDropdown(false); setAcResults([]); }}
+                                    style={{ color: 'var(--color-text-sub)', flexShrink: 0 }}>
+                                    <X size={12} />
+                                </button>
+                            )}
+                        </div>
+
+                        {/* Autocomplete dropdown */}
+                        {showDropdown && acResults.length > 0 && (
+                            <div className="glass-dropdown absolute left-0 right-0 z-50 rounded-xl mt-1 overflow-hidden shadow-lg"
+                                style={{ border: '1px solid var(--color-border)' }}>
+                                {acResults.slice(0, 7).map((r, idx) => {
+                                    const parsed = parseSymbol(r.symbol, r.market);
+                                    const mktTag = r.market || parsed.market;
+                                    const colors = (MARKET_COLORS as any)[mktTag] || (MARKET_COLORS as any).US;
+                                    const isHighlighted = idx === acHighlight;
+                                    return (
+                                        <button
+                                            key={r.symbol}
+                                            onMouseDown={e => { e.preventDefault(); handleAcSelect(r.symbol); }}
+                                            onMouseEnter={() => setAcHighlight(idx)}
+                                            onMouseLeave={() => setAcHighlight(-1)}
+                                            className="w-full flex items-center justify-between px-3 py-2 text-left transition-colors"
+                                            style={isHighlighted ? { background: 'var(--color-hover)' } : {}}
+                                        >
+                                            <div className="flex-1 min-w-0">
+                                                <div className="text-[11px] font-semibold"
+                                                    style={{ color: 'var(--color-text)' }}>
+                                                    {parsed.display}
+                                                </div>
+                                                <div className="text-[10px] truncate"
+                                                    style={{ color: 'var(--color-text-sub)', maxWidth: 200 }}>
+                                                    {r.name_th || r.name || ''}
+                                                </div>
+                                            </div>
+                                            <span className="text-[9px] ml-2 shrink-0 px-1.5 py-0.5 rounded font-semibold"
+                                                style={{ background: colors?.bg, color: colors?.text }}>
+                                                {mktTag}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         )}
                     </div>
                     <button
@@ -238,28 +298,12 @@ export default function NewsPage() {
                     </button>
                 </div>
 
-                {/* ── Tab bar ─────────────────────────────────────────────── */}
-                <div className="flex gap-1 mb-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                    {TABS.map((tab) => (
-                        <button
-                            key={tab}
-                            onClick={() => setActiveTab(tab)}
-                            className="px-4 py-2 text-xs font-semibold relative transition-colors"
-                            style={{ color: activeTab === tab ? 'var(--color-accent)' : 'var(--color-text-sub)' }}
-                        >
-                            {tab}
-                            {activeTab === tab && (
-                                <span className="absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full"
-                                    style={{ background: 'var(--color-accent)' }} />
-                            )}
-                        </button>
-                    ))}
-                </div>
-
-                {/* ── Fetch context badge ─────────────────────────────────── */}
+                {/* ── Context + sentiment summary ──────────────────────────── */}
                 {fetchSym && !loading && (
                     <div className="flex items-center gap-2 mb-3">
-                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>กำลังดูข่าวสำหรับ:</span>
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                            ข่าวสำหรับ:
+                        </span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md"
                             style={{ background: 'rgba(124,92,252,0.15)', color: 'var(--color-accent)' }}>
                             {fetchSym}
@@ -278,22 +322,20 @@ export default function NewsPage() {
                 {loading && (
                     <div className="flex flex-col items-center gap-3 py-16">
                         <RefreshCw size={20} className="animate-spin" style={{ color: 'var(--color-accent)' }} />
-                        <p className="text-xs" style={{ color: 'var(--color-text-sub)' }}>กำลังโหลดข่าว {fetchSym}…</p>
+                        <p className="text-xs" style={{ color: 'var(--color-text-sub)' }}>
+                            กำลังโหลดข่าว {fetchSym}…
+                        </p>
                     </div>
                 )}
 
                 {/* ── Empty state ─────────────────────────────────────────── */}
-                {!loading && news.length === 0 && (
+                {!loading && news.length === 0 && fetchSym && (
                     <div className="text-center py-12 flex flex-col items-center gap-3">
                         <Newspaper size={28} style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium">ไม่พบข่าวสำหรับ {fetchSym}</p>
                         <p className="text-xs" style={{ color: 'var(--color-text-sub)' }}>
-                            ลองค้นหาด้วย symbol ที่แตกต่าง หรือตรวจสอบการเชื่อมต่ออินเทอร์เน็ต
+                            ลองค้นหาด้วย symbol อื่น หรือรอสักครู่แล้วลองใหม่
                         </p>
-                        <button onClick={() => { setSearchInput('NVDA'); fetchNews('NVDA'); }}
-                            className="btn-outline text-xs mt-1">
-                            ลองดูข่าว NVDA
-                        </button>
                     </div>
                 )}
 

@@ -60,17 +60,17 @@ def _compute_macd(closes: list[float]) -> tuple[float, float]:
     ema12 = ema(closes, 12)
     ema26 = ema(closes, 26)
 
-    # MACD line
-    macd_line = [ema12[i] - ema26[i] if ema12[i] and ema26[i] else None
-                 for i in range(len(closes))]
+    # ema() returns len(data)-span+1 elements; align by using the shorter ema26
+    # ema26 is shorter — offset into ema12 to align them
+    offset = len(ema12) - len(ema26)
+    macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
 
-    # Signal line (EMA of MACD)
-    valid_macd = [m for m in macd_line if m is not None]
-    if len(valid_macd) < 9:
+    # Signal line (EMA9 of MACD line)
+    if len(macd_line) < 9:
         return 0.0, 0.0
 
-    signal_line = ema(valid_macd, 9)
-    return float(macd_line[-1] or 0), float(signal_line[-1] or 0)
+    signal_line = ema(macd_line, 9)
+    return float(macd_line[-1]), float(signal_line[-1] if signal_line else 0)
 
 
 def _compute_sma(closes: list[float], period: int) -> float:
@@ -306,14 +306,22 @@ async def screen_stocks(
     Open to guests. Cap at 4.5s total to respect <5s SLA.
     If screener can't finish in time, return whatever partial results we got.
     """
-    # Load active stocks from DB
-    stmt = select(Stock).where(Stock.is_active == True)
-    if market != "all":
+    # Load active stocks from DB — screener only supports SET and US markets.
+    # Other markets (UK, HK, DE, FUND, etc.) are excluded to avoid enum cast errors.
+    if market == "all":
+        stmt = select(Stock).where(
+            Stock.is_active == True,
+            Stock.market.in_([MarketType.SET, MarketType.US]),
+        )
+    else:
         try:
             market_enum = MarketType(market)
         except ValueError:
             market_enum = MarketType.US
-        stmt = stmt.where(Stock.market == market_enum)
+        stmt = select(Stock).where(
+            Stock.is_active == True,
+            Stock.market == market_enum,
+        )
 
     result = await db.execute(stmt)
     stocks = result.scalars().all()

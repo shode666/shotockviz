@@ -268,7 +268,7 @@ async def fetch_yahoo_bars(
     return _bars_to_db_rows(bars, symbol, timeframe)
 
 
-async def request_data_fetch(symbol: str, data_type: str = "all"):
+async def request_data_fetch(symbol: str, data_type: str = "all", *, timeframe: str | None = None):
     """Request that Celery fetch data for a symbol. Non-blocking, deduplicated.
 
     Used by API endpoints to trigger background data fetches when cache misses occur.
@@ -277,12 +277,14 @@ async def request_data_fetch(symbol: str, data_type: str = "all"):
     Args:
         symbol: Stock symbol (e.g., "AAPL", "PTT.BK")
         data_type: "all" (default), "quote", "history", "fundamentals"
+        timeframe: Optional timeframe for history fetches (e.g., "1h", "4h", "1D")
 
     Sends a direct Celery task to the on_demand_listener worker.
     """
     try:
         r = await get_redis()
-        dedup_key = f"fetch_request:{symbol.upper()}:{data_type}"
+        tf_suffix = f":{timeframe}" if timeframe else ""
+        dedup_key = f"fetch_request:{symbol.upper()}:{data_type}{tf_suffix}"
 
         # Set with NX=True (only set if not exists) + 30s expiry
         # This ensures identical concurrent requests only trigger ONE fetch
@@ -291,7 +293,7 @@ async def request_data_fetch(symbol: str, data_type: str = "all"):
         if was_set:
             # Send direct Celery task (sync import is safe in async context)
             from workers.on_demand_listener import process_fetch_request
-            process_fetch_request.delay(symbol.upper(), data_type)
-            logger.debug("Data fetch requested", symbol=symbol, data_type=data_type)
+            process_fetch_request.delay(symbol.upper(), data_type, timeframe)
+            logger.debug("Data fetch requested", symbol=symbol, data_type=data_type, timeframe=timeframe)
     except Exception as e:
         logger.warning("request_data_fetch failed", symbol=symbol, error=str(e))

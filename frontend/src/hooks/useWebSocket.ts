@@ -14,15 +14,15 @@ import toast from 'react-hot-toast';
  */
 export default function useWebSocket() {
     const { token, user } = useAuthStore();
-    const bumpDataVersion = useAppStore(s => s.bumpDataVersion);
+    const setDataReadyPayload = useAppStore(s => s.setDataReadyPayload);
     const [isConnected, setIsConnected] = useState(false);
     const wsRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
     const reconnectAttemptsRef = useRef(0);
 
-    // Store latest bumpDataVersion in ref to avoid stale closure
-    const bumpRef = useRef(bumpDataVersion);
-    bumpRef.current = bumpDataVersion;
+    // Store latest setDataReadyPayload in ref to avoid stale closure
+    const setPayloadRef = useRef(setDataReadyPayload);
+    setPayloadRef.current = setDataReadyPayload;
 
     useEffect(() => {
         if (!token || !user?.id) {
@@ -59,12 +59,14 @@ export default function useWebSocket() {
                             { duration: 5000, position: 'top-right' }
                         );
                     } else if (data.type === 'data_ready') {
-                        // Backend finished fetching external data → tell React to re-fetch
-                        // data_type can be: "quote", "history", "fundamentals", "dashboard"
-                        // symbol can be: specific symbol or "*" (broadcast)
-                        console.debug('[WS] data_ready:', data.data_type, data.symbol);
-                        if (bumpRef.current) {
-                            bumpRef.current();
+                        // Backend finished fetching external data → store payload so
+                        // consumers (useChartData) can decide whether to re-fetch.
+                        // data_type: "quote", "history", "fundamentals", "dashboard"
+                        // symbol: specific ticker or "*" (broadcast to all)
+                        // timeframe: present only for history data_type
+                        console.debug('[WS] data_ready:', data.data_type, data.symbol, data.timeframe);
+                        if (setPayloadRef.current) {
+                            setPayloadRef.current(data);
                         }
                     } else if (data.type === 'price_update') {
                         // Live price push from Celery worker

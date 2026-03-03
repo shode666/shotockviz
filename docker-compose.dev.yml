@@ -5,8 +5,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-stockviz}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: ${POSTGRES_DB:-stockviz_db}
-    expose:
-      - "5432"
+    ports:
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -20,6 +20,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -68,6 +70,8 @@ services:
     # --reload-include "*.py" limits watching to .py files only — prevents
     # uvicorn from restarting on __pycache__ writes, which caused intermittent
     # 503 responses for /auth/me during normal operation.
+    ports:
+      - "8000:8000"
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload --reload-include "*.py"
     restart: unless-stopped
     networks:
@@ -134,8 +138,8 @@ services:
   flower:
     image: mher/flower:2.0
     command: celery --broker=redis://redis:6379/0 flower --port=5555
-    expose:
-      - "5555"
+    ports:
+      - "5555:5555"
     depends_on:
       - redis
     restart: unless-stopped
