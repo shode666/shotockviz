@@ -8,6 +8,14 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Documentation (2026-03-03 — Full Docs Update)
+
+- **REQUIREMENTS.md** — Major rewrite: 2→10 markets, email+password→Google OAuth, Nginx→Caddy, added CQRS architecture, round-robin price fetcher, 10 Celery workers, updated schema/API/milestones
+- **INSTRUCTIONS.md** — Updated: Google OAuth setup, international market seeding, updated project structure, Celery worker commands, removed JWT env vars
+- **PRODUCTION_DEPLOY.md** — Fixed: removed obsolete JWT config, added international market seeding step
+- **DEVOPS_MONITORING.md** — Updated: round-robin price fetcher references, corrected log examples
+- **README.md** — Complete rewrite (done earlier this session)
+
 ### Refactored (2026-03-03 — Round-Robin Price Fetcher)
 
 **price_fetcher.py — unified round-robin across all markets:**

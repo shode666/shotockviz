@@ -1,73 +1,96 @@
-# StockViz
+# ShotockViz
 
-> 📈 Self-hosted stock analysis platform for Thai (SET/mai) and US markets with advanced charting, portfolio tracking, and AI-powered tools. Zero monthly fees — runs on Docker.
+> Self-hosted stock analysis platform for Thai (SET/MAI), US (NYSE/NASDAQ), and 8 international markets. Advanced charting, portfolio tracking, alerts, AI chat, and real-time price updates. Zero monthly fees — runs entirely on Docker.
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
-![Python](https://img.shields.io/badge/python-3.13%2B-blue)
-![React](https://img.shields.io/badge/react-19%2B-61dafb)
+![Version](https://img.shields.io/badge/version-0.1.3-blue)
+![Python](https://img.shields.io/badge/python-3.13-blue)
+![React](https://img.shields.io/badge/react-19-61dafb)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Status](https://img.shields.io/badge/status-Beta-orange)
-
-[**Features**](#features) • [**Quick Start**](#quick-start) • [**Tech Stack**](#tech-stack) • [**Docs**](#documentation) • [**Contributing**](#contributing)
 
 ---
 
 ## Features
 
-### 📊 Charts & Analysis
+**Charts & Analysis** — Candlestick / Line / Area / Bar charts with 8 timeframes (1m to 1M). Drawing tools (trend lines, Fibonacci, H-lines, rectangles, arrows, pitchfork). Technical indicators: MA, EMA, RSI, MACD, Bollinger Bands, Volume, Stochastic, Ichimoku. Compare mode to overlay 2 stocks. XD/XR dividend markers for Thai stocks.
 
-- **Multiple Chart Types**: Candlestick, Line, Area, Bar
-- **Timeframes**: 1m, 5m, 15m, 1h, 4h, 1D, 1W, 1M
-- **Drawing Tools**: Trend lines, Fibonacci, H-lines, Rectangles, Arrows, Pitchfork
-- **Technical Indicators**: MA, EMA, RSI, MACD, Bollinger Bands, Volume, Stochastic, Ichimoku
-- **Compare Mode**: Overlay 2 stocks on same chart
-- **Thai-Specific**: XD/XR dividend markers on chart
+**Portfolio Tracking** — Record Buy/Sell transactions with fees and currency. Real-time analytics: current value, P&L, allocation breakdown. Risk metrics: Sharpe Ratio, Max Drawdown, Beta. Fundamental overlay: P/E, P/BV, Dividend Yield, Market Cap. Symbol autocomplete with market badge and currency auto-detection.
 
-### 💼 Portfolio & Tracking
+**Alerts** — Price Above/Below, RSI, MACD Golden/Death Cross, Volume Spike. Channels: In-app and Telegram Bot. Symbol autocomplete with currency-aware value display.
 
-- **Transaction Management**: Record Buy/Sell trades with fees
-- **Real-Time Analytics**: Current value, P&L, allocation pie chart
-- **Risk Metrics**: Sharpe Ratio, Max Drawdown, Beta, Correlation
-- **Fundamental Data**: P/E, P/BV, Dividend Yield, Market Cap
+**Stock Screener** — Filter by market, price range, P/E, RSI, MACD signal, volume. Save presets for quick re-use.
 
-### 🔔 Alerts & Notifications
+**News Feed** — Multi-source aggregation: Google News RSS + Finnhub. AI sentiment analysis via local Ollama (llama3.2). Filter by market, symbol, or watchlist.
 
-- **Alert Types**: Price, RSI, MACD, Golden Cross, Volume Spike
-- **Channels**: Telegram Bot (instant), In-app, Email (optional)
-- **Smart Triggers**: Pattern-based alerts, not just price
+**AI Chat** — SSE-streamed chat with local LLM (Ollama). Context-aware stock analysis. No cloud dependency.
 
-### 🔍 Stock Screener
+**10 Markets Supported** — SET, US, Japan, Hong Kong, China, UK, Germany, France, Netherlands, Korea. Round-robin price fetching across all markets.
 
-- **Advanced Filters**: Market, price, P/E, RSI, MACD, volume
-- **Save Presets**: Re-use favorite filter combinations
-- **Export Results**: Download screening results as CSV
+---
 
-### 📰 News & Sentiment
+## Supported Markets
 
-- **Multi-Source**: Google News RSS + Finnhub + SET news
-- **AI Sentiment**: Local analysis (Ollama) — Positive/Negative/Neutral
-- **Filtered Feed**: By market, symbol, or watchlist
+| Market | Suffix | Exchange | Trading Hours (ICT) | Currency |
+|--------|--------|----------|---------------------|----------|
+| SET | `.BK` | Stock Exchange of Thailand | Mon-Fri 10:00-16:30 (break 12:30-14:00) | THB ฿ |
+| US | — | NYSE / NASDAQ | Mon-Fri 21:30-04:00 (next day) | USD $ |
+| Japan | `.T` | Tokyo Stock Exchange | Mon-Fri 08:00-14:00 | JPY ¥ |
+| Hong Kong | `.HK` | HKEX | Mon-Fri 09:30-16:00 | HKD HK$ |
+| China | `.SS` `.SZ` | Shanghai / Shenzhen | Mon-Fri 09:30-15:00 | CNY ¥ |
+| UK | `.L` | London Stock Exchange | Mon-Fri 15:00-23:30 | GBP £ |
+| Germany | `.DE` | XETRA / Frankfurt | Mon-Fri 14:00-22:30 | EUR € |
+| France | `.PA` | Euronext Paris | Mon-Fri 14:00-22:30 | EUR € |
+| Netherlands | `.AS` | Euronext Amsterdam | Mon-Fri 14:00-22:30 | EUR € |
+| Korea | `.KS` | Korea Exchange | Mon-Fri 09:00-15:30 | KRW ₩ |
 
-### 📊 Backtesting
+Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei), ^HSI (Hang Seng), ^FTSE, ^GDAXI (DAX), ^FCHI (CAC 40), ^AEX, ^KS11 (KOSPI), plus THBUSD=X and GC=F (Gold).
 
-- **Strategy Builder**: Create entry/exit rules visually
-- **Historical Testing**: Test on 5+ years of data
-- **Performance Metrics**: Return, Drawdown, Sharpe, Trade Log
-- **Benchmark Comparison**: vs SET Index or S&P500
+---
 
-### 🛡️ Security
+## Tech Stack
 
-- **User Authentication**: JWT + bcrypt password hashing
-- **Role-Based Access**: Guest (read-only) vs User (full access)
-- **Rate Limiting**: Per IP & per user
-- **Secure API**: HTTPS, CSRF protection, SQL injection prevention
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 19 + TanStack Start (SSR) + Vite 7 + Tailwind 4 + Zustand 5 |
+| Charts | TradingView Lightweight Charts v5 |
+| Backend | FastAPI (Python 3.13) + SQLAlchemy 2 + Pydantic 2 |
+| Database | PostgreSQL 16 + TimescaleDB (hypertable for time-series) |
+| Cache | Redis 7 (L1 cache + Celery broker + WebSocket pub/sub) |
+| Background | Celery 5.6 + Beat (8 workers: price, names, fundamentals, fund NAV, history, on-demand, alerts, housekeeping) |
+| AI | Ollama (llama3.2) — 100% local, no cloud |
+| Data | Yahoo Finance + pythainav (Thai fund NAV) + Finnhub (free tier) |
+| Auth | Google OAuth one-tap (`@react-oauth/google`) |
+| Proxy | Caddy 2 (reverse proxy + auto TLS) |
 
-### 🌙 UI/UX
+All open source and free. No paid dependencies.
 
-- **Dark Mode**: Default with light mode toggle
-- **2026 Design Trends**: Modern, gradient accents, glass effects
-- **Responsive**: Desktop-first, works on tablets
-- **Keyboard Shortcuts**: Ctrl+K for search, Ctrl+Z for undo
+---
+
+## Architecture
+
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Frontend   │────▶│    Caddy      │────▶│   FastAPI     │
+│  React 19    │◀────│  (reverse    │◀────│  (pure-read   │
+│  TanStack    │ WS  │   proxy)     │     │   CQRS)       │
+└─────────────┘     └──────────────┘     └──────┬───────┘
+                                                 │
+                                    ┌────────────┼────────────┐
+                                    ▼            ▼            ▼
+                              ┌──────────┐ ┌──────────┐ ┌──────────┐
+                              │  Redis   │ │ Postgres │ │  Celery  │
+                              │  (L1     │ │ +Timescale│ │ Workers  │
+                              │  cache)  │ │  (L2)    │ │ (write)  │
+                              └──────────┘ └──────────┘ └────┬─────┘
+                                                              │
+                                                    ┌─────────┼─────────┐
+                                                    ▼         ▼         ▼
+                                              Yahoo Finance  pythainav  Finnhub
+```
+
+**CQRS pattern**: API endpoints are pure-read (Redis L1 → PostgreSQL L2). Celery workers are the sole data ingesters. On cache miss, API triggers a Celery task → worker fetches → caches → publishes WebSocket `data_ready` → frontend re-fetches automatically.
+
+**Round-robin price fetcher**: Single Celery task runs every 1 minute, rotating through 5 market slots (SET → US → Asia → Europe → Overview). Each market updates every ~5 min. Closed markets are auto-skipped so open markets get more frequent updates.
 
 ---
 
@@ -75,247 +98,116 @@
 
 ### Requirements
 
-- Docker & Docker Compose (v2.0+)
+- Docker & Docker Compose v2+
 - 4GB+ RAM, 10GB free disk
 - Internet connection (for stock data)
+- Google OAuth Client ID (for login)
 
-### 1️⃣ Clone & Configure
+### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/yourusername/stockviz.git
-cd stockviz
+git clone https://github.com/yourusername/ShotockViz.git
+cd ShotockViz
 cp .env.example .env
+# Edit .env — set GOOGLE_CLIENT_ID, JWT_SECRET_KEY, etc.
 ```
 
-### 2️⃣ Start (Dev Mode)
+### 2. Start (Dev Mode)
 
 ```bash
-docker-compose -f docker-compose.dev.yml up
+docker-compose -f docker-compose.dev.yml up -d
 ```
 
-**Access:**
-- Frontend: http://localhost:5173
-- API Docs: http://localhost:8000/docs
-- DB Admin: http://localhost:5050 (optional)
+8 services will start: frontend, backend, postgres, redis, celery, celery-beat, ollama, caddy.
 
-### 3️⃣ Create First User
+### 3. Access
+
+| Service | URL |
+|---------|-----|
+| App | https://localhost |
+| API Docs | https://localhost/api/docs |
+| Caddy Admin | http://localhost:2019 |
+
+### 4. Seed Data
 
 ```bash
-docker-compose -f docker-compose.dev.yml exec backend python scripts/create_user.py
-# Follow prompts to create user account
+# Seed Thai + US base stocks
+docker-compose -f docker-compose.dev.yml exec backend python scripts/seed_stocks.py
+
+# Seed international markets (JP/HK/UK/DE/CN/FR/NL) from Wikipedia
+docker-compose -f docker-compose.dev.yml exec backend python scripts/fetch_real_constituents.py
 ```
 
-### 4️⃣ Login
+### 5. Login
 
-Visit http://localhost:5173 and login with your credentials.
-
-### 5️⃣ Start Analyzing! 📈
-
-Try searching for a stock (e.g., "PTT.BK", "AAPL") and start analyzing.
+Visit https://localhost — click Google Sign-In. First user is auto-created.
 
 ---
 
-## Tech Stack
+## Celery Workers
 
-### Frontend
-
-```
-React 19           - UI library
-Vite 7             - Fast bundler
-Tailwind CSS 4     - Styling
-TradingView LWC 5  - Professional charts
-Zustand 5          - State management
-Axios              - API data fetching
-WebSocket          - Real-time prices
-```
-
-### Backend
-
-```
-Python 3.13+ / uv  - Runtime & package manager
-FastAPI 0.131      - Modern Python API
-SQLAlchemy 2.0     - Database models
-Pydantic 2.12      - Data validation
-JWT (PyJWT)        - Authentication
-Celery 5.6 + Redis 7 - Background tasks & cache
-PostgreSQL 16      - Main database
-TimescaleDB        - Time-series optimization
-yfinance           - Stock data (Thai + US)
-Finnhub            - Secondary data source
-Telegram Bot API   - Notifications
-Ollama (optional)  - Local AI inference
-```
-
-### DevOps
-
-```
-Docker             - Containerization
-Docker Compose     - Multi-container orchestration
-Nginx              - Reverse proxy
-Gunicorn           - WSGI server
-```
-
-### All Open Source & Free
-
-No paid dependencies. Everything runs locally in Docker.
+| Worker | Schedule | What it does |
+|--------|----------|-------------|
+| `fetch_prices` | Every 1 min | Round-robin price fetch across 5 market slots |
+| `fetch_overview_prices` | Every 5 min | Indices, USD/THB, Gold (backup) |
+| `check_all_alerts` | Every 60s | Check active alerts against cached prices |
+| `prefetch_names` | Every 6h | Company names for all watched symbols |
+| `prefetch_fundamentals` | Every 4h | P/E, P/BV, EPS, dividend yield |
+| `fetch_thai_fund_navs` | Daily 19:00 ICT | Thai mutual fund NAVs via pythainav |
+| `prefetch_history` | Every 30 min | Warm OHLCV cache for charts |
+| `scan_unregistered` | Every 15 min | Auto-register new user-added symbols |
+| `populate_index_constituents` | Weekly (Sun) | Refresh S&P 500, NASDAQ 100, SET 100, international indices |
+| `run_housekeeping` | Daily 03:00 ICT | Compress old 1m → 5m → 1d → 1w data |
 
 ---
 
 ## Project Structure
 
 ```
-stockviz/
-├── frontend/                   # React + Vite app
-│   └── src/
-│       ├── pages/             # Page components
-│       ├── components/        # Reusable components
-│       ├── hooks/             # Custom React hooks
-│       ├── services/          # API clients
-│       └── store/             # State management
-│
-├── backend/                    # FastAPI app
-│   ├── api/routes/            # API endpoints
-│   ├── services/              # Business logic
-│   ├── models/                # Data models
-│   ├── workers/               # Celery tasks
-│   └── core/                  # Config & utilities
-│
-├── docker-compose.dev.yml      # Development stack
-├── docker-compose.prod.yml     # Production stack
-├── REQUIREMENTS.md             # Detailed specifications
-├── INSTRUCTIONS.md             # Development guide
-└── README.md                   # This file
+ShotockViz/
+├── backend/
+│   ├── api/routes/            # 13 endpoint modules
+│   ├── models/                # SQLAlchemy ORM models
+│   ├── services/              # Business logic + cache orchestrator
+│   ├── workers/               # Celery tasks (10 workers)
+│   │   └── helpers/           # Shared: symbol_loader, cache_publisher, task_timing
+│   ├── core/                  # Config, database, redis, cache_keys, symbol_utils
+│   ├── scripts/               # Seed data, diagnostics
+│   └── main.py                # FastAPI app + WebSocket manager
+├── frontend/
+│   ├── src/routes/            # 8 pages (TanStack Router)
+│   ├── src/components/        # 33 React components
+│   │   ├── chart/             # TradingView chart + controls
+│   │   ├── common/            # Sidebar, Header, WatchlistSearch
+│   │   ├── modals/            # Settings, Drawing, Alert modals
+│   │   ├── pages/             # AlertsPage, ScreenerPage, NewsPage
+│   │   └── portfolio/         # HoldingsTable, AddTransactionModal
+│   ├── src/hooks/             # usePriceUpdates, usePortfolioData, useChartData
+│   ├── src/store/             # Zustand: appStore, authStore
+│   ├── src/services/          # API clients
+│   └── src/utils/             # formatters (parseSymbol, MARKET_COLORS, MARKET_CURRENCY)
+├── caddy/                     # Caddyfile.dev + Caddyfile.prod
+├── docker-compose.dev.yml     # 8-service dev stack
+├── docker-compose.prod.yml    # Production stack
+├── CLAUDE.md                  # AI agent context
+├── REQUIREMENTS.md            # Feature specs + API reference
+├── INSTRUCTIONS.md            # Developer workflow guide
+├── master_plan.md             # Strategic roadmap (Phase 1-6)
+├── tasklist.md                # Sprint task tracking
+├── changelog.md               # Version history
+└── trade-prompt.md            # Pine Script strategy library
 ```
-
----
-
-## Documentation
-
-| Document | Purpose |
-|----------|---------|
-| [**REQUIREMENTS.md**](REQUIREMENTS.md) | Functional & non-functional specs, features, API endpoints |
-| [**INSTRUCTIONS.md**](INSTRUCTIONS.md) | Development guide, coding standards, testing, troubleshooting |
-| [**API.md**](docs/API.md) | Full API documentation (auto-generated at `/docs`) |
-| [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) | System design, data flow, security |
-| [**DEPLOYMENT.md**](docs/DEPLOYMENT.md) | Production deployment, scaling, monitoring |
-
----
-
-## Supported Markets
-
-### Thai Market (SET/mai)
-
-| Symbol Suffix | Exchange | Hours |
-|---------------|----------|-------|
-| `.BK` | SET / mai | Mon-Fri 09:30-16:30 ICT (break 12:30-14:00) |
-
-**Examples**: PTT.BK, CPALL.BK, ADVANC.BK, TRUE.BK
-
-### US Market (NYSE/NASDAQ)
-
-| Market | Hours | Bangkok Time |
-|--------|-------|--------------|
-| NYSE/NASDAQ | Mon-Fri 09:30-16:00 ET | 21:30-04:00 ICT (next day) |
-
-**Examples**: AAPL, NVDA, TSLA, META, GOOGL
-
-### Indices
-
-- SET Index
-- S&P 500
-- NASDAQ Composite
-- Dow Jones Industrial Average
 
 ---
 
 ## Data Sources
 
-| Source | Coverage | Lag | Free Tier |
-|--------|----------|-----|-----------|
-| yfinance | Thai + US | ~15 min | ✅ Unlimited |
-| Finnhub | US stocks + news | ~15 min | ✅ 60 req/min |
-| Google News RSS | News | ~realtime | ✅ Unlimited |
-| SET Website | Thai data | End-of-day | ✅ Web scrape |
-
----
-
-## Features Roadmap
-
-### ✅ Phase 1 — MVP (6 weeks)
-- [x] Project setup + Docker
-- [ ] User authentication
-- [ ] Stock charts + indicators
-- [ ] Drawing tools
-- [ ] Watchlist
-- [ ] Basic alerts
-- [ ] Dark mode
-
-### 🔄 Phase 2 — Features (4 weeks)
-- [ ] Portfolio tracking
-- [ ] News feed + RSS
-- [ ] Stock screener
-- [ ] Backtesting
-- [ ] Fundamental data
-
-### 📋 Phase 3 — Advanced (4 weeks)
-- [ ] AI sentiment analysis
-- [ ] Advanced indicators
-- [ ] Admin dashboard
-- [ ] API rate limiting improvements
-- [ ] Mobile responsive optimization
-
-### 🚀 Future (Nice to Have)
-- Mobile app (React Native)
-- Real-time 0-delay data (with broker integration)
-- Social trading / idea sharing
-- White-label API
-- Crypto / Forex markets
-
----
-
-## Screenshots
-
-*(Wireframe available at `wireframe.jsx` — opens in browser)*
-
-### Chart View
-
-Dark theme with candlestick chart, indicators, drawings, and bottom panels (news/portfolio/fundamentals).
-
-### Screener
-
-Advanced filters (RSI < 30, Volume > 3x, MACD buy signal) with results table.
-
-### Portfolio
-
-Transaction log, P&L tracking, risk metrics (Sharpe, Drawdown, Beta).
-
-### Alerts
-
-Create price/RSI/pattern alerts with Telegram notifications.
-
----
-
-## Security
-
-### Authentication
-
-- JWT (15-minute access token + 7-day refresh token)
-- bcrypt password hashing (cost factor 12+)
-- Rate limiting (30 req/min for guests, 120 for users)
-
-### Data Protection
-
-- HTTPS only (TLS termination via Nginx)
-- SQL parameterized queries (SQLAlchemy ORM)
-- XSS/CSRF protection
-- Secrets in .env (not in code)
-
-### Infrastructure
-
-- Non-root Docker user
-- Read-only filesystem
-- Network isolation between containers
-- Dependency auditing (pip-audit, npm audit)
+| Source | Coverage | Lag | Free |
+|--------|----------|-----|------|
+| Yahoo Finance (yfinance) | 10 markets + indices + FX + commodities | ~15 min | Unlimited |
+| pythainav | Thai mutual fund NAVs | T+1 day | Unlimited |
+| Finnhub | US stocks + news | ~15 min | 60 req/min |
+| Google News RSS | News articles | Near real-time | Unlimited |
 
 ---
 
@@ -327,90 +219,26 @@ Automatically compresses old price data to reduce storage:
 |-----|-----------|--------|
 | < 7 days | 1-minute | Raw storage |
 | 7-90 days | 5-minute | Aggregate + delete 1m |
-| 90d-2y | 1-day | Aggregate + delete 5m |
+| 90 days - 2 years | 1-day | Aggregate + delete 5m |
 | > 2 years | 1-week | Aggregate + delete 1d |
 
-Housekeeping runs daily at 03:00 ICT. Uses TimescaleDB continuous aggregates.
+Runs daily at 03:00 ICT via Celery Beat. Uses TimescaleDB hypertables with auto-compression.
 
 ---
 
-## Contributing
+## Environment Variables
 
-We welcome contributions! Here's how:
+See `.env.example` for the full list. Key variables:
 
-### 1. Fork & Branch
-
-```bash
-git clone https://github.com/yourusername/stockviz.git
-git checkout -b feature/awesome-feature
-```
-
-### 2. Make Changes
-
-Follow [coding standards](INSTRUCTIONS.md#coding-standards) in INSTRUCTIONS.md.
-
-### 3. Test
-
-```bash
-docker-compose exec backend pytest tests/
-npm test  # frontend
-```
-
-### 4. Commit & Push
-
-```bash
-git commit -m "feat: add awesome feature"
-git push origin feature/awesome-feature
-```
-
-### 5. Create Pull Request
-
-Include description, link issues, request review.
-
-### Code of Conduct
-
-- Be respectful and inclusive
-- Report security issues privately (don't create public issues)
-- No spam or self-promotion
-
----
-
-## Performance
-
-| Metric | Target |
-|--------|--------|
-| Page Load | < 2 seconds |
-| Chart Render | < 500ms |
-| API Response | < 200ms (P95) |
-| WebSocket | < 100ms |
-| Max Users | 50 (self-hosted) |
-
----
-
-## Troubleshooting
-
-### Port Already in Use
-
-```bash
-lsof -i :8000
-kill -9 <PID>
-```
-
-### Database Error
-
-```bash
-docker-compose down -v
-docker-compose up  # Fresh start
-```
-
-### Celery Not Working
-
-```bash
-docker-compose logs celery-worker
-docker-compose exec redis redis-cli ping
-```
-
-See [INSTRUCTIONS.md](INSTRUCTIONS.md#troubleshooting) for more solutions.
+| Variable | Purpose |
+|----------|---------|
+| `DATABASE_URL` | PostgreSQL connection string |
+| `REDIS_URL` | Redis connection string |
+| `JWT_SECRET_KEY` | Token signing key |
+| `GOOGLE_CLIENT_ID` | Google OAuth login |
+| `TELEGRAM_BOT_TOKEN` | Alert notifications via Telegram |
+| `OLLAMA_URL` | Local LLM endpoint (default: `http://ollama:11434`) |
+| `FINNHUB_API_KEY` | Optional — enhanced US data |
 
 ---
 
@@ -418,131 +246,80 @@ See [INSTRUCTIONS.md](INSTRUCTIONS.md#troubleshooting) for more solutions.
 
 | Component | Minimum | Recommended |
 |-----------|---------|------------|
-| RAM | 2GB | 4GB+ |
+| RAM | 4GB | 8GB+ |
 | CPU | 2 cores | 4 cores |
 | Disk | 10GB | 50GB+ |
-| Internet | 1 Mbps | 10 Mbps |
 | Docker | v20.10 | v24+ |
-| Python | 3.12 | 3.13+ |
-| Node | 18 | 22+ |
+| Docker Compose | v2.0 | v2.20+ |
 
 ---
 
-## FAQ
+## Development
 
-**Q: Do I need to pay for API access?**
-A: No! All data sources (yfinance, Finnhub free tier) are free. No subscription needed.
+```bash
+# Start all services
+docker-compose -f docker-compose.dev.yml up -d
 
-**Q: Can I share watchlists with friends?**
-A: Not yet. Phase 2 includes social features. For now, export/import JSON.
+# Rebuild after code changes
+docker-compose -f docker-compose.dev.yml build frontend backend
+docker-compose -f docker-compose.dev.yml up -d frontend backend celery celery-beat
 
-**Q: What if yfinance goes down?**
-A: Fallback to Finnhub. Data cached for 1 hour. Shows warning badge.
+# View logs
+docker-compose -f docker-compose.dev.yml logs -f backend
+docker-compose -f docker-compose.dev.yml logs -f celery
 
-**Q: Can I deploy to AWS/cloud?**
-A: Yes! Use docker-compose.prod.yml. Docs in DEPLOYMENT.md.
+# Shell into container
+docker-compose -f docker-compose.dev.yml exec backend bash
 
-**Q: Is my data stored securely?**
-A: All data is local (self-hosted). Passwords are bcrypt hashed. No cloud sync.
-
-**Q: Can I use mobile?**
-A: Desktop-first (responsive). Mobile optimization coming in Phase 3.
-
----
-
-## License
-
-MIT License — See [LICENSE](LICENSE) file.
-
-Free for personal and commercial use.
+# Run diagnostics
+docker-compose -f docker-compose.dev.yml exec backend python scripts/check_intl_symbols.py
+```
 
 ---
 
-## Support
+## Troubleshooting
 
-- 📖 **Documentation**: See [REQUIREMENTS.md](REQUIREMENTS.md) and [INSTRUCTIONS.md](INSTRUCTIONS.md)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/yourusername/stockviz/issues)
-- 💬 **Discussions**: [GitHub Discussions](https://github.com/yourusername/stockviz/discussions)
-- 📧 **Email**: support@stockviz.local
+**Backend won't start** — Check `docker-compose logs backend`. Common: missing env vars or DB not ready yet. Backend waits for postgres via `depends_on`.
 
----
+**No price data** — Celery workers may not have run yet. Check `docker-compose logs celery`. Trigger manually: `docker-compose exec backend celery -A workers.celery_app call workers.price_fetcher.fetch_prices`.
 
-## Acknowledgments
+**International symbols missing** — Run `docker-compose exec backend python scripts/fetch_real_constituents.py` to seed from Wikipedia.
 
-- **TradingView Lightweight Charts** — Professional charting library
-- **yfinance** — Stock data
-- **FastAPI** — Modern Python framework
-- **React** — UI library
-- **TimescaleDB** — Time-series database
+**WebSocket errors** — Usually Caddy proxy config. Check `docker-compose logs caddy`. Ensure `wss://` upgrade is configured in Caddyfile.
 
----
-
-## Roadmap
-
-Planned features (subject to change):
-
-- [ ] Mobile app (React Native)
-- [ ] Real-time 0-delay data integration
-- [ ] Machine learning stock predictions
-- [ ] Backtesting with live broker integration
-- [ ] Social features (share strategies, follow traders)
-- [ ] API for third-party apps
-- [ ] Crypto markets
-- [ ] Multi-language support
-
----
-
-## Stats
-
-- **Languages**: Python, JavaScript, SQL
-- **Lines of Code**: ~15K (Phase 1)
-- **Time to First Chart**: < 2 minutes
-- **Learning Curve**: ⭐⭐ (Medium)
-- **Community Size**: Growing 📈
-
----
-
-## Disclaimer
-
-**StockViz is for educational and analysis purposes only.** It is not financial advice. Always do your own research and consult a financial advisor before making investment decisions. Past performance does not guarantee future results.
+**Alert creation fails** — Frontend sends display names ("Price Above"), backend normalizes to enum ("PRICE_ABOVE") automatically. Check backend logs for the actual error.
 
 ---
 
 ## Changelog
 
-### v0.1.0 (2026-02-24) — BETA
+See [changelog.md](changelog.md) for full version history.
 
-**Initial Release**
-- User authentication (JWT)
-- Stock charts (candlestick, line, area)
-- Technical indicators (MA, EMA, RSI, MACD, Bollinger Bands)
-- Drawing tools (trend line, H-line, Fibonacci)
-- Watchlist management
+### v0.1.3 (2026-03-03) — Current
+
+- CQRS architecture: API pure-read, Celery sole data ingesters
+- Round-robin price fetcher across 10 international markets
+- Symbol autocomplete with market badges and currency display
+- 8 Celery workers (price, names, fundamentals, fund NAV, history, on-demand, alerts, housekeeping)
+- Google OAuth one-tap authentication
+- Extreme Refactor: SOLID principles, 500-line file cap, custom React hooks
+
+### v0.1.0 (2026-02-24) — Initial Beta
+
+- Stock charts with TradingView Lightweight Charts
+- Technical indicators and drawing tools
+- Watchlist and portfolio management
 - Basic alerts (price, RSI)
-- Dark mode + light mode
-- Docker setup (dev + prod)
-
-See full [CHANGELOG.md](docs/CHANGELOG.md)
+- Dark mode UI
 
 ---
 
-## Connect
+## License
 
-- 🌐 **Website**: https://stockviz.local (local)
-- 🐙 **GitHub**: [yourusername/stockviz](https://github.com/yourusername/stockviz)
-- 💬 **Discord**: [Join Community](https://discord.gg/stockviz)
-- 🐦 **Twitter**: [@stockviz_app](https://twitter.com/stockviz_app)
+MIT License — free for personal and commercial use.
 
 ---
 
-**Made with ❤️ by the StockViz Team**
+## Disclaimer
 
----
-
-<div align="center">
-
-**⭐ If you find this helpful, please star the repo!**
-
-Questions? Open an issue or discussion on GitHub.
-
-</div>
+ShotockViz is for educational and analysis purposes only. It is not financial advice. Always do your own research before making investment decisions.

@@ -1,8 +1,8 @@
 # Celery Monitoring Implementation — Quick Reference
 
-**Date:** 2026-03-02
+**Date:** 2026-03-03
 **Project:** ShotockViz v0.1.3 BETA
-**Status:** All backend changes complete; ready for Docker deployment
+**Status:** All backend changes complete; CQRS architecture with 10 Celery workers
 
 ---
 
@@ -56,7 +56,7 @@ async def get_celery_stats():
 
 **File:** `/backend/workers/price_fetcher.py`
 
-All three fetch functions now include:
+The unified round-robin `fetch_prices` function (and backup `fetch_overview_prices`) now include:
 
 ```python
 start = time.time()
@@ -129,8 +129,9 @@ Sample output:
 docker-compose -f docker-compose.dev.yml logs -f backend
 
 # Look for lines like:
-# SET prices fetched total=12 priced=12 elapsed_sec=2.34
-# US prices fetched total=8 priced=8 elapsed_sec=1.89
+# [slot=SET] Round-robin price fetch: 12 symbols fetched, elapsed_sec=2.34
+# [slot=US] Round-robin price fetch: 8 symbols fetched, elapsed_sec=1.89
+# [slot=Asia] Round-robin price fetch: 20 symbols fetched, elapsed_sec=3.12
 ```
 
 ### Check Celery Worker Logs

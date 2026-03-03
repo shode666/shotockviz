@@ -66,9 +66,6 @@ REDIS_URL=redis://redis:6379/0
 
 # ===== SECURITY =====
 JWT_SECRET_KEY=<64-char-random-string>       # openssl rand -hex 32
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=15
-REFRESH_TOKEN_EXPIRE_DAYS=7
 
 # ===== DOMAIN (สำคัญมาก) =====
 DOMAIN=shotviz.yourdomain.com               # ไม่ใส่ https://
@@ -159,9 +156,9 @@ docker compose -f docker-compose.prod.yml run --rm backend \
 docker compose -f docker-compose.prod.yml run --rm backend \
   python scripts/seed_stocks.py
 
-# Seed XD/XR events สำหรับ chart markers
+# Seed international markets (JP/HK/UK/DE/CN/FR/NL/KR) จาก Wikipedia
 docker compose -f docker-compose.prod.yml run --rm backend \
-  python scripts/seed_events.py
+  python scripts/fetch_real_constituents.py
 ```
 
 ---
@@ -324,7 +321,7 @@ docker compose -f docker-compose.prod.yml up -d caddy
 ## Security Checklist ก่อน Go-Live
 
 - [ ] `.env` มี permission `600` (ไม่ world-readable)
-- [ ] `JWT_SECRET_KEY` เป็น random 64+ chars (ไม่ใช้ค่า dev)
+- [ ] `JWT_SECRET_KEY` เป็น random 64+ chars (`openssl rand -hex 32`)
 - [ ] `POSTGRES_PASSWORD` แข็งแกร่ง
 - [ ] `DEBUG=False` ใน env (production compose ตั้งไว้แล้ว)
 - [ ] Firewall เปิดเฉพาะ port 80, 443 (ไม่ expose 8000, 5432, 6379 ออกนอก)

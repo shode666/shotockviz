@@ -1,22 +1,23 @@
 # ShotockViz — Development Instructions
 
-**Version:** 2.0
-**Last Updated:** 2026-03-01
-**Project:** ShotockViz — Self-hosted Stock Analysis Platform (Thai + US Markets)
+**Version:** 3.0
+**Last Updated:** 2026-03-03
+**Project:** ShotockViz — Self-hosted Stock Analysis Platform (10 International Markets)
 
 ---
 
-## ⚠️ Critical Rules
+## Critical Rules
 
-1. **NEVER run any server directly on the host machine** — no `uvicorn`, `npm run dev`, `python`, `node` etc. executed bare. Everything runs inside Docker containers only.
-2. **Development ONLY uses `docker-compose.dev.yml`** — never use prod compose for local work, never `docker run` individual containers manually
+1. **NEVER run any server directly on the host machine** — no `uvicorn`, `npm run dev`, `python`, `node` etc. Everything runs inside Docker containers only.
+2. **Development ONLY uses `docker-compose.dev.yml`** — never use prod compose for local work
 3. **After completing any task → update `changelog.md`** immediately
 4. **Update `tasklist.md`** to mark completed items `[x]`
-5. **Frontend changes require rebuilding the Docker image** — source edits alone don't affect the running production bundle. Run:
+5. **Frontend changes require rebuilding the Docker image:**
    ```bash
    docker-compose -f docker-compose.dev.yml build frontend
    docker-compose -f docker-compose.dev.yml up -d frontend
    ```
+6. **Auth uses Google OAuth (one-tap)** — NO custom token management on frontend. Tokens handled by `useGoogleOneTapLogin` in `__root.tsx`.
 
 ### Allowed Commands (Docker only)
 ```bash
@@ -41,13 +42,12 @@ docker-compose -f docker-compose.dev.yml exec backend python -c "..."
 docker-compose -f docker-compose.dev.yml down
 ```
 
-### ❌ Never Do These
+### Never Do These
 ```bash
-uvicorn main:app              # ❌ direct server
-python backend/main.py        # ❌ direct python
-npm run dev                   # ❌ direct node
-node server.js                # ❌ direct node
-pip install <pkg>             # ❌ install on host (use exec backend pip install)
+uvicorn main:app              # direct server
+python backend/main.py        # direct python
+npm run dev                   # direct node
+pip install <pkg>             # install on host (use exec backend pip install)
 ```
 
 ---
@@ -59,6 +59,7 @@ pip install <pkg>             # ❌ install on host (use exec backend pip instal
 - Docker & Docker Compose v2.0+
 - Git
 - 4GB+ RAM, 10GB+ free disk
+- Google OAuth Client ID (from Google Cloud Console)
 
 ### 1. Clone & Configure
 
@@ -66,37 +67,38 @@ pip install <pkg>             # ❌ install on host (use exec backend pip instal
 git clone <repo-url>
 cd ShotockViz
 cp .env.example .env
-# Edit .env with your secrets (JWT_SECRET_KEY required)
+# Edit .env — set GOOGLE_CLIENT_ID (required for login)
 ```
 
 ### 2. Start Dev Environment
 
 ```bash
-docker-compose -f docker-compose.dev.yml up
+docker-compose -f docker-compose.dev.yml up -d
 ```
 
 **Dev Services:**
 
 | Service | URL | Notes |
 |---------|-----|-------|
-| Frontend (Vite HMR) | http://localhost:5173 | Hot reload on save |
-| Backend API | http://localhost:8000 | Auto-restart on save |
-| API Docs | http://localhost:8000/docs | Swagger UI |
-| Reverse Proxy | http://localhost | Caddy (routes to both) |
-| pgAdmin | http://localhost:5050 | Optional DB GUI |
+| App (via Caddy) | https://localhost | Reverse proxy to frontend + backend |
+| API Docs | https://localhost/api/docs | Swagger UI |
+| Vite HMR | http://localhost:5173 | Hot reload for frontend dev |
+| Backend API | http://localhost:8000 | Direct backend access |
 
-> **Note:** The running app at `http://localhost` is the **production build** served by the frontend container. For live frontend changes, use `http://localhost:5173` (Vite dev server) or rebuild the frontend image.
+> **Note:** The app at `https://localhost` is the SSR build. For instant frontend changes, use `http://localhost:5173` (Vite dev server) or rebuild the frontend image.
 
-### 3. Create First User
+### 3. First Login
 
-```bash
-docker-compose -f docker-compose.dev.yml exec backend python scripts/create_user.py
-```
+Visit https://localhost — click Google Sign-In. First user is auto-created (no manual user creation needed).
 
-### 4. Seed Stock Metadata (Thai + US)
+### 4. Seed Stock Data
 
 ```bash
+# Seed Thai + US base stocks
 docker-compose -f docker-compose.dev.yml exec backend python scripts/seed_stocks.py
+
+# Seed international markets (JP/HK/UK/DE/CN/FR/NL/KR) from Wikipedia
+docker-compose -f docker-compose.dev.yml exec backend python scripts/fetch_real_constituents.py
 ```
 
 ### 5. Stop Services
@@ -114,40 +116,34 @@ docker-compose -f docker-compose.dev.yml down
 Backend uses `uvicorn --reload` — save any Python file and it auto-restarts:
 
 ```bash
-# Watch backend logs
 docker-compose -f docker-compose.dev.yml logs -f backend
-
-# Watch all
-docker-compose -f docker-compose.dev.yml logs -f
 ```
 
 ### Frontend Changes (Requires Image Rebuild)
 
-The frontend container runs a **Node.js production build** (TanStack Start / Nitro). Source file edits in `frontend/src/` do NOT auto-apply.
-
-**For frontend changes:**
+The frontend container runs a TanStack Start / Nitro SSR build. Source file edits in `frontend/src/` do NOT auto-apply to the production bundle.
 
 ```bash
 # Option 1: Use Vite dev server at http://localhost:5173 (HMR, instant)
-docker-compose -f docker-compose.dev.yml logs -f frontend
-
-# Option 2: Rebuild production bundle after changes
+# Option 2: Rebuild production bundle
 docker-compose -f docker-compose.dev.yml build frontend
 docker-compose -f docker-compose.dev.yml up -d frontend
 ```
 
-### After Any Task
+### Celery Worker Changes
+
+After modifying any `workers/*.py` file:
 
 ```bash
-# 1. Verify changes work
-curl http://localhost/api/health
-
-# 2. Update changelog.md (REQUIRED)
-# Add entry under ## [Unreleased] section
-
-# 3. Mark task complete in tasklist.md
-# Change [ ] to [x]
+docker-compose -f docker-compose.dev.yml build backend
+docker-compose -f docker-compose.dev.yml up -d celery celery-beat
 ```
+
+### After Any Task
+
+1. Verify changes work: `curl https://localhost/api/health`
+2. Update `changelog.md`
+3. Mark task complete in `tasklist.md`
 
 ---
 
@@ -155,43 +151,60 @@ curl http://localhost/api/health
 
 ```
 ShotockViz/
-├── docker-compose.dev.yml       ← ✅ USE THIS FOR DEV
-├── docker-compose.prod.yml      ← ⛔ PROD ONLY
+├── docker-compose.dev.yml       ← USE THIS FOR DEV
+├── docker-compose.prod.yml      ← PROD ONLY
 ├── .env                         ← Local secrets (not committed)
 ├── .env.example                 ← Template
-├── .env.production              ← Prod template
 │
-├── frontend/                    ← React 19 + TanStack Start
+├── frontend/                    ← React 19 + TanStack Start (SSR)
 │   ├── src/
 │   │   ├── routes/              ← Pages (TanStack file-based routing)
 │   │   ├── components/          ← UI components
 │   │   │   ├── chart/           ← TradingChart, ChartToolbar, RightPanel
-│   │   │   ├── common/          ← Sidebar, Navbar, AIChatPanel
-│   │   │   ├── modals/          ← SearchModal, SettingsModal
-│   │   │   └── pages/           ← Page-level components
-│   │   ├── store/               ← Zustand (appStore, authStore, chartStore)
-│   │   ├── services/            ← API clients (stockService, etc.)
-│   │   ├── hooks/               ← Custom hooks
-│   │   └── utils/               ← Formatters, validators, helpers
-│   ├── .output/                 ← Production build output (auto-generated)
-│   │   ├── server/              ← Nitro SSR server
-│   │   └── public/              ← Static assets
+│   │   │   ├── common/          ← Sidebar, WatchlistSearch, Navbar, AIChatPanel
+│   │   │   ├── modals/          ← SearchModal, SettingsModal, DrawingModal
+│   │   │   ├── pages/           ← AlertsPage, ScreenerPage, NewsPage
+│   │   │   ├── portfolio/       ← HoldingsTable, AddTransactionModal
+│   │   │   ├── dashboard/       ← IndexCards, TopMovers, AlertsNearTarget
+│   │   │   └── ui/              ← ErrorState, EmptyState, LoadingState
+│   │   ├── store/               ← Zustand (appStore, authStore)
+│   │   ├── services/            ← API clients (stockService, portfolioService, etc.)
+│   │   ├── hooks/               ← useChartData, usePortfolioData, usePriceUpdates
+│   │   └── utils/               ← formatters (parseSymbol, MARKET_COLORS, MARKET_CURRENCY)
 │   └── vite.config.ts
 │
 ├── backend/                     ← FastAPI + Python 3.13
-│   ├── main.py                  ← App entry, routers, WebSocket
+│   ├── main.py                  ← App entry, routers, WebSocket manager
 │   ├── api/routes/              ← 13 route modules
-│   ├── services/                ← Business logic (stock_service.py key)
-│   ├── workers/                 ← Celery tasks (price_fetcher, alert_checker)
+│   ├── services/                ← Business logic
+│   │   ├── stock_service.py     ← Facade (re-exports from sub-modules)
+│   │   ├── providers/           ← yahoo_provider, stooq_provider
+│   │   ├── generators/          ← synthetic_bars
+│   │   └── cache_orchestrator.py ← 4-layer cache logic
+│   ├── workers/                 ← Celery tasks (10 workers)
+│   │   ├── helpers/             ← symbol_loader, cache_publisher, task_timing
+│   │   ├── price_fetcher.py     ← Round-robin across 5 market slots
+│   │   ├── alert_checker.py
+│   │   ├── name_fetcher.py
+│   │   ├── fundamentals_fetcher.py
+│   │   ├── fund_fetcher.py      ← Thai mutual fund NAV
+│   │   ├── history_prefetcher.py
+│   │   ├── on_demand_listener.py
+│   │   ├── symbol_registrar.py
+│   │   ├── index_populator.py
+│   │   └── housekeeping.py
 │   ├── models/                  ← SQLAlchemy ORM models + Pydantic schemas
-│   ├── core/                    ← Config, security, database, logger
-│   └── scripts/                 ← create_user.py, seed_stocks.py
+│   ├── core/                    ← config, database, redis, cache_keys, symbol_utils
+│   └── scripts/                 ← seed_stocks, fetch_real_constituents, check_intl_symbols
 │
-├── caddy/                       ← Reverse proxy config
-├── master_plan.md               ← Feature roadmap & vision
-├── tasklist.md                  ← Current sprint task breakdown
-├── changelog.md                 ← What changed and when
-└── INSTRUCTIONS.md              ← This file
+├── caddy/                       ← Reverse proxy config (Caddyfile.dev, Caddyfile.prod)
+├── CLAUDE.md                    ← AI agent quick reference
+├── REQUIREMENTS.md              ← Canonical SRS (features, schema, API)
+├── INSTRUCTIONS.md              ← This file
+├── master_plan.md               ← Strategic roadmap
+├── tasklist.md                  ← Sprint task tracking
+├── changelog.md                 ← Version history
+└── trade-prompt.md              ← Pine Script strategy library
 ```
 
 ---
@@ -203,27 +216,17 @@ ShotockViz/
 DATABASE_URL=postgresql://stockviz:password@db:5432/stockviz_db
 REDIS_URL=redis://redis:6379/0
 JWT_SECRET_KEY=<generate: openssl rand -hex 32>
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=15
-REFRESH_TOKEN_EXPIRE_DAYS=7
+GOOGLE_CLIENT_ID=<your-google-client-id>.apps.googleusercontent.com
 
 # Optional — enhances features
 FINNHUB_API_KEY=<free tier at finnhub.io>
 TELEGRAM_BOT_TOKEN=<for alert notifications>
-GOOGLE_CLIENT_ID=<for Google OAuth>
 OLLAMA_URL=http://ollama:11434
 OLLAMA_MODEL=llama3.2
-
-# App
-APP_ENV=development
-DEBUG=True
 TZ=Asia/Bangkok
 ```
 
-Generate JWT secret:
-```bash
-openssl rand -hex 32
-```
+> **Google OAuth setup:** Create an OAuth 2.0 Client ID in Google Cloud Console. Add `https://localhost` to Authorized JavaScript origins (dev) and your production domain for prod.
 
 ---
 
@@ -233,7 +236,7 @@ openssl rand -hex 32
 # Access DB shell
 docker-compose -f docker-compose.dev.yml exec db psql -U stockviz -d stockviz_db
 
-# Run migrations (create tables)
+# Initialize schema (first time)
 docker-compose -f docker-compose.dev.yml exec backend python -c \
   "import asyncio; from core.database import init_db; asyncio.run(init_db())"
 
@@ -245,8 +248,8 @@ docker-compose -f docker-compose.dev.yml exec db \
 docker-compose -f docker-compose.dev.yml exec -T db \
   psql -U stockviz stockviz_db < backup.sql
 
-# Check health
-curl http://localhost/api/health
+# Check international market data
+docker-compose -f docker-compose.dev.yml exec backend python scripts/check_intl_symbols.py
 ```
 
 ---
@@ -255,19 +258,20 @@ curl http://localhost/api/health
 
 ```bash
 # Check worker status
-docker-compose -f docker-compose.dev.yml exec celery-worker \
+docker-compose -f docker-compose.dev.yml exec celery \
   celery -A workers.celery_app inspect active
 
-# Check scheduled tasks
-docker-compose -f docker-compose.dev.yml exec celery-beat \
-  celery -A workers.celery_app inspect scheduled
-
-# Monitor via Flower (if configured)
-curl http://localhost:5555
-
 # View worker logs
-docker-compose -f docker-compose.dev.yml logs -f celery-worker
+docker-compose -f docker-compose.dev.yml logs -f celery
 docker-compose -f docker-compose.dev.yml logs -f celery-beat
+
+# Trigger specific task manually
+docker-compose -f docker-compose.dev.yml exec backend \
+  celery -A workers.celery_app call workers.price_fetcher.fetch_prices
+
+# Trigger index populator (seed international markets)
+docker-compose -f docker-compose.dev.yml exec backend \
+  celery -A workers.celery_app call workers.index_populator.populate_index_constituents
 ```
 
 ---
@@ -278,15 +282,9 @@ docker-compose -f docker-compose.dev.yml logs -f celery-beat
 # Backend tests
 docker-compose -f docker-compose.dev.yml exec backend pytest tests/ -v
 
-# With coverage
-docker-compose -f docker-compose.dev.yml exec backend pytest tests/ --cov=. --cov-report=html
-
-# Frontend e2e
-docker-compose -f docker-compose.dev.yml exec frontend npm run test:e2e
-
 # Quick API smoke test
-curl http://localhost/api/health
-curl http://localhost/api/stocks/NVDA/history?tf=1D | python3 -m json.tool | head -20
+curl https://localhost/api/health
+curl https://localhost/api/stocks/NVDA/history?tf=1D | python3 -m json.tool | head -20
 ```
 
 ---
@@ -295,34 +293,13 @@ curl http://localhost/api/stocks/NVDA/history?tf=1D | python3 -m json.tool | hea
 
 ### Python (Backend)
 
-- Max **300 lines per file**, **40 lines per function**
+- Max **500 lines per file**, **40 lines per function**
 - **Type hints** on all function signatures
 - **Docstrings** (Google format) on all public functions
 - Import order: stdlib → third-party → local
 - Use `structlog` / `get_logger(__name__)` for logging
 - Prefer `async def` for I/O-bound operations
 - Never bare `except:` — catch specific exceptions
-
-```python
-# ✅ Good pattern
-async def fetch_stock_quote(symbol: str) -> Optional[StockQuote]:
-    """Fetch current stock quote from cache.
-
-    Args:
-        symbol: Uppercase ticker symbol (e.g. "NVDA", "PTT.BK")
-
-    Returns:
-        StockQuote if cached, None if pending background fetch.
-    """
-    cache_key = f"cache:quote:{symbol}"
-    try:
-        r = await get_redis()
-        cached = await r.get(cache_key)
-        return StockQuote(**json.loads(cached)) if cached else None
-    except Exception as e:
-        logger.error("Redis quote cache read failed", error=str(e))
-        return None
-```
 
 ### JavaScript/TypeScript (Frontend)
 
@@ -332,55 +309,40 @@ async def fetch_stock_quote(symbol: str) -> Optional[StockQuote]:
 - Use **AbortController** on fetch calls in `useEffect` to prevent race conditions
 - Clean up **all** side effects: `clearInterval`, `clearTimeout`, `abort()` in `useEffect` return
 - **Zustand stores** for cross-component state; local `useState` for UI-only state
-
-```tsx
-// ✅ Stable interval pattern (prevents memory leaks)
-const refreshRef = useRef(refreshFn);
-useEffect(() => { refreshRef.current = refreshFn; }, [refreshFn]);
-
-useEffect(() => {
-  const t = setInterval(() => refreshRef.current(), 15_000);
-  return () => clearInterval(t);          // cleanup
-}, []);  // mount once only
-
-useEffect(() => { refreshRef.current(); }, [dataVersion]);  // trigger on version bump
-```
+- **Named exports** preferred (tree-shaking friendly)
 
 ---
 
 ## Troubleshooting
 
 ### Frontend shows old data after source edit
+The frontend at `https://localhost` is a production build. Use `http://localhost:5173` for HMR dev server, or rebuild: `docker-compose -f docker-compose.dev.yml build frontend`
 
-The frontend at `http://localhost` is a production build. Use:
-- `http://localhost:5173` for HMR dev server, OR
-- `docker-compose -f docker-compose.dev.yml build frontend` to rebuild
-
-### PTT.BK chart is empty
-
-Yahoo Finance occasionally rate-limits Thai stock requests. The backend returns `bars: []` and the chart retries up to 3× every 4 seconds. If still empty after 15 seconds, click NVDA or another US stock.
-
-### All quotes show `—` (202 responses)
-
-Celery workers populate the Redis quote cache. If workers aren't running:
+### No price data showing
+Celery workers populate the Redis quote cache. Check if workers are running:
 ```bash
-docker-compose -f docker-compose.dev.yml ps  # verify celery-worker is Up
-docker-compose -f docker-compose.dev.yml logs celery-worker
+docker-compose -f docker-compose.dev.yml ps
+docker-compose -f docker-compose.dev.yml logs celery
 ```
-The backend also has an asyncio fallback that caches quotes in ~5 seconds.
 
-### Fundamentals show `—`
+### International symbols missing
+Run the real constituents seeder:
+```bash
+docker-compose -f docker-compose.dev.yml exec backend python scripts/fetch_real_constituents.py
+```
 
-Fundamentals are fetched live from Yahoo Finance quoteSummary API. First call may take 8–12 seconds. Check `/api/stocks/NVDA/fundamentals` — if it returns 404, Yahoo Finance auth may have expired (auto-retries on next request).
+### Google Login not working
+Verify `GOOGLE_CLIENT_ID` is set in `.env` and `https://localhost` is added to authorized origins in Google Cloud Console.
 
 ### AI Chat not responding
-
 Ollama must be running and a model pulled:
 ```bash
 docker-compose -f docker-compose.dev.yml exec ollama ollama pull llama3.2
-docker-compose -f docker-compose.dev.yml logs ollama
 ```
+
+### WebSocket errors
+Check Caddy proxy config: `docker-compose -f docker-compose.dev.yml logs caddy`. Ensure WebSocket upgrade is configured in Caddyfile.
 
 ---
 
-*See `master_plan.md` for feature roadmap. See `tasklist.md` for current sprint.*
+*See `REQUIREMENTS.md` for feature specs. See `master_plan.md` for roadmap. See `tasklist.md` for current sprint.*
