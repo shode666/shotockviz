@@ -131,7 +131,7 @@ export function useChartData({ timeframe = '1D', onLoadingChange }: UseChartData
         let retryCount = 0;
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const MAX_RETRIES = 3;
-        const RETRY_DELAY_MS = 4000;
+        const RETRY_DELAY_MS = 2000;
         const currentKey = `${selectedStock.sym}:${timeframe}`;
         const isSilentRefresh = prevKeyRef.current === currentKey && bars.length > 0;
         prevKeyRef.current = currentKey;
