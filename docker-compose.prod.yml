@@ -49,6 +49,7 @@ services:
       WORKERS: ${WORKERS:-2}
       TZ: ${TZ:-Asia/Bangkok}
       CORS_ORIGINS: ${CORS_ORIGINS}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
     depends_on:
       db:
         condition: service_healthy
