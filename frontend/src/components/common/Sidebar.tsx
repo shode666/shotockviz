@@ -10,6 +10,30 @@ import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { WatchlistSearch } from './WatchlistSearch';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 
+/** Glass-styled tooltip (hover) — uses project's .glass-tooltip CSS */
+function GlassTooltip({ children, text }: { children: React.ReactNode; text: string }) {
+    const [show, setShow] = useState(false);
+    const ref = useRef<HTMLDivElement>(null);
+    return (
+        <div
+            ref={ref}
+            className="relative"
+            onMouseEnter={() => setShow(true)}
+            onMouseLeave={() => setShow(false)}
+        >
+            {children}
+            {show && (
+                <div
+                    className="glass-tooltip absolute z-50 whitespace-pre-line"
+                    style={{ left: '100%', top: '50%', transform: 'translateY(-50%)', marginLeft: 8, minWidth: 220, pointerEvents: 'none' }}
+                >
+                    {text}
+                </div>
+            )}
+        </div>
+    );
+}
+
 /** FGI score → color */
 function fgiColor(score: number | null): string {
     if (score == null) return 'var(--color-text-sub)';
@@ -244,7 +268,7 @@ export default function Sidebar() {
                     const val = q?.price != null ? q.price.toFixed(2) : '—';
                     const chg = q?.change != null ? `${q.change >= 0 ? '+' : ''}${q.change.toFixed(2)}` : '—';
                     const up = (q?.change ?? 0) >= 0;
-                    return (
+                    const row = (
                         <div key={key} className="flex justify-between items-center py-0.5">
                             <span className="text-[11px] font-medium" style={{ color: 'var(--color-text-sub)' }}>{label}</span>
                             <div className="text-right">
@@ -253,19 +277,27 @@ export default function Sidebar() {
                             </div>
                         </div>
                     );
+                    if (key === '^VIX') return (
+                        <GlassTooltip key={key} text={"VIX — ดัชนีความผันผวน (Volatility Index)\nวัดความกลัวของตลาด ยิ่งสูงยิ่งผันผวน\n< 15 สงบ | 15-25 ปกติ | 25-30 ระวัง | > 30 ตื่นกลัว"}>
+                            {row}
+                        </GlassTooltip>
+                    );
+                    return row;
                 })}
                 {/* Fear & Greed Index */}
-                <div className="flex justify-between items-center py-0.5">
-                    <span className="text-[11px] font-medium" style={{ color: 'var(--color-text-sub)' }}>FGI</span>
-                    <div className="text-right">
-                        <div className="text-[11px] font-bold tabular-nums" style={{ color: fgiColor(fgi.score) }}>
-                            {fgi.score != null ? fgi.score.toFixed(0) : '—'}
-                        </div>
-                        <div className="text-[10px]" style={{ color: fgiColor(fgi.score) }}>
-                            {fgi.label ?? '—'}
+                <GlassTooltip text={"FGI — Fear & Greed Index (ดัชนีความกลัวและความโลภ)\n0-25 กลัวสุดขีด | 25-45 กลัว | 45-55 เป็นกลาง\n55-75 โลภ | 75-100 โลภสุดขีด"}>
+                    <div className="flex justify-between items-center py-0.5">
+                        <span className="text-[11px] font-medium" style={{ color: 'var(--color-text-sub)' }}>FGI</span>
+                        <div className="text-right">
+                            <div className="text-[11px] font-bold tabular-nums" style={{ color: fgiColor(fgi.score) }}>
+                                {fgi.score != null ? fgi.score.toFixed(0) : '—'}
+                            </div>
+                            <div className="text-[10px]" style={{ color: fgiColor(fgi.score) }}>
+                                {fgi.label ?? '—'}
+                            </div>
                         </div>
                     </div>
-                </div>
+                </GlassTooltip>
             </div>
 
             {/* Stock list */}
