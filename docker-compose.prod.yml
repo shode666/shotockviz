@@ -30,6 +30,7 @@ services:
       - stockviz-net
 
   backend:
+    container_name: stockviz-backend
     build:
       context: ./backend
       dockerfile: Dockerfile
@@ -42,19 +43,16 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       APP_ENV: production
       DEBUG: "False"
       LOG_LEVEL: info
-      WORKERS: ${WORKERS:-4}
+      WORKERS: ${WORKERS:-2}
       TZ: ${TZ:-Asia/Bangkok}
       CORS_ORIGINS: ${CORS_ORIGINS}
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
@@ -63,14 +61,15 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: gunicorn main:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+    command: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
     deploy:
       resources:
         limits:
-          cpus: '2.0'
-          memory: 1G
+          cpus: '1.0'
+          memory: 512M
     networks:
       - stockviz-net
+      - shared
 
   celery-worker:
     build:
@@ -82,7 +81,6 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       APP_ENV: production
       LOG_LEVEL: info
       TZ: ${TZ:-Asia/Bangkok}
@@ -94,12 +92,12 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
-    command: celery -A workers.celery_app worker --loglevel=info --concurrency=4
+    command: celery -A workers.celery_app worker --loglevel=info --concurrency=2
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 512M
+          cpus: '0.5'
+          memory: 256M
     networks:
       - stockviz-net
 
@@ -111,7 +109,6 @@ services:
       DATABASE_URL: ${DATABASE_URL}
       REDIS_URL: ${REDIS_URL}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       APP_ENV: production
       LOG_LEVEL: info
       TZ: ${TZ:-Asia/Bangkok}
@@ -133,6 +130,7 @@ services:
       - stockviz-net
 
   frontend:
+    container_name: stockviz-frontend
     build:
       context: ./frontend
       dockerfile: Dockerfile
@@ -150,73 +148,19 @@ services:
     deploy:
       resources:
         limits:
-          cpus: '1.0'
-          memory: 512M
+          cpus: '0.5'
+          memory: 256M
     networks:
       - stockviz-net
-
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollamadata:/root/.ollama
-    environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-    # Uncomment if you have an NVIDIA GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        echo "Waiting for Ollama to be ready..."
-        until ollama list > /dev/null 2>&1; do sleep 1; done
-        echo "Pulling model: $${OLLAMA_MODEL}..."
-        ollama pull $${OLLAMA_MODEL}
-        echo "Model ready. Ollama is running."
-        wait
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - stockviz-net
-
-  caddy:
-    build:
-      context: ./caddy
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      DOMAIN: ${DOMAIN:-localhost}
-      CADDY_EMAIL: ${CADDY_EMAIL:-admin@example.com}
-    volumes:
-      - caddydata:/data
-      - caddyconfig:/config
-    depends_on:
-      backend:
-        condition: service_healthy
-      frontend:
-        condition: service_healthy
-    restart: unless-stopped
-    networks:
-      - stockviz-net
+      - shared
 
 networks:
   stockviz-net:
     driver: bridge
+  shared:
+    external: true
+    name: shared-proxy
 
 volumes:
   pgdata:
   redisdata:
-  caddydata:
-  caddyconfig:
-  ollamadata:
