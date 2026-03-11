@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import ReactDOM from 'react-dom';
 import { useNavigate, useMatchRoute, useRouterState } from '@tanstack/react-router';
 import { Plus, GripVertical, Loader2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
@@ -10,23 +11,43 @@ import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { WatchlistSearch } from './WatchlistSearch';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 
-/** Glass-styled tooltip (hover) — uses project's .glass-tooltip CSS */
+/** Glass-styled tooltip (hover) — portal to body so it escapes sidebar overflow */
 function GlassTooltip({ children, text }: { children: React.ReactNode; text: string }) {
     const [show, setShow] = useState(false);
+    const triggerRef = useRef<HTMLDivElement>(null);
+    const [pos, setPos] = useState({ top: 0, left: 0 });
+
+    const handleEnter = () => {
+        if (triggerRef.current) {
+            const rect = triggerRef.current.getBoundingClientRect();
+            setPos({ top: rect.top - 8, left: rect.right + 8 });
+        }
+        setShow(true);
+    };
+
     return (
         <div
-            className="relative"
-            onMouseEnter={() => setShow(true)}
+            ref={triggerRef}
+            onMouseEnter={handleEnter}
             onMouseLeave={() => setShow(false)}
         >
             {children}
-            {show && (
+            {show && ReactDOM.createPortal(
                 <div
-                    className="glass-tooltip absolute z-[9999] whitespace-pre-line"
-                    style={{ bottom: '100%', left: 0, marginBottom: 6, minWidth: 240, pointerEvents: 'none' }}
+                    className="glass-tooltip whitespace-pre-line"
+                    style={{
+                        position: 'fixed',
+                        top: pos.top,
+                        left: pos.left,
+                        transform: 'translateY(-100%)',
+                        zIndex: 99999,
+                        maxWidth: 320,
+                        pointerEvents: 'none',
+                    }}
                 >
                     {text}
-                </div>
+                </div>,
+                document.body,
             )}
         </div>
     );
