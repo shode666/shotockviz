@@ -20,7 +20,8 @@ function GlassTooltip({ children, text }: { children: React.ReactNode; text: str
     const handleEnter = () => {
         if (triggerRef.current) {
             const rect = triggerRef.current.getBoundingClientRect();
-            setPos({ top: rect.top - 8, left: rect.right + 8 });
+            // Center tooltip vertically with the trigger row, to the right of sidebar
+            setPos({ top: rect.top + rect.height / 2, left: rect.right + 8 });
         }
         setShow(true);
     };
@@ -39,7 +40,7 @@ function GlassTooltip({ children, text }: { children: React.ReactNode; text: str
                         position: 'fixed',
                         top: pos.top,
                         left: pos.left,
-                        transform: 'translateY(-100%)',
+                        transform: 'translateY(-50%)',
                         zIndex: 99999,
                         maxWidth: 320,
                         pointerEvents: 'none',
