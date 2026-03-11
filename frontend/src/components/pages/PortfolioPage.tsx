@@ -114,8 +114,8 @@ export default function PortfolioPage() {
                             <StatCard label="ต้นทุนรวม" value={`฿${formatPriceTH(analytics?.total_cost)}`} />
                             <StatCard
                                 label="กำไร/ขาดทุน"
-                                value={`${pnlUp ? '+' : ''}฿${formatPriceTH(analytics?.unrealized_pl)}`}
-                                sub={`${pnlUp ? '+' : ''}${formatPriceTH(analytics?.unrealized_pl_pct)}%`}
+                                value={`${pnlUp ? '+' : '-'}฿${formatPriceTH(analytics?.unrealized_pl != null ? Math.abs(analytics.unrealized_pl) : null)}`}
+                                sub={`${pnlUp ? '+' : '-'}${formatPriceTH(analytics?.unrealized_pl_pct != null ? Math.abs(analytics.unrealized_pl_pct) : null)}%`}
                                 up={pnlUp}
                             />
                             <StatCard label="จำนวนหุ้น" value={analytics?.holdings?.length ?? 0} />

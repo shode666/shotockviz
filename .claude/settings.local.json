@@ -20,7 +20,16 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); [print\\(p\\) for p in d.get\\(''paths'',{}\\) if ''history'' in p]\")",
       "Bash(curl -s \"http://localhost:8000/api/stocks/AAPL/history?timeframe=1D\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); bars=d if isinstance\\(d,list\\) else list\\(d.values\\(\\)\\)[0]; print\\(f''bars={len\\(bars\\)}, first={bars[0]}, last={bars[-1]}''\\)\")",
-      "Bash(curl -s http://localhost:8000/api/health)"
+      "Bash(curl -s http://localhost:8000/api/health)",
+      "Bash(curl -sk -o /dev/null -w \"%{http_code}\" https://localhost/)",
+      "Bash(git status -u)",
+      "Bash(git add backend/core/config.py backend/api/routes/portfolio.py backend/api/routes/ai_chat.py backend/api/middleware/auth.py backend/workers/fund_fetcher.py backend/workers/on_demand_listener.py frontend/src/services/aiService.js .claude/launch.json changelog.md)",
+      "Bash(git add backend/core/config.py backend/api/routes/portfolio.py backend/api/routes/ai_chat.py backend/api/middleware/auth.py backend/workers/fund_fetcher.py backend/workers/on_demand_listener.py frontend/src/services/aiService.js changelog.md)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(git push --set-upstream origin main)",
+      "Bash(docker restart shotockviz-backend-1)",
+      "Bash(python3 -c \":*)"
     ]
   }
 }

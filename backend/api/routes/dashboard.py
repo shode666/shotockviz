@@ -116,23 +116,38 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         holdings: dict[str, dict] = {}
         for t in txns:
             if t.symbol not in holdings:
-                holdings[t.symbol] = {"qty": 0.0, "total_cost": 0.0}
+                holdings[t.symbol] = {
+                    "qty": 0.0,
+                    "total_cost": 0.0,
+                    "currency": getattr(t, "currency", "THB") or "THB",
+                }
 
             if t.type.value == "BUY":
                 holdings[t.symbol]["qty"] += t.qty
-                holdings[t.symbol]["total_cost"] += t.qty * t.price + t.fee
+                holdings[t.symbol]["total_cost"] += t.qty * t.price
             else:
                 avg = holdings[t.symbol]["total_cost"] / max(holdings[t.symbol]["qty"], 1)
                 holdings[t.symbol]["qty"] -= t.qty
                 holdings[t.symbol]["total_cost"] -= t.qty * avg
+                # Guard float drift
+                if abs(holdings[t.symbol]["qty"]) < 1e-6:
+                    holdings[t.symbol]["qty"] = 0.0
+                    holdings[t.symbol]["total_cost"] = 0.0
 
         active = {s: h for s, h in holdings.items() if h["qty"] > 0.001}
         if not active:
             return None, []
 
+        # Get USD→THB exchange rate for cross-currency comparison.
+        # THBUSD=X gives "1 THB in USD" (e.g. 0.0317), so invert it.
+        usd_to_thb = 33.0  # fallback rate
+        thb_quote = await _fast_quote("THBUSD=X")
+        if thb_quote and thb_quote.get("price") and thb_quote["price"] > 0:
+            usd_to_thb = 1.0 / thb_quote["price"]  # e.g. 1/0.0317 ≈ 31.5
+
         # Aggregate values using cache-only quotes
-        total_value = 0.0
-        total_cost = 0.0
+        total_value_thb = 0.0
+        total_cost_thb = 0.0
         top_holdings = []
         portfolio_misses = []
 
@@ -144,11 +159,20 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
 
             val = cached.get("price", 0) * h["qty"]
             cost = h["total_cost"]
-            total_value += val
-            total_cost += cost
+            currency = h.get("currency", "THB").upper()
+
+            # Normalize to THB for sorting and totals
+            fx = usd_to_thb if currency == "USD" else 1.0
+            val_thb = val * fx
+            cost_thb = cost * fx
+
+            total_value_thb += val_thb
+            total_cost_thb += cost_thb
             top_holdings.append({
                 "symbol": sym,
                 "value": round(val, 2),
+                "value_thb": round(val_thb, 2),
+                "currency": currency,
                 "change_pct": cached.get("change_pct"),
                 "unrealized_pct": round((val - cost) / cost * 100, 2) if cost else 0,
             })
@@ -156,14 +180,15 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         if not top_holdings:
             return None, portfolio_misses
 
-        top_holdings.sort(key=lambda x: x["value"], reverse=True)
-        unrealized_pl = total_value - total_cost
+        # Sort by THB-normalized value so USD holdings rank correctly
+        top_holdings.sort(key=lambda x: x["value_thb"], reverse=True)
+        unrealized_pl_thb = total_value_thb - total_cost_thb
 
         return {
-            "total_value": round(total_value, 2),
-            "total_cost": round(total_cost, 2),
-            "unrealized_pl": round(unrealized_pl, 2),
-            "unrealized_pl_pct": round(unrealized_pl / total_cost * 100, 2) if total_cost else 0,
+            "total_value": round(total_value_thb, 2),
+            "total_cost": round(total_cost_thb, 2),
+            "unrealized_pl": round(unrealized_pl_thb, 2),
+            "unrealized_pl_pct": round(unrealized_pl_thb / total_cost_thb * 100, 2) if total_cost_thb else 0,
             "position_count": len(active),
             "top_holdings": top_holdings[:5],
             "has_pending_prices": len(portfolio_misses) > 0,

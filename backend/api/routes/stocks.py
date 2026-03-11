@@ -297,6 +297,7 @@ async def get_quote(symbol: str):
 async def get_history(
     symbol: str,
     timeframe: str = Query("1D", description="Timeframe: 1m,5m,15m,1h,4h,1D,1W,1M"),
+    adjusted: bool = Query(False, description="Apply dividend/split adjustments"),
     _user: User | None = Depends(get_optional_user),
 ):
     """Get OHLCV history for a symbol and timeframe — pure-read.
@@ -305,6 +306,8 @@ async def get_history(
     Fast-response: reads cache first (< 100ms).
     If data missing, requests background fetch and returns empty bars.
     Client gets WS 'data_ready' notification when bars are available.
+
+    V2: Pass `adjusted=true` to apply dividend/split price adjustments.
     """
     if timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(
@@ -323,7 +326,92 @@ async def get_history(
         # No data — request background fetch with timeframe
         await stock_service.request_data_fetch(sym, "history", timeframe=timeframe)
 
+    # V2: Apply corporate action adjustments if requested
+    if adjusted and bars:
+        from services.price_adjuster import adjust_prices
+        bars = await adjust_prices(sym, bars)
+
     return StockHistory(symbol=sym, timeframe=timeframe, bars=bars, is_fund=is_fund)
+
+
+@router.get("/{symbol}/rs")
+async def get_relative_strength(
+    symbol: str,
+    benchmark: str = Query("^SET.BK", description="Benchmark index symbol"),
+    timeframe: str = Query("1D", description="Timeframe for RS calculation"),
+    period: int = Query(252, description="Lookback period in bars (252 = ~1 year daily)"),
+    _user: User | None = Depends(get_optional_user),
+):
+    """Get Relative Strength (RS) line data for a symbol vs benchmark.
+
+    RS measures whether a stock is outperforming or underperforming its benchmark.
+    RS > 1.0 = outperforming, RS < 1.0 = underperforming.
+
+    Calculation:
+      RS = (symbol_close / symbol_close_N_ago) / (benchmark_close / benchmark_close_N_ago)
+
+    Returns list of {time, value} points for charting as a separate panel.
+    """
+    if timeframe not in VALID_TIMEFRAMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid timeframe. Choose from: {', '.join(VALID_TIMEFRAMES)}",
+        )
+
+    sym = symbol.upper()
+    bench = benchmark.upper()
+
+    # Read both symbol and benchmark history from cache
+    symbol_bars = await stock_service.read_history(sym, timeframe)
+    bench_bars = await stock_service.read_history(bench, timeframe)
+
+    # Request background fetch if missing
+    if not symbol_bars:
+        await stock_service.request_data_fetch(sym, "history", timeframe=timeframe)
+    if not bench_bars:
+        await stock_service.request_data_fetch(bench, "history", timeframe=timeframe)
+
+    if not symbol_bars or not bench_bars:
+        return {"symbol": sym, "benchmark": bench, "timeframe": timeframe, "rs": []}
+
+    # Build close price lookup for benchmark (time → close)
+    bench_map = {}
+    for b in bench_bars:
+        bench_map[b.get("time") if isinstance(b, dict) else b.time] = (
+            float(b.get("close") if isinstance(b, dict) else b.close)
+        )
+
+    # Calculate RS line
+    rs_data = []
+    lookback = min(period, len(symbol_bars))
+
+    for i in range(lookback, len(symbol_bars)):
+        bar = symbol_bars[i]
+        bar_time = bar.get("time") if isinstance(bar, dict) else bar.time
+        bar_close = float(bar.get("close") if isinstance(bar, dict) else bar.close)
+
+        ref_bar = symbol_bars[i - lookback]
+        ref_close = float(ref_bar.get("close") if isinstance(ref_bar, dict) else ref_bar.close)
+
+        # Find matching benchmark bars
+        bench_close = bench_map.get(bar_time)
+        ref_time = ref_bar.get("time") if isinstance(ref_bar, dict) else ref_bar.time
+        bench_ref_close = bench_map.get(ref_time)
+
+        if bench_close and bench_ref_close and ref_close > 0 and bench_ref_close > 0:
+            symbol_return = bar_close / ref_close
+            bench_return = bench_close / bench_ref_close
+            rs_value = symbol_return / bench_return if bench_return > 0 else 1.0
+
+            rs_data.append({"time": bar_time, "value": round(rs_value, 4)})
+
+    return {
+        "symbol": sym,
+        "benchmark": bench,
+        "timeframe": timeframe,
+        "period": lookback,
+        "rs": rs_data,
+    }
 
 
 @router.get("/{symbol}/fundamentals", response_model=StockFundamentals)
@@ -349,6 +437,136 @@ async def get_fundamentals(
         return StockFundamentals(symbol=sym)
 
     return StockFundamentals(**data)
+
+
+@router.get("/{symbol}/financials")
+async def get_financials_history(
+    symbol: str,
+    years: int = Query(10, ge=1, le=20, description="Number of years of history"),
+    _user: User | None = Depends(get_optional_user),
+):
+    """Get 10-year financial history scorecard — pure-read.
+
+    Returns annual revenue, net profit, ROE, D/E, EPS, dividends,
+    gross margin, and operating margin for up to 10 fiscal years.
+    """
+    sym = symbol.upper()
+
+    # Read from Redis cache
+    cache_key = f"financials_history:{sym}"
+    try:
+        r = await stock_service.get_redis()
+        cached = await r.get(cache_key)
+        if cached:
+            data = _json.loads(cached)
+            return {"symbol": sym, "years": data[:years]}
+    except Exception:
+        pass
+
+    # Read from PostgreSQL
+    try:
+        from core.database import AsyncSessionLocal
+        from models.financial_history import FinancialHistory
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(FinancialHistory)
+                .where(FinancialHistory.symbol == sym)
+                .order_by(FinancialHistory.fiscal_year.desc())
+                .limit(years)
+            )
+            rows = result.scalars().all()
+            if rows:
+                data = [
+                    {
+                        "fiscal_year": r.fiscal_year,
+                        "revenue": float(r.revenue) if r.revenue else None,
+                        "net_profit": float(r.net_profit) if r.net_profit else None,
+                        "roe": float(r.roe) if r.roe else None,
+                        "debt_equity": float(r.debt_equity) if r.debt_equity else None,
+                        "eps": float(r.eps) if r.eps else None,
+                        "dividend": float(r.dividend) if r.dividend else None,
+                        "gross_margin": float(r.gross_margin) if r.gross_margin else None,
+                        "operating_margin": float(r.operating_margin) if r.operating_margin else None,
+                        "currency": r.currency,
+                    }
+                    for r in rows
+                ]
+                # Cache for 6 hours
+                try:
+                    redis_cache = await stock_service.get_redis()
+                    await redis_cache.setex(cache_key, 21600, _json.dumps(data))
+                except Exception:
+                    pass
+                return {"symbol": sym, "years": data}
+    except Exception as e:
+        logger.debug("Financials history DB error", symbol=sym, error=str(e))
+
+    return {"symbol": sym, "years": []}
+
+
+@router.get("/{symbol}/earnings")
+async def get_earnings_events(
+    symbol: str,
+    limit: int = Query(8, ge=1, le=20, description="Number of recent earnings events"),
+    _user: User | None = Depends(get_optional_user),
+):
+    """Get recent earnings events with EPS surprise and price impact — pure-read.
+
+    Returns actual vs estimated EPS, surprise %, and 1-day price impact
+    for chart marker overlays (green = beat, red = miss).
+    """
+    sym = symbol.upper()
+
+    # Read from Redis cache
+    cache_key = f"earnings:{sym}"
+    try:
+        r = await stock_service.get_redis()
+        cached = await r.get(cache_key)
+        if cached:
+            data = _json.loads(cached)
+            return {"symbol": sym, "earnings": data[:limit]}
+    except Exception:
+        pass
+
+    # Read from PostgreSQL
+    try:
+        from core.database import AsyncSessionLocal
+        from models.earnings_event import EarningsEvent
+
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(
+                select(EarningsEvent)
+                .where(EarningsEvent.symbol == sym)
+                .order_by(EarningsEvent.report_date.desc())
+                .limit(limit)
+            )
+            rows = result.scalars().all()
+            if rows:
+                data = [
+                    {
+                        "report_date": r.report_date.isoformat(),
+                        "fiscal_period": r.fiscal_period,
+                        "estimated_eps": float(r.estimated_eps) if r.estimated_eps else None,
+                        "actual_eps": float(r.actual_eps) if r.actual_eps else None,
+                        "surprise_pct": float(r.surprise_pct) if r.surprise_pct else None,
+                        "price_1d_before": float(r.price_1d_before) if r.price_1d_before else None,
+                        "price_1d_after": float(r.price_1d_after) if r.price_1d_after else None,
+                        "price_impact_pct": float(r.price_impact_pct) if r.price_impact_pct else None,
+                    }
+                    for r in rows
+                ]
+                # Cache for 6 hours
+                try:
+                    redis_cache = await stock_service.get_redis()
+                    await redis_cache.setex(cache_key, 21600, _json.dumps(data))
+                except Exception:
+                    pass
+                return {"symbol": sym, "earnings": data}
+    except Exception as e:
+        logger.debug("Earnings events DB error", symbol=sym, error=str(e))
+
+    return {"symbol": sym, "earnings": []}
 
 
 @router.get("/{symbol}/news")

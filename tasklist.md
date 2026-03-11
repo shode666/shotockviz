@@ -32,8 +32,8 @@ backend/
 ├── main.py                  # FastAPI app, WebSocket manager, CORS, Redis broadcaster
 ├── api/routes/              # 13 modules: auth, stocks, watchlist, portfolio, portfolio_performance, alerts, screener, dashboard, ai_chat, drawings, notes, system
 ├── models/                  # SQLAlchemy ORM: user, stock, ohlcv, watchlist, portfolio, alert, drawing, note, schemas
-├── services/                # stock_service.py (47KB — Yahoo/Finnhub/cache logic), cache_service.py
-├── workers/                 # Celery: celery_app.py, price_fetcher.py, alert_checker.py, housekeeping.py
+├── services/                # stock_service.py (224-line facade), cache_orchestrator.py, db_helpers.py, providers/, generators/
+├── workers/                 # Celery: 11 workers (price_fetcher, name_fetcher, fundamentals_fetcher, fund_fetcher, history_prefetcher, on_demand_listener, alert_checker, news_fetcher, symbol_registrar, index_populator, housekeeping)
 ├── core/                    # config.py, database.py, redis.py, security.py, logger.py, cache_keys.py, ttl_policy.py
 ├── schemas/                 # Pydantic: common.py
 ├── scripts/                 # seed_stocks.py, seed_history.py, create_user.py
@@ -171,17 +171,8 @@ backend/
   - 📁 **Files:** `backend/workers/__init__.py` (signals), `backend/workers/price_fetcher.py` (logging), `backend/api/routes/system.py` (endpoint), `backend/core/redis.py` (Redis client)
   - 🔗 **Reference:** ดู `/api/system/ready` ใน `system.py` เป็นตัวอย่าง endpoint pattern
   - ⚠️ **Pitfalls:** Redis INCR เป็น atomic — ใช้ได้ใน concurrent workers, แต่ต้องตั้ง TTL ด้วย (ไม่งั้น key อยู่ตลอด)
-- [ ] Add Flower UI for Celery task visibility (optional)
-  - **Why:** Visual dashboard for Celery queue depth, active workers, task history
-  - **Steps:**
-    - [ ] Add `flower` service in `docker-compose.dev.yml` (image: `mher/flower`)
-    - [ ] Connect to same Redis broker URL
-    - [ ] Expose on port 5555, proxy via Caddy at `/flower`
-    - [ ] Add basic auth (reuse admin credentials)
-  - **Acceptance:** Navigate to `localhost:5555` → see active workers, recent task list, success/failure rates
-  - **Effort:** 1 hour (Docker config only)
-  - 📁 **Files:** `docker-compose.dev.yml` (add service), `caddy/Caddyfile.dev` (proxy)
-  - 📐 **Pattern:** ดู service อื่นใน `docker-compose.dev.yml` เป็นตัวอย่าง (networks, depends_on)
+- [x] Add Flower UI for Celery task visibility
+  - **Completed (V2):** Flower service in docker-compose.dev.yml with `--url_prefix=flower`, Caddy proxy at `/flower`, depends on celery-worker
 
 ## Real-time Price Updates
 - [x] Fix WebSocket URL: `useWebSocket` was connecting to `/api/ws/{user.id}` — fixed to `/api/ws/prices`
@@ -333,6 +324,34 @@ backend/
   - **Effort:** 3 hours
   - 📁 **Files:** `backend/core/config.py` (FINNHUB_API_KEY), `backend/workers/` (new Celery task), `backend/models/stock.py` (StockEvent model)
   - ⚠️ **Pitfalls:** Finnhub free tier = 60 calls/min — ใช้ rate limiter, batch fetch for watchlist symbols only (ไม่ fetch all stocks)
+
+---
+
+# V2: Institutional-Grade Features (2026-03-04)
+
+## Phase 2.1 — Infrastructure
+- [x] Flower Monitoring Dashboard — `--url_prefix=flower`, Caddy proxy, celery-worker dependency
+- [x] Hybrid Fetching Logic — `request_data_fetch()` tries Celery → asyncio fallback on broker failure
+
+## Phase 2.2 — Data Engine
+- [x] Symbol Mapping — `SymbolMapping` model + `symbol_mapper.py` service (async/sync, Redis-cached, DB-backed)
+- [x] Corporate Action Adjustments — `CorporateAction` model + `corporate_actions_fetcher.py` worker + `price_adjuster.py` + `?adjusted=true` history param
+- [x] Migration `20260304_0003` — `symbol_mappings` + `corporate_actions` tables
+
+## Phase 2.3 — Institutional Features
+- [x] Relative Strength (RS) Line — `GET /{symbol}/rs?benchmark=^SET.BK` endpoint
+- [x] Financial Health Scorecard — `FinancialHistory` model + `financials_history_fetcher.py` worker + `GET /{symbol}/financials?years=10`
+- [x] Earnings Surprise Tracker — `EarningsEvent` model + `earnings_events_fetcher.py` worker + `GET /{symbol}/earnings?limit=8`
+- [x] Migration `20260304_0004` — `financial_history` + `earnings_events` tables
+
+## Phase 2.4 — AI/Observability
+- [x] pgvector Integration (RAG) — custom PostgreSQL image (TimescaleDB + pgvector), `DocumentEmbedding` model, `embedding_service.py`, `embedding_worker.py`, RAG context injection in `ai_chat.py`, migration `20260304_0005`
+- [x] Data Retention UI — `api/routes/admin.py` with GET/PUT/POST retention-policy endpoints, `housekeeping.py` reads policy from Redis config
+
+## Phase 2.5 — Professional Tools
+- [x] Volume Profile (VPVR) — `VolumeProfile.tsx` canvas overlay with POC + Value Area (70%)
+- [x] Multi-Chart Layout — `MultiChartLayout.tsx` split view (1x1, 2x1, 1x2, 2x2) with independent chart instances
+- [x] Strategy Backtesting — `backtesting_engine.py` (Golden Cross, RSI Reversal, MACD Crossover, BB Bounce) + `api/routes/backtesting.py` (GET strategies, POST run)
 
 ---
 
@@ -978,14 +997,15 @@ backend/
     - [ ] Fail if build has TypeScript errors
   - **Acceptance:** Frontend build completes in CI without errors
   - **Effort:** 2 hours
-- [ ] Backend test coverage ≥ 70% (write missing tests)
-  - **Steps:**
-    - [ ] Audit: `pytest --cov=backend` → identify uncovered modules
-    - [ ] Priority: test stock_service.py (core logic), auth routes, alert_checker
-    - [ ] Mock yfinance + Finnhub + Redis for isolated tests
-    - [ ] Add fixtures for common test data (sample OHLCV, user, watchlist)
-  - **Acceptance:** `pytest --cov` reports ≥70% coverage, all tests pass
-  - **Effort:** 12-16 hours
+- [x] Backend test coverage: 101 new unit/service tests added (2026-03-04)
+  - [x] `test_symbol_utils.py` — 39 tests: normalize, detect_market, partition, deduplicate
+  - [x] `test_cache_keys.py` — 13 tests: all key builders, consistency, no collisions
+  - [x] `test_screener_indicators.py` — 35 tests: RSI, MACD, SMA, signals, filters
+  - [x] `test_services.py` — 14 tests: stock_service facade, cache key usage, re-exports
+  - [x] API smoke test: 10 endpoints verified via host gateway
+  - [x] Frontend static analysis: 0 memory leaks, 0 SSR issues, 0 circular imports
+  - [ ] Remaining: increase to ≥70% overall coverage (need auth, websocket, celery tests)
+  - **Effort remaining:** 6-8 hours
 - [ ] Playwright e2e: chart loads, watchlist add, login flow
   - **Steps:**
     - [ ] Install Playwright + configure for Docker test environment

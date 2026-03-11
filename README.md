@@ -69,22 +69,22 @@ All open source and free. No paid dependencies.
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Frontend   │────▶│    Caddy      │────▶│   FastAPI     │
-│  React 19    │◀────│  (reverse    │◀────│  (pure-read   │
-│  TanStack    │ WS  │   proxy)     │     │   CQRS)       │
-└─────────────┘     └──────────────┘     └──────┬───────┘
-                                                 │
-                                    ┌────────────┼────────────┐
-                                    ▼            ▼            ▼
+┌─────────────┐     ┌─────────────┐     ┌──────────────┐
+│   Frontend  │────▶│    Caddy    │────▶│   FastAPI    │
+│  React 19   │◀────│  (reverse   │◀────│  (pure-read  │
+│  TanStack   │ WS  │   proxy)    │     │   CQRS)      │
+└─────────────┘     └─────────────┘     └──────┬───────┘
+                                                │
+                                    ┌───────────┼────────────┐
+                                    ▼           ▼            ▼
                               ┌──────────┐ ┌──────────┐ ┌──────────┐
                               │  Redis   │ │ Postgres │ │  Celery  │
-                              │  (L1     │ │ +Timescale│ │ Workers  │
-                              │  cache)  │ │  (L2)    │ │ (write)  │
+                              │(L1 cache)│ │+Timescale│ │ Workers  │
+                              │          │ │  (L2)    │ │ (write)  │
                               └──────────┘ └──────────┘ └────┬─────┘
-                                                              │
-                                                    ┌─────────┼─────────┐
-                                                    ▼         ▼         ▼
+                                                             │
+                                                    ┌────────┼─────────┐
+                                                    ▼        ▼         ▼
                                               Yahoo Finance  pythainav  Finnhub
 ```
 

@@ -1,0 +1,26 @@
+# Custom PostgreSQL image: TimescaleDB + pgvector
+# Both extensions are required for ShotockViz V2:
+#   - TimescaleDB: time-series hypertables (StockPrice1m, ohlcv_bars)
+#   - pgvector: vector similarity search (RAG for AI chat)
+FROM timescale/timescaledb:latest-pg16
+
+# Install pgvector from source.
+# The base image has PostgreSQL compiled with --with-llvm, which makes
+# pgxs try to build .bc bitcode files using clang. Since clang is not
+# installed (and we don't need JIT for pgvector), we patch Makefile.global
+# to disable LLVM bitcode generation before building.
+RUN apk add --no-cache --virtual .build-deps \
+        git \
+        build-base \
+    && cd /tmp \
+    && git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git \
+    && cd pgvector \
+    && sed -i 's/^with_llvm.*/with_llvm = no/' \
+        /usr/local/lib/postgresql/pgxs/src/makefiles/../../src/Makefile.global \
+    && make USE_PGXS=1 OPTFLAGS="" \
+    && make USE_PGXS=1 install \
+    && sed -i 's/^with_llvm.*/with_llvm = yes/' \
+        /usr/local/lib/postgresql/pgxs/src/makefiles/../../src/Makefile.global \
+    && cd / \
+    && rm -rf /tmp/pgvector \
+    && apk del .build-deps

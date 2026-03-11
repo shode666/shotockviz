@@ -110,9 +110,9 @@ export function HoldingsTable({ holdings, hasPendingPrices }: HoldingsTableProps
                                 >
                                     {h.unrealized_pl != null ? (
                                         <>
-                                            {up ? '+' : ''}
+                                            {up ? '+' : '-'}
                                             {cs}
-                                            {fmt(h.unrealized_pl)}
+                                            {fmt(Math.abs(h.unrealized_pl))}
                                         </>
                                     ) : (
                                         '—'

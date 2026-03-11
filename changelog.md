@@ -8,6 +8,10 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Fix: Dashboard Top Holdings cross-currency sorting (2026-03-11)
+
+- `api/routes/dashboard.py` — Top Holdings now sorts by THB-normalized value using USD/THB exchange rate from cache. Previously compared raw THB and USD values directly, causing Thai funds (~฿5,000) to rank above US stocks (~$4,000 = ฿130,000). Also fixes total portfolio value to show correct THB-normalized sum. Added float precision guard and currency field tracking per holding.
+
 ### Security Audit & Bug Fixes (2026-03-11)
 
 **Critical:**

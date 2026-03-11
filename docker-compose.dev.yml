@@ -1,6 +1,8 @@
 services:
   db:
-    image: timescale/timescaledb:latest-pg16
+    build:
+      context: ./db
+      dockerfile: Dockerfile.dev
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-stockviz}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
@@ -137,11 +139,14 @@ services:
 
   flower:
     image: mher/flower:2.0
-    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    command: celery --broker=redis://redis:6379/0 flower --port=5555 --url_prefix=flower
     ports:
       - "5555:5555"
+    environment:
+      TZ: ${TZ:-Asia/Bangkok}
     depends_on:
       - redis
+      - celery-worker
     restart: unless-stopped
     networks:
       - stockviz-net
@@ -195,7 +200,9 @@ services:
         until ollama list > /dev/null 2>&1; do sleep 1; done
         echo "Pulling model: $${OLLAMA_MODEL}..."
         ollama pull $${OLLAMA_MODEL}
-        echo "Model ready. Ollama is running."
+        echo "Pulling embedding model: nomic-embed-text..."
+        ollama pull nomic-embed-text
+        echo "All models ready. Ollama is running."
         wait
     healthcheck:
       test: ["CMD", "ollama", "list"]

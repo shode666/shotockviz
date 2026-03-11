@@ -93,7 +93,7 @@ export function AlertsNearTarget({
                                 </p>
                                 {alertsNear.map((a: any, i: number) => (
                                     <AlertNearTarget
-                                        key={i}
+                                        key={`${a.symbol}-${a.condition}`}
                                         symbol={a.symbol}
                                         target={a.target}
                                         current={a.current}

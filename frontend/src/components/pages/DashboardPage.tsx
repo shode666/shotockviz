@@ -178,7 +178,7 @@ export default function DashboardPage() {
                                             {formatPct(portfolio.unrealized_pl_pct)}
                                         </span>
                                         <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
-                                            ({portfolio.unrealized_pl >= 0 ? '+' : ''}{formatPrice(portfolio.unrealized_pl, 0)})
+                                            ({portfolio.unrealized_pl >= 0 ? '+' : '-'}{formatPrice(Math.abs(portfolio.unrealized_pl), 0)})
                                         </span>
                                     </div>
                                     <div className="text-[10px] mt-3" style={{ color: 'var(--color-text-sub)' }}>

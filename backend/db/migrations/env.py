@@ -13,12 +13,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.config import settings
 from core.database import Base  # noqa: F401 — Base must be imported first
 
-import models.user      # noqa: F401
-import models.stock     # noqa: F401
-import models.watchlist # noqa: F401
-import models.portfolio # noqa: F401
-import models.alert     # noqa: F401
-import models.drawing   # noqa: F401
+import models.user              # noqa: F401
+import models.stock             # noqa: F401
+import models.watchlist         # noqa: F401
+import models.portfolio         # noqa: F401
+import models.alert             # noqa: F401
+import models.drawing           # noqa: F401
+import models.symbol_mapping    # noqa: F401  — V2: symbol provider mapping
+import models.corporate_action  # noqa: F401  — V2: dividend/split events
+import models.financial_history # noqa: F401  — V2: 10-year financial scorecard
+import models.earnings_event    # noqa: F401  — V2: EPS surprise tracker
+import models.document_embedding # noqa: F401  — V2: RAG vector embeddings
 
 # ── Alembic Config ────────────────────────────────────────────────────────────
 config = context.config

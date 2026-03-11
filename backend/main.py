@@ -12,7 +12,7 @@ from core.database import create_tables
 from core.logger import setup_logging, get_logger
 from core.redis import init_redis, close_redis
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
-from api.routes import dashboard, ai_chat, notes, portfolio_performance
+from api.routes import dashboard, ai_chat, notes, portfolio_performance, admin, backtesting
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 
@@ -276,6 +276,8 @@ app.include_router(screener.router)
 app.include_router(dashboard.router)               # market overview
 app.include_router(ai_chat.router)                 # AI assistant
 app.include_router(notes.router)                   # stock notes
+app.include_router(admin.router)                   # admin settings
+app.include_router(backtesting.router)             # strategy backtesting
 
 
 # ─── WebSocket ──────────────────────────────────────────────────────────────

@@ -5,14 +5,26 @@ import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
 import watchlistService from '@/services/watchlistService';
 import stockService from '@/services/stockService';
+import api from '@/services/api';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { WatchlistSearch } from './WatchlistSearch';
 import { usePriceUpdates } from '@/hooks/usePriceUpdates';
+
+/** FGI score → color */
+function fgiColor(score: number | null): string {
+    if (score == null) return 'var(--color-text-sub)';
+    if (score <= 25) return '#ef4444';      // Extreme Fear — red
+    if (score <= 45) return '#f97316';      // Fear — orange
+    if (score <= 55) return '#eab308';      // Neutral — yellow
+    if (score <= 75) return '#22c55e';      // Greed — green
+    return '#16a34a';                       // Extreme Greed — bright green
+}
 
 const INDICES_SYMS = [
     { key: '^SET', label: 'SET' },
     { key: '^GSPC', label: 'S&P500' },
     { key: '^IXIC', label: 'NASDAQ' },
+    { key: '^VIX', label: 'VIX' },
 ];
 
 // Default symbols to show when user is not authenticated (no fake prices)
@@ -53,6 +65,17 @@ export default function Sidebar() {
     // Indices price polling via same hook (always enabled)
     const indicesSyms = INDICES_SYMS.map(i => i.key);
     const { prices: indicesData } = usePriceUpdates(indicesSyms, { enabled: true });
+
+    // Fear & Greed Index
+    const [fgi, setFgi] = useState<{ score: number | null; label: string | null; change: number | null }>({ score: null, label: null, change: null });
+    useEffect(() => {
+        const fetchFgi = () => {
+            api.get('/market/fgi').then(res => setFgi(res.data)).catch(() => {});
+        };
+        fetchFgi();
+        const iv = setInterval(fetchFgi, 5 * 60_000); // refresh every 5 min
+        return () => clearInterval(iv);
+    }, []);
 
     // Add-stock UI state
     const [adding, setAdding] = useState(false);
@@ -231,6 +254,18 @@ export default function Sidebar() {
                         </div>
                     );
                 })}
+                {/* Fear & Greed Index */}
+                <div className="flex justify-between items-center py-0.5">
+                    <span className="text-[11px] font-medium" style={{ color: 'var(--color-text-sub)' }}>FGI</span>
+                    <div className="text-right">
+                        <div className="text-[11px] font-bold tabular-nums" style={{ color: fgiColor(fgi.score) }}>
+                            {fgi.score != null ? fgi.score.toFixed(0) : '—'}
+                        </div>
+                        <div className="text-[10px]" style={{ color: fgiColor(fgi.score) }}>
+                            {fgi.label ?? '—'}
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {/* Stock list */}

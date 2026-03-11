@@ -22,6 +22,12 @@ celery_app = Celery(
         "workers.symbol_registrar",
         "workers.index_populator",
         "workers.news_fetcher",
+        # V2 workers
+        "workers.corporate_actions_fetcher",
+        "workers.financials_history_fetcher",
+        "workers.earnings_events_fetcher",
+        "workers.embedding_worker",
+        "workers.fgi_fetcher",
     ],
 )
 
@@ -101,5 +107,31 @@ celery_app.conf.beat_schedule = {
     "populate-index-constituents": {
         "task": "workers.index_populator.populate_index_constituents",
         "schedule": crontab(hour=0, minute=0, day_of_week=0),
+    },
+    # ── V2 Workers ──────────────────────────────────────────────────────────
+    # Fetch corporate actions (dividends, splits) — daily at 02:00 ICT (19:00 UTC)
+    "fetch-corporate-actions": {
+        "task": "workers.corporate_actions_fetcher.fetch_corporate_actions",
+        "schedule": crontab(hour=19, minute=0),
+    },
+    # Fetch 10-year financial history — daily at 01:00 ICT (18:00 UTC)
+    "fetch-financials-history": {
+        "task": "workers.financials_history_fetcher.fetch_financials_history",
+        "schedule": crontab(hour=18, minute=0),
+    },
+    # Fetch earnings events (EPS surprise) — daily at 06:00 ICT (23:00 UTC)
+    "fetch-earnings-events": {
+        "task": "workers.earnings_events_fetcher.fetch_earnings_events",
+        "schedule": crontab(hour=23, minute=0),
+    },
+    # CNN Fear & Greed Index — every 30 minutes
+    "fetch-fear-greed": {
+        "task": "workers.fgi_fetcher.fetch_fear_greed",
+        "schedule": crontab(minute="*/30"),
+    },
+    # Generate embeddings for RAG — runs after news fetch, every 6 hours
+    "embed-documents": {
+        "task": "workers.embedding_worker.embed_new_documents",
+        "schedule": crontab(minute=45, hour="*/6"),
     },
 }

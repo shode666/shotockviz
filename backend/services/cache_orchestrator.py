@@ -269,31 +269,110 @@ async def fetch_yahoo_bars(
 
 
 async def request_data_fetch(symbol: str, data_type: str = "all", *, timeframe: str | None = None):
-    """Request that Celery fetch data for a symbol. Non-blocking, deduplicated.
+    """Request data fetch with hybrid Celery → asyncio fallback.
 
-    Used by API endpoints to trigger background data fetches when cache misses occur.
-    Uses a dedup key in Redis (30s TTL) to prevent thundering herd of identical requests.
+    Strategy:
+      1. Try sending a Celery task via Redis broker (default path).
+      2. If Celery broker is unreachable (Redis down, worker overloaded, etc.),
+         fall back to asyncio background task for quotes/fundamentals.
+      3. Deduplication via Redis NX key (30s TTL) prevents thundering herd.
+
+    The asyncio fallback only caches to Redis (never persists to DB directly).
+    When Celery recovers, it will handle DB persistence as normal.
 
     Args:
         symbol: Stock symbol (e.g., "AAPL", "PTT.BK")
         data_type: "all" (default), "quote", "history", "fundamentals"
         timeframe: Optional timeframe for history fetches (e.g., "1h", "4h", "1D")
-
-    Sends a direct Celery task to the on_demand_listener worker.
     """
+    symbol_upper = symbol.upper()
+
     try:
         r = await get_redis()
         tf_suffix = f":{timeframe}" if timeframe else ""
-        dedup_key = f"fetch_request:{symbol.upper()}:{data_type}{tf_suffix}"
+        dedup_key = f"fetch_request:{symbol_upper}:{data_type}{tf_suffix}"
 
         # Set with NX=True (only set if not exists) + 30s expiry
         # This ensures identical concurrent requests only trigger ONE fetch
         was_set = await r.set(dedup_key, "1", ex=30, nx=True)
 
-        if was_set:
-            # Send direct Celery task (sync import is safe in async context)
-            from workers.on_demand_listener import process_fetch_request
-            process_fetch_request.delay(symbol.upper(), data_type, timeframe)
-            logger.debug("Data fetch requested", symbol=symbol, data_type=data_type, timeframe=timeframe)
+        if not was_set:
+            return  # Already in-flight, skip
     except Exception as e:
-        logger.warning("request_data_fetch failed", symbol=symbol, error=str(e))
+        logger.warning("request_data_fetch dedup check failed", symbol=symbol, error=str(e))
+        # If Redis is down, we can't dedup — continue anyway for single attempt
+        pass
+
+    # ── Primary path: Celery task ────────────────────────────────────────────
+    try:
+        from workers.on_demand_listener import process_fetch_request
+        process_fetch_request.delay(symbol_upper, data_type, timeframe)
+        logger.debug("Data fetch requested via Celery", symbol=symbol, data_type=data_type, timeframe=timeframe)
+        return
+    except Exception as e:
+        logger.warning(
+            "Celery dispatch failed — falling back to asyncio",
+            symbol=symbol, data_type=data_type, error=str(e),
+        )
+
+    # ── Fallback: asyncio background fetch (cache-only, no DB persist) ───────
+    asyncio.create_task(
+        _asyncio_fetch_fallback(symbol_upper, data_type, timeframe)
+    )
+
+
+async def _asyncio_fetch_fallback(symbol: str, data_type: str, timeframe: str | None):
+    """Asyncio fallback when Celery broker is unreachable.
+
+    Fetches data directly via Yahoo Finance providers and caches in Redis only.
+    Does NOT persist to PostgreSQL — that's Celery's job when it recovers.
+
+    This ensures the frontend still gets data even when the task queue is down.
+    """
+    try:
+        r = await get_redis()
+
+        if data_type in ("quote", "all"):
+            try:
+                quote = await asyncio.wait_for(_fetch_quote_direct(symbol), timeout=15.0)
+                if quote:
+                    await r.setex(cache_keys.quote(symbol), 60, quote.model_dump_json())
+                    await _notify_data_ready("quote", symbol)
+                    logger.info("Asyncio fallback: quote cached", symbol=symbol)
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug("Asyncio fallback: quote failed", symbol=symbol, error=str(e))
+
+        if data_type in ("fundamentals", "all"):
+            try:
+                fundamentals = await asyncio.wait_for(
+                    _fetch_fundamentals_direct(symbol), timeout=12.0
+                )
+                if fundamentals:
+                    await r.setex(
+                        cache_keys.fundamentals(symbol), 300,
+                        fundamentals.model_dump_json(),
+                    )
+                    await _notify_data_ready("fundamentals", symbol)
+                    logger.info("Asyncio fallback: fundamentals cached", symbol=symbol)
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug("Asyncio fallback: fundamentals failed", symbol=symbol, error=str(e))
+
+        # History fallback is intentionally limited — only for daily timeframes
+        # Intraday history requires DB persistence for proper aggregation
+        if data_type in ("history", "all") and timeframe in ("1D", "1W", "1M", None):
+            try:
+                from services.stock_service import TF_CONFIG
+                tf = timeframe or "1D"
+                cfg = TF_CONFIG.get(tf, TF_CONFIG["1D"])
+                bars = await _fetch_yahoo_direct(symbol, cfg["interval"], cfg["period"], tf)
+                if bars:
+                    cache_key = cache_keys.ohlcv(symbol, tf)
+                    ttl = _HISTORY_TTL.get(tf, 21600)
+                    await r.setex(cache_key, ttl, json.dumps([b.model_dump() for b in bars]))
+                    await _notify_data_ready("history", symbol, {"timeframe": tf})
+                    logger.info("Asyncio fallback: history cached", symbol=symbol, timeframe=tf, bars=len(bars))
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.debug("Asyncio fallback: history failed", symbol=symbol, error=str(e))
+
+    except Exception as e:
+        logger.error("Asyncio fallback failed entirely", symbol=symbol, error=str(e))

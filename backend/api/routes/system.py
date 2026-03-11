@@ -9,6 +9,8 @@ data_status reflects real service health:
 """
 from datetime import datetime, timezone
 
+import json as _json
+
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
@@ -190,10 +192,10 @@ async def get_celery_stats():
         return {
             "success_count": int(success or 0),
             "failure_count": int(failure or 0),
-            "last_success_at": last_success.decode() if last_success else None,
-            "last_failure_at": last_failure.decode() if last_failure else None,
-            "last_error": last_error.decode() if last_error else None,
-            "last_success_elapsed": last_elapsed.decode() if last_elapsed else None,
+            "last_success_at": last_success if last_success else None,
+            "last_failure_at": last_failure if last_failure else None,
+            "last_error": last_error if last_error else None,
+            "last_success_elapsed": last_elapsed if last_elapsed else None,
         }
     except Exception as e:
         return {
@@ -204,3 +206,29 @@ async def get_celery_stats():
             "last_error": str(e)[:500],
             "last_success_elapsed": None,
         }
+
+
+@router.get("/market/fgi")
+async def get_fear_greed_index():
+    """Get CNN Fear & Greed Index — pure-read from Redis cache.
+
+    Returns cached FGI data: score (0-100), label, and change.
+    Data is populated by ``workers.fgi_fetcher`` every 30 min.
+    If cache is empty, triggers an on-demand fetch.
+    """
+    try:
+        r = await get_redis()
+        cached = await r.get("fgi:current")
+        if cached:
+            return _json.loads(cached)
+    except Exception:
+        pass
+
+    # No cache — trigger on-demand fetch
+    try:
+        from workers.fgi_fetcher import fetch_fear_greed
+        fetch_fear_greed.delay()
+    except Exception:
+        pass
+
+    return {"score": None, "label": None, "change": None}
