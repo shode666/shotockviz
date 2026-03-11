@@ -13,10 +13,8 @@ import { usePriceUpdates } from '@/hooks/usePriceUpdates';
 /** Glass-styled tooltip (hover) — uses project's .glass-tooltip CSS */
 function GlassTooltip({ children, text }: { children: React.ReactNode; text: string }) {
     const [show, setShow] = useState(false);
-    const ref = useRef<HTMLDivElement>(null);
     return (
         <div
-            ref={ref}
             className="relative"
             onMouseEnter={() => setShow(true)}
             onMouseLeave={() => setShow(false)}
@@ -24,8 +22,8 @@ function GlassTooltip({ children, text }: { children: React.ReactNode; text: str
             {children}
             {show && (
                 <div
-                    className="glass-tooltip absolute z-50 whitespace-pre-line"
-                    style={{ left: '100%', top: '50%', transform: 'translateY(-50%)', marginLeft: 8, minWidth: 220, pointerEvents: 'none' }}
+                    className="glass-tooltip absolute z-[9999] whitespace-pre-line"
+                    style={{ bottom: '100%', left: 0, marginBottom: 6, minWidth: 240, pointerEvents: 'none' }}
                 >
                     {text}
                 </div>

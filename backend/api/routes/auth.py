@@ -104,6 +104,12 @@ async def google_auth(body: GoogleAuthRequest, db: AsyncSession = Depends(get_db
             ),
             timeout=5.0,
         )
+    except asyncio.TimeoutError:
+        logger.warning("Google token verification timed out")
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Google authentication timed out — please try again",
+        )
     except (ValueError, google_exceptions.GoogleAuthError, google_exceptions.TransportError) as e:
         logger.warning(
             "Google token verification failed",
@@ -112,10 +118,18 @@ async def google_auth(body: GoogleAuthRequest, db: AsyncSession = Depends(get_db
         )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Google token verification failed: {str(e)}",
+            detail="Google token verification failed — please try again",
         )
 
-    email = idinfo["email"]
+    # ── Validate required claims ──────────────────────────────────────────
+    email = idinfo.get("email")
+    if not email or not idinfo.get("email_verified"):
+        logger.warning("Google token missing verified email", claims=list(idinfo.keys()))
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account must have a verified email",
+        )
+
     name = idinfo.get("name", email.split("@")[0])
 
     # Find or create user
