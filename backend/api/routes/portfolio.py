@@ -70,12 +70,16 @@ async def get_analytics(
             holdings[t.symbol] = {"qty": 0.0, "total_cost": 0.0, "currency": getattr(t, "currency", "THB") or "THB"}
         if t.type.value == "BUY":
             holdings[t.symbol]["qty"] += t.qty
-            holdings[t.symbol]["total_cost"] += t.qty * t.price + t.fee
+            holdings[t.symbol]["total_cost"] += t.qty * t.price
         else:  # SELL
             # Compute avg cost BEFORE reducing qty, then reduce cost basis proportionally
             avg = holdings[t.symbol]["total_cost"] / holdings[t.symbol]["qty"] if holdings[t.symbol]["qty"] else 0
             holdings[t.symbol]["qty"] -= t.qty
             holdings[t.symbol]["total_cost"] -= t.qty * avg
+            # Guard against float drift leaving tiny residual qty
+            if abs(holdings[t.symbol]["qty"]) < 1e-6:
+                holdings[t.symbol]["qty"] = 0.0
+                holdings[t.symbol]["total_cost"] = 0.0
 
     # Filter out sold positions
     active = {s: h for s, h in holdings.items() if h["qty"] > 0}
@@ -238,7 +242,10 @@ async def update_transaction(
     if not txn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
+    _ALLOWED_UPDATE_FIELDS = {"qty", "price", "fee", "currency", "date", "note"}
     for field, val in body.model_dump(exclude_unset=True).items():
+        if field not in _ALLOWED_UPDATE_FIELDS:
+            continue
         setattr(txn, field, val)
     return txn
 

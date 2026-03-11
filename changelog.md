@@ -8,6 +8,133 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Security Audit & Bug Fixes (2026-03-11)
+
+**Critical:**
+- `core/config.py` — Added `@field_validator` for `jwt_secret_key`: warns on default dev value, rejects keys < 16 chars
+- `api/routes/portfolio.py` — Transaction update uses explicit field whitelist instead of blind `setattr()` (prevents privilege escalation)
+- `api/routes/ai_chat.py` — SSE stream errors now return generic message instead of raw exception details (info disclosure fix)
+
+**High:**
+- `api/routes/portfolio.py` — Added float precision guard: zeroes qty/cost when residual < 1e-6 after SELL (prevents divide-by-zero)
+- `api/middleware/auth.py` — Wrapped `int(user_id)` in try/except to return 401 instead of crashing on malformed JWT `sub`
+- `workers/fund_fetcher.py` — Added symbol validation regex + URL encoding to prevent SSRF via crafted fund symbols
+- `workers/on_demand_listener.py` — Added symbol regex validation at task entry to reject garbage/malicious inputs
+
+**Medium:**
+- `frontend/src/services/aiService.js` — Token now read from `useAuthStore.getState()` instead of direct `localStorage` access (prevents stale token usage)
+
+### Sidebar: VIX + Fear & Greed Index (2026-03-10)
+
+- `frontend/src/components/common/Sidebar.tsx` — Added VIX (`^VIX`) to market indices, added CNN Fear & Greed Index with color-coded score and label
+- NEW `backend/workers/fgi_fetcher.py` — Celery worker fetches CNN FGI every 30 min, caches in Redis
+- `backend/api/routes/system.py` — Added `GET /api/market/fgi` endpoint (pure-read from cache)
+- `backend/workers/celery_app.py` — Registered `fgi_fetcher` worker + beat schedule
+
+### Bug Fixes (2026-03-10)
+
+- `api/routes/portfolio.py` — Removed fee from cost basis calculation; user-entered price already includes fee deduction
+- `api/routes/dashboard.py` — Same fee removal fix for dashboard portfolio summary
+- `frontend/src/components/portfolio/HoldingsTable.tsx` — Fixed currency symbol positioning: `-$4.23` instead of `$-4.23`
+- `frontend/src/components/pages/PortfolioPage.tsx` — Fixed currency symbol positioning on P&L stat card
+- `frontend/src/components/pages/DashboardPage.tsx` — Fixed currency symbol positioning on dashboard P&L
+
+### V2 Phase 2.4-2.5 Implementation (2026-03-04)
+
+**Phase 2.4 — AI/Observability (6 new files, 1 migration, 3 new API endpoints):**
+- NEW `db/Dockerfile.dev` — Custom PostgreSQL image combining TimescaleDB + pgvector v0.8.0
+- NEW `models/document_embedding.py` — `DocumentEmbedding` model: vector(768) embeddings for RAG search
+- NEW `services/embedding_service.py` — Generate embeddings via Ollama (nomic-embed-text), cosine similarity search against pgvector
+- NEW `workers/embedding_worker.py` — Celery worker: embeds news articles, earnings events, financial summaries (every 6h)
+- `api/routes/ai_chat.py` — RAG context injection: `_fetch_rag_context()` searches top-3 similar docs before LLM streaming
+- `docker-compose.dev.yml` — DB service changed from `image:` to `build:` (custom Dockerfile), Ollama pulls nomic-embed-text model
+- Migration `20260304_0005` — Creates `document_embeddings` table with HNSW vector index
+- NEW `api/routes/admin.py` — Data retention policy management:
+  - `GET /api/admin/retention-policy` — Read policy + disk usage stats
+  - `PUT /api/admin/retention-policy` — Update retention rules (stored in Redis)
+  - `POST /api/admin/retention-policy/run-now` — Trigger housekeeping immediately
+- `workers/housekeeping.py` — Rewritten to read retention policy from Redis config (no longer hardcoded)
+
+**Phase 2.5 — Professional Tools (4 new files, 2 new API endpoints):**
+- NEW `frontend/src/components/chart/VolumeProfile.tsx` — VPVR overlay: canvas-based horizontal volume bars with POC (gold) + Value Area (70%)
+- NEW `frontend/src/components/chart/MultiChartLayout.tsx` — Split-view: 1x1/2x1/1x2/2x2 grid with independent chart instances
+- NEW `services/backtesting_engine.py` — Strategy backtest engine: Golden Cross, RSI Reversal, MACD Crossover, BB Bounce. Computes win rate, Sharpe, max drawdown, profit factor.
+- NEW `api/routes/backtesting.py` — Backtest API:
+  - `GET /api/backtest/strategies` — List available strategies with default params
+  - `POST /api/backtest/run` — Run simulation with custom params + period
+
+**Registrations:**
+- `celery_app.py` — embedding_worker registered + beat schedule (every 6h at :45)
+- `models/__init__.py` — DocumentEmbedding exported
+- `db/migrations/env.py` — document_embedding model imported
+- `main.py` — admin + backtesting routers registered
+
+### V2 Phase 2.1-2.3 Backend Implementation (2026-03-04)
+
+**Phase 2.1 — Infrastructure:**
+- `docker-compose.dev.yml` — Flower service updated with `--url_prefix=flower` for Caddy reverse proxy + `celery-worker` dependency
+- `services/cache_orchestrator.py` — Hybrid fetching: `request_data_fetch()` now tries Celery first, falls back to asyncio direct fetch if broker unreachable. Fallback caches to Redis only (no DB persist) until Celery recovers.
+
+**Phase 2.2 — Data Engine (4 new files, 1 migration):**
+- NEW `models/symbol_mapping.py` — `SymbolMapping` model: maps internal symbols to Yahoo/Finnhub/pythainav formats
+- NEW `models/corporate_action.py` — `CorporateAction` model: dividend/split/rights events with ex-dates
+- NEW `services/symbol_mapper.py` — Centralized symbol translation (async + sync APIs, Redis-cached, DB-backed)
+- NEW `services/price_adjuster.py` — Backward-adjusted OHLCV prices using corporate actions (never modifies raw DB data)
+- NEW `workers/corporate_actions_fetcher.py` — Celery worker fetches dividends + splits from yfinance (daily 02:00 ICT)
+- `api/routes/stocks.py` — History endpoint: added `?adjusted=true` query param for adjusted prices (default=false, backward compatible)
+- Migration `20260304_0003` — Creates `symbol_mappings` + `corporate_actions` tables
+
+**Phase 2.3 — Institutional Features (4 new files, 1 migration, 3 new API endpoints):**
+- NEW `models/financial_history.py` — `FinancialHistory` model: 10-year annual financial metrics (revenue, profit, ROE, D/E, EPS, dividends, margins)
+- NEW `models/earnings_event.py` — `EarningsEvent` model: EPS actual vs estimate with surprise % and price impact
+- NEW `workers/financials_history_fetcher.py` — Celery worker fetches 10-year financial data from yfinance (daily 01:00 ICT)
+- NEW `workers/earnings_events_fetcher.py` — Celery worker fetches earnings history with price impact (daily 06:00 ICT)
+- `api/routes/stocks.py` — 3 new endpoints:
+  - `GET /{symbol}/rs?benchmark=^SET.BK` — Relative Strength line data
+  - `GET /{symbol}/financials?years=10` — Financial health scorecard
+  - `GET /{symbol}/earnings?limit=8` — Earnings surprise tracker
+- Migration `20260304_0004` — Creates `financial_history` + `earnings_events` tables
+
+**Registrations:**
+- `celery_app.py` — 3 new workers registered + 3 new beat schedules (corporate actions 19:00 UTC, financials 18:00 UTC, earnings 23:00 UTC)
+- `models/__init__.py` — Exports: SymbolMapping, CorporateAction, FinancialHistory, EarningsEvent
+- `db/migrations/env.py` — All 4 new model modules imported for Alembic autogenerate
+
+### Refactor & Test Hardening (2026-03-04 — Pre-V2 Readiness)
+
+**Bug Fixes:**
+- `backend/api/routes/system.py` — Removed `.decode()` calls on Redis values (Redis uses `decode_responses=True`, returns strings not bytes). `/api/system/celery-stats` was crashing with `AttributeError: 'str' object has no attribute 'decode'`.
+- `frontend/src/components/dashboard/AlertsNearTarget.tsx` — Fixed `key={i}` → `key={symbol-condition}` for stable React list rendering.
+
+**New Test Coverage (101 new tests, all passing):**
+- `tests/test_symbol_utils.py` — 39 tests: normalize_for_yahoo, denormalize, detect_market (16 markets), is_thai_stock, is_fund, partition_by_market, deduplicate
+- `tests/test_cache_keys.py` — 13 tests: all 10 key builders, lock wrapping, key format consistency, no collisions
+- `tests/test_screener_indicators.py` — 35 tests: RSI (6 edge cases), MACD (7 edge cases inc. IndexError regression), SMA, signals, all 4 filter matchers
+- `tests/test_services.py` — 14 tests: stock_service facade (read_quote, read_fundamentals, search_stocks with cache hit/miss/error), cache key usage verification, TF_CONFIG completeness, facade re-exports
+
+**Verification Completed:**
+- All 10 API endpoints smoke tested via host gateway (health, ready, celery-stats, search, quote, batch quotes, history, fundamentals, screener, dashboard)
+- Celery patterns verified: no `.apply().get()` inside tasks (only in comments as warnings)
+- MarketType enum verified: 16 markets (SET, US, FUND, JP, CN, HK, UK, DE, FR, NL, KR, AU, CA, TW, SG, IT)
+- Frontend static analysis: 0 memory leaks, 0 SSR issues, 0 circular imports, 0 stale request risks
+- CQRS pattern confirmed: all API endpoints pure-read, Celery workers sole ingesters
+
+### Added (2026-03-04 — V2 System Analysis & Handoff Documents)
+
+**V2_DEV_SPEC.md** — Technical specification สำหรับ developer:
+- Gap analysis V1 vs V2 requirements (12 features, 4 phases)
+- Database schema สำหรับ 6 new tables (symbol_mappings, corporate_actions, financial_history, earnings_events, document_embeddings)
+- New API endpoints (8 endpoints), New Celery workers (4 workers)
+- Docker service changes (Flower + pgvector), breaking changes + migration plan
+- 8-week implementation roadmap
+
+**V2_QA_PLAN.md** — QA test plan:
+- 60+ test cases ครอบคลุมทุก feature ใน 4 phases
+- Acceptance criteria per feature
+- Regression checklist สำหรับ V1 features
+- Performance benchmarks (API, Frontend, Celery)
+- Known risk areas + bug report template
+
 ### Fixed (2026-03-03 — Intraday timeframe full fix: end-to-end data flow)
 
 **backend/api/routes/stocks.py — `timeframe` query param name mismatch:**

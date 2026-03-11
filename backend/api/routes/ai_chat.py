@@ -192,20 +192,66 @@ async def _fetch_watchlist_context(user: User | None, db: AsyncSession) -> str:
         return ""
 
 
+async def _fetch_rag_context(query: str, symbol: str | None) -> str:
+    """Fetch semantically similar documents for RAG context injection.
+
+    Capped at 3s total — if embedding or pgvector is slow, we skip RAG
+    rather than delaying the chat response.
+
+    Args:
+        query: User's latest message
+        symbol: Current chart symbol (optional)
+
+    Returns:
+        Formatted RAG context, or empty string if unavailable/slow
+    """
+    try:
+        # Quick check: skip if no embeddings exist yet (avoid slow Ollama call)
+        r = await stock_service.get_redis()
+        embed_count = await r.get("worker:embedding:last_success_at")
+        if not embed_count:
+            return ""  # Embedding worker hasn't run yet, no docs to search
+
+        from services.embedding_service import search_similar
+
+        docs = await asyncio.wait_for(
+            search_similar(query, symbol=symbol, k=3),
+            timeout=3.0,
+        )
+        if not docs:
+            return ""
+
+        rag_parts = ["\nข้อมูลที่เกี่ยวข้อง (จากฐานข้อมูล):"]
+        for doc in docs:
+            if doc.similarity < 0.3:  # Skip low-relevance results
+                continue
+            source_label = {"news": "ข่าว", "earnings": "ผลประกอบการ", "financials": "งบการเงิน"}.get(doc.source, doc.source)
+            rag_parts.append(f"  [{source_label}] {doc.content[:500]}")
+
+        return "\n".join(rag_parts) if len(rag_parts) > 1 else ""
+    except asyncio.TimeoutError:
+        logger.debug("RAG search timed out (3s), skipping")
+        return ""
+    except Exception:
+        return ""
+
+
 async def _build_context(
     user: User | None,
     symbol: str | None,
     db: AsyncSession,
+    user_query: str = "",
 ) -> str:
     """Build rich context string for the LLM system prompt.
 
-    Fetches quote, fundamentals, portfolio, and watchlist data.
+    Fetches quote, fundamentals, portfolio, watchlist, and RAG data.
     Uses cache-only reads to avoid blocking chat responses.
 
     Args:
         user: Current user (may be None for guests)
         symbol: Current chart symbol (optional)
         db: Database session
+        user_query: Latest user message for RAG search
 
     Returns:
         Complete context string for LLM system prompt
@@ -235,6 +281,12 @@ async def _build_context(
     if watchlist_ctx:
         ctx_parts.append(watchlist_ctx)
 
+    # RAG: inject semantically similar documents from pgvector
+    if user_query:
+        rag_ctx = await _fetch_rag_context(user_query, symbol)
+        if rag_ctx:
+            ctx_parts.append(rag_ctx)
+
     return "\n".join(ctx_parts)
 
 
@@ -253,7 +305,14 @@ async def chat(
             detail="AI assistant ยังไม่พร้อมใช้งาน กรุณาตั้งค่า OLLAMA_URL ใน .env"
         )
 
-    context = await _build_context(user, body.symbol, db)
+    # Extract latest user message for RAG search
+    user_query = ""
+    for msg in reversed(body.messages):
+        if msg.role == "user":
+            user_query = msg.content
+            break
+
+    context = await _build_context(user, body.symbol, db, user_query=user_query)
 
     # Build message list with system prompt
     messages = [{"role": "system", "content": context}]
@@ -343,7 +402,8 @@ async def chat(
             except httpx.TimeoutException:
                 yield f"data: {json.dumps({'error': 'Ollama ใช้เวลานานเกินไป — กรุณาลองใหม่', 'done': True})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'error': str(e), 'done': True})}\n\n"
+                logger.error("SSE stream error", error=str(e), exc_info=True)
+                yield f"data: {json.dumps({'error': 'เกิดข้อผิดพลาดภายในระบบ — กรุณาลองใหม่', 'done': True})}\n\n"
 
     return StreamingResponse(
         stream_ollama(),

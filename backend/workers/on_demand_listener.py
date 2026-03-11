@@ -11,6 +11,9 @@ from core import cache_keys
 
 logger = get_logger(__name__)
 
+import re
+_VALID_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
+
 # ─── Yahoo Finance symbol normalization ──────────────────────────────────────
 YAHOO_SYMBOL_MAP = {
     "BRK.B": "BRK-B",
@@ -57,6 +60,12 @@ def process_fetch_request(
         data_type: Type of data to fetch — "quote", "history", "fundamentals", or "all"
         timeframe: For history requests, specifies timeframe (e.g., "1h", "4h", "1D")
     """
+    # Validate symbol to prevent abuse (garbage symbols, injection, DoS)
+    sym_upper = symbol.upper().strip()
+    if not _VALID_SYMBOL_RE.match(sym_upper):
+        logger.warning("Invalid symbol rejected by on-demand listener", symbol=symbol)
+        return
+
     start = time.time()
     try:
         import redis

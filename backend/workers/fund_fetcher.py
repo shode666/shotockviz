@@ -24,6 +24,13 @@ from core import cache_keys
 
 logger = get_logger(__name__)
 
+import re
+_SAFE_SYMBOL_RE = re.compile(r'^[A-Za-z0-9&\s._\-]{1,50}$')
+
+def _validate_symbol(symbol: str) -> bool:
+    """Return True if symbol contains only safe characters."""
+    return bool(_SAFE_SYMBOL_RE.match(symbol))
+
 # ── SEC Open Data API endpoints ─────────────────────────────────────────────
 SEC_AMC_LIST_URL = "https://api.sec.or.th/FundFactsheet/fund/amc"
 SEC_AMC_FUNDS_URL = "https://api.sec.or.th/FundFactsheet/fund/amc/{unique_id}"
@@ -201,9 +208,15 @@ def _fetch_nav_finnomena(symbol: str) -> dict | None:
     """
     import requests
 
+    if not _validate_symbol(symbol):
+        logger.warning("Invalid fund symbol rejected", symbol=symbol)
+        return None
+
     try:
+        from urllib.parse import quote as url_quote
+        safe_symbol = url_quote(symbol, safe='')
         # Try Finnomena's fund detail page API
-        url = f"https://www.finnomena.com/fn3/api/fund/{symbol}/nav/q?range=1D"
+        url = f"https://www.finnomena.com/fn3/api/fund/{safe_symbol}/nav/q?range=1D"
         resp = requests.get(url, timeout=10, headers={"Accept": "application/json"})
         if resp.status_code == 200:
             data = resp.json()

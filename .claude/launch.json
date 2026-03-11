@@ -11,7 +11,8 @@
       "name": "docker-dev",
       "runtimeExecutable": "docker",
       "runtimeArgs": ["compose", "-f", "docker-compose.dev.yml", "up"],
-      "port": 80
+      "port": 80,
+      "autoPort": false
     }
   ]
 }

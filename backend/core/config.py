@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -19,6 +20,20 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 480   # 8 hours — avoids constant re-logins in dev
     refresh_token_expire_days: int = 30      # 30 days — stays logged in across restarts
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def _check_jwt_secret(cls, v: str) -> str:
+        import warnings
+        if v == "dev-secret-key-change-in-prod":
+            warnings.warn(
+                "JWT_SECRET_KEY is using the default dev value! "
+                "Set a strong, unique JWT_SECRET_KEY in .env for production.",
+                stacklevel=2,
+            )
+        if len(v) < 16:
+            raise ValueError("JWT_SECRET_KEY must be at least 16 characters")
+        return v
 
     # APIs
     finnhub_api_key: str = ""

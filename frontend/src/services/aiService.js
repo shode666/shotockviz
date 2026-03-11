@@ -1,4 +1,5 @@
 import api from './api';
+import { useAuthStore } from '@/store/authStore';
 
 const aiService = {
     /** Non-streaming chat (returns full response) */
@@ -24,7 +25,7 @@ const aiService = {
      *  - SSE keepalive comments (": keepalive") from backend are silently ignored.
      */
     chatStream: async (messages, symbol = null, model = 'llama3.2', onChunk, onDone) => {
-        const token = localStorage.getItem('access_token');
+        const token = useAuthStore.getState().token;
 
         // ── AbortController — 5-minute hard timeout ───────────────────────────
         const controller = new AbortController();
