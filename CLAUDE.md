@@ -40,6 +40,49 @@ docker-compose -f docker-compose.dev.yml exec backend bash  # Shell into contain
 docker-compose -f docker-compose.dev.yml down            # Stop all
 ```
 
+## Production Deployment
+
+**Server:** DigitalOcean droplet shared with ShoDe Town (`town.shode.dev`). Caddy is managed by ShoDe Town — ShotockViz does NOT run its own Caddy.
+
+**Domain:** `stock.shode.dev` → A record to droplet IP. SSH via `Host do` alias.
+
+```bash
+# Deploy (rsync + build + up + migrate + healthcheck)
+bash scripts/deploy.sh
+
+# Check status
+ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml ps'
+
+# Backend logs
+ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml logs backend --tail=50'
+
+# Celery logs
+ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml logs celery-worker --tail=30'
+
+# DB shell
+ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml exec db psql -U stockviz -d stockviz_prod'
+
+# Run migrations
+ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml run --rm backend alembic upgrade head'
+```
+
+**Architecture:**
+```
+Client → [ShoDe Town Caddy :443] (shared-proxy network)
+  ├─ town.shode.dev  → ShoDe Town
+  └─ stock.shode.dev → ShotockViz
+      ├─ /api/ws/*   → stockviz-backend:8000 (WebSocket)
+      ├─ /api/ai/*   → stockviz-backend:8000 (SSE)
+      ├─ /api/*      → stockviz-backend:8000 (REST)
+      └─ /*          → stockviz-frontend:3000 (Nitro SSR)
+```
+
+**Prod `.env`:** `/root/shotockviz/.env` — must have `GOOGLE_CLIENT_ID`, `VITE_GOOGLE_CLIENT_ID`, `JWT_SECRET_KEY`, `DATABASE_URL` (asyncpg), etc. See `docs/deploy.md` for full list.
+
+**⚠️ VITE_* vars are build-time only** — changing them requires `docker compose build frontend`, not just restart.
+
+**Resource Limits:** Backend 1 CPU/512M, Celery 0.5 CPU/256M each, Frontend 0.5 CPU/256M. Total ~1.9GB RAM.
+
 ## Project Structure (Key Files)
 
 ```
