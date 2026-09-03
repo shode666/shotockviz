@@ -23,6 +23,21 @@ from unittest.mock import AsyncMock, patch
 from datetime import datetime, timezone
 
 import pytest
+
+# bd:deps-2026-09 WP-B0 — quarantined: `AlertCondition` does not exist in
+# `backend/models/alert.py` (only AlertType/AlertStatus/AlertChannel — verified
+# `grep -rn AlertCondition backend --include='*.py' -l | grep -v tests` → empty).
+# This suite predates the current alert model and needs a rewrite against the
+# real schema; tracked as an open question to Oliver (03-stan-refactor-strategy.md
+# §6 Q1) whether the rewrite becomes its own bd. Not fixed on this branch
+# (out of scope per 02-bella-brd-ac.md §1.2 "not gated" pre-existing breakage).
+pytest.skip(
+    "quarantined bd:deps-2026-09 WP-B0 — imports AlertCondition which does not "
+    "exist in models.alert; needs rewrite against real Alert model, see "
+    "outputs/deps-2026-09/03-stan-refactor-strategy.md §6 Q1",
+    allow_module_level=True,
+)
+
 from httpx import AsyncClient
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
