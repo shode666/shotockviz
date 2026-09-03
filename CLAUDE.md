@@ -42,6 +42,11 @@ docker-compose -f docker-compose.dev.yml down            # Stop all
 
 ## Production Deployment
 
+> **New standalone droplet (188.166.234.146) via GitHub Actions → GHCR → server pull** —
+> see `docs/deploy-gha.md`, `.github/workflows/deploy.yml`, `docker-compose.ghcr.yml`.
+> The section below still describes the OLD shared-droplet flow (`docs/deploy.md`,
+> `scripts/deploy.sh`, `docker-compose.prod.yml`) — unchanged, kept for that droplet.
+
 **Server:** DigitalOcean droplet shared with ShoDe Town (`town.shode.dev`). Caddy is managed by ShoDe Town — ShotockViz does NOT run its own Caddy.
 
 **Domain:** `stock.shode.dev` → A record to droplet IP. SSH via `Host do` alias.
