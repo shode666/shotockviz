@@ -16,10 +16,18 @@
  *  - Empty message is not sent
  *  - When Ollama unavailable (available=false) panel is null-rendered
  */
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { mockStockAPIs, mockAIChat, MOCK_AI_MODELS } from './helpers/mocks';
 
-async function setupWithAI(page: any) {
+// bd:deps-2026-09 iter1 (Q-7) — was `setupWithAI(page: any)`, a raw Page
+// param. `test.beforeEach(setupWithAI)` (used 3x below) calls its
+// handler with Playwright's own fixtures OBJECT as the first arg
+// ({page, ...}), not a bare Page — current Playwright enforces
+// destructuring at collection time for that call shape, so the whole
+// file (12 tests) couldn't even collect. Confirmed pre-existing/
+// zero-diff-from-baseline: `git diff 73fac00..HEAD -- tests/e2e/ai-chat
+// .spec.ts` -> empty (Quinn's review, Finding Q-7).
+async function setupWithAI({ page }: { page: Page }) {
   await page.addInitScript(() => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('refresh_token');
@@ -34,7 +42,7 @@ async function setupWithAI(page: any) {
 
 test.describe('AI Chat Panel — availability', () => {
   test('AI button is visible when Ollama is available', async ({ page }) => {
-    await setupWithAI(page);
+    await setupWithAI({ page });
     // The floating AI button appears bottom-right
     const aiBtn = page.locator('button[title="AI Assistant"]');
     await expect(aiBtn).toBeVisible({ timeout: 5_000 });
