@@ -272,3 +272,163 @@ Convergent with `14-chris-review.md`: Q-1↔CHRIS-01, Q-2↔CHRIS-02, Q-3↔(cit
 ## Sign-off
 - Quinn: FAIL, 2026-09-03 (Phase 3b) — corroborates Chris's independent FAIL verdict via a different method (own-run integration + live E2E, not static/unit)
 - Handoff: `Quinn ▸ Dave : Q-1..Q-9 (bd deps-2026-09) — Phase 2 fix, then re-run both tests/api (working DB) and this E2E suite before next review pass`
+
+---
+
+# § iter 1 re-verify
+
+bd: deps-2026-09 · phase 3b re-verify · iter 1 · role: Quinn (adversarial)
+Branch `chore/deps-2026-09`, Dave's iter1 fix pack (`d123c81, 110c1e8, e053c17, 3ca1a73, c2e2e40, e3d46bf, ca6b6af, df98204`, log `16-dave-iter1-fixes.md`), plus Chris's own parallel iter1 re-verify already landed on the branch (`8d1f180`, appended to `14-chris-review.md`, verdict FAIL — new finding CHRIS-16). HEAD for this re-verify: `8d1f180`.
+Method: **own-run only, own-built baseline**. Chris's `§ iter 1 re-verify` was read for orientation (not trusted) — every claim re-executed independently below, including a *second, fresh* `73fac00` worktree/venv/frontend-build built from scratch this session (the iter0 one had already been torn down) so both my `tests/api` and my E2E baseline comparisons are against a real, freshly-built pre-migration artifact, not a cached one.
+
+## Verdict: **FAIL** — 1 High-severity finding open (Q-10, converges independently with CHRIS-16), all other Q-1..Q-9 findings close clean
+
+## Item 1 — `tests/api`, 3× reproducibility + full 26-failure classification
+
+3 back-to-back runs, byte-identical:
+```
+run1: 26 failed, 212 passed, 5 warnings in 51.49s
+run2: 26 failed, 212 passed, 5 warnings in 51.18s
+run3: 26 failed, 212 passed, 5 warnings in 51.47s
+```
+`diff` on the 3 runs' `FAILED` test-ID lists: **run1==run2==run3, identical set, 26 IDs.** **Q-4 (event_loop cross-loop bug) CLOSED** — was non-reproducible (3 different totals) at iter0, now byte-identical 3/3.
+
+Classification against a **fresh** `73fac00` worktree (`/home/claude/wt-quinn-baseline`, new `uv venv`, `uv pip install -r backend/requirements.txt -r tests/api/requirements.txt`, same live Postgres/Redis, same env vars): baseline itself is **still non-reproducible** (run1: 33F/153P/34E, run2: 35F/151P/34E — the pre-fix `event_loop` bug, confirmed present at baseline exactly as expected). Took the **union** of both baseline runs' FAILED+ERROR test IDs (72 unique) and compared against HEAD's 26:
+```
+comm -12 head_ids.txt baseline_union_ids.txt | wc -l   -> 26   (ALL 26 present in baseline)
+comm -23 head_ids.txt baseline_union_ids.txt            -> (empty — zero HEAD-only IDs)
+```
+Then re-ran the exact same 26 test IDs at baseline with `--tb=line` and diffed failure *reasons* (not just IDs) against HEAD's: every one matches — same `AttributeError` on the same removed/renamed attributes (`_run_screener`, `_fetch_yahoo_direct`, `_get_yf_auth`, `_load_bars_from_db`, `fetch_stock_quote` — all confirmed absent at baseline too via the same mock-target-not-found error), same `assert 200 == 400`/`assert 200 == 404`/`assert 503 == 200`/`assert '1D' == '1W'` assertion mismatches, same `feedparser.parse was not called`. **All 26 = pre-existing-identical-at-73fac00, proven by re-running the identical baseline binary, not just diffing source. Zero NEW.**
+
+## Item 2 — `test_contract_v1.py` + `openapi-v1.json`
+
+```
+$ pytest -q test_contract_v1.py
+collected 23 items
+test_contract_v1.py .......................              [100%]
+======================== 23 passed, 2 warnings in 8.31s ========================
+```
+**23/23 pass** (file has 23 tests total, not 25 — correcting my own iter0 report's count). Runs clean as a **whole-file** run now (Q-4's fix removed the need for the individual-test workaround from iter0).
+
+**Note (transparency, not a blocker):** Dave's `110c1e8` touched this file twice — fastapi 0.141.1/starlette 1.6.0 changed `include_router()` to a lazy wrapper that broke my `_iter_api_routes` route-introspection helper (fixed by switching to `app.openapi()["paths"]`), and one parametrize case (`GET /api/v1/watchlists` → `POST`) that only ever "passed" pre-fix because of the exact CHRIS-04/Q-5 bug being fixed in the same commit (a valid authed `GET` legitimately returns `200`, not an error, so it never belonged in the error-envelope test in the first place). Outside the delegation's stated "hands off Quinn's files" scope, but well-justified and independently re-verified correct by my own-run above — not re-litigating, just flagging.
+
+`openapi-v1.json` — live `/openapi.json` (fresh `uvicorn` boot, port 8020) diffed structurally against the committed `outputs/deps-2026-09/openapi-v1.json` (updated by Dave's `c2e2e40`):
+```
+LIVE      200 schema: {"type":"object","properties":{"data":{},"meta":{"$ref":"#/components/schemas/ResponseMeta"}},"required":["data","meta"]}
+COMMITTED 200 schema: (byte-identical, key order differs only)
+LIVE/COMMITTED 422 schema: {"$ref": "#/components/schemas/ErrorEnvelope"} (both)
+live paths=43, committed paths=43 (match)
+```
+**CHRIS-06/contract regeneration CONFIRMED CLOSED** — committed file matches the live app exactly, envelope + error/422 shapes both correct.
+
+## Item 3 — E2E live run + 69-classification re-verify
+
+Rebuilt the frontend fresh (`npm run build`, HEAD). First build used the default `VITE_API_URL=http://backend:8000` (Docker-hostname, unreachable here) — caught this before running (`grep backend:8000 .output/server/index.mjs`), rebuilt with `VITE_API_URL=http://127.0.0.1:8020` pointed at my own live HEAD `uvicorn`, confirmed the proxy resolves (`curl :3000/api/health` → `200`, real envelope body) before running the suite.
+
+```
+$ BASE_URL=http://127.0.0.1:3000 playwright test -c playwright.quinn.config.ts --reporter=list
+Running 194 tests using 1 worker
+...
+79 failed
+115 passed (18.9m)
+```
+**194 total** (was 180 in iter0 — **+14 ai-chat.spec.ts, now collecting and executing: Q-7 CLOSED at the collection level**). Per-file (own-run, this session):
+```
+ai-chat 6/14 · alerts 7/15 · auth 5/7 · chart 8/12 · chart-timeframes 15/20 · health 3/3
+navigation 14/16 · portfolio 4/12 · quote-fetch 8/12 · screener 16/18 · search 3/14
+settings 1/16 · sidebar 13/14 · timeout 3/6 · watchlist-autocomplete 9/15
+```
+**health.spec.ts: 3/3 PASS, live** — CHRIS-12/Q-6 confirmed closed against a real running backend, not just at source.
+
+**Correction to my own iter0 §3.2 table**: several per-file *totals* were undercounted there (e.g. chart-timeframes 13→20, navigation 12→16, screener 13→18, sidebar 9→14, search 12→14) — root cause: files using repeated `test.describe.each`/parametrized blocks at one `line:col` (e.g. `chart-timeframes.spec.ts:138:9` × 5 distinct indicator-toggle tests) weren't fully enumerated by my original manual transcription. Not a regression, a self-correction; this session's exported pass/fail-by-test-ID data is authoritative going forward.
+
+**69-classification re-verify — built and ran the REAL `73fac00` baseline live** (not git-diff reasoning alone, which is all Dave's `df98204` had access to, no Docker there either): fresh `npm install` + `VITE_API_URL=http://127.0.0.1:8020 npm run build` in the baseline worktree, served on port 3001, ran the identical 13 non-ai-chat/non-health spec files (`ai-chat.spec.ts` excluded — see below):
+```
+Running 177 tests using 1 worker
+...
+72 failed
+105 passed (14.7m)
+```
+Diffed HEAD's 79 failing test IDs against this **live baseline's** 72 failing test IDs by exact name+description string:
+```
+HEAD-fail tests NOT in BASE-fail set: 8   (all 8 are ai-chat.spec.ts — see below)
+```
+**71 of 79 HEAD failures are byte-identical test-ID matches against a live-executed 73fac00 baseline** — pre-existing-identical, proven stronger than the requested "spot-check ≥10" (full live diff, not sampling). Zero new regressions in the 13 classic spec files.
+
+**ai-chat.spec.ts's 8 failures**: baseline could never execute this file — running baseline's full suite un-excluded crashes at collection with `First argument must use the object destructuring pattern: page` at `ai-chat.spec.ts:68`, **the exact same Q-7 bug, byte-identical, confirmed present in the 73fac00 source** (own-run reproduction, not inference). Dave's `df98204` fix only destructures the parameter to unblock *collection* — it touches zero assertion logic. Spot-checked 1 of the 8 (`clicking chevron-down closes the panel`): root cause is a fragile locator, `page.locator('[style*="bottom: 52"]')` — matching on an inline-CSS-string substring, the same class of locator-fragility (violates this project's own "`data-testid` > ARIA > text" rule) seen driving many of the other 71 failures elsewhere in the suite. Not individually root-caused for the remaining 7 (time-boxed), but classification holds: **pre-existing test debt, first-ever execution, not a migration or fix-caused regression.**
+
+**Total E2E NEW failures this iteration: 0.**
+
+## Item 4 — rate-limit 429 envelope + trusted-proxy, live `uvicorn` curl
+
+**429 envelope — CLOSED.** 6 rapid `POST /api/v1/auth/google` (no XFF, same origin):
+```
+attempt 1-5: HTTP:503
+attempt 6:   HTTP:429
+body: {"data":null,"meta":{"request_id":"...","data_status":"unavailable",...,"error":{"message":"Too many login attempts. Try again in 900 seconds."}}}
+```
+Proper enveloped JSON, not the raw non-JSON 500 from iter0. **CHRIS-02/Q-2 CONFIRMED CLOSED.**
+
+**Trusted-proxy — REPRODUCED OPEN, independently.** `trusted_proxies_list` confirmed `[]` by default (`python -c "from core.config import settings; print(settings.trusted_proxies_list)"`). Flushed the rate-limit key, then 6 requests each with a **distinct** spoofed `X-Forwarded-For` (`10.0.0.1`..`10.0.0.6`) from loopback:
+```
+attempt 1-6 (XFF=10.0.0.1..6): HTTP:503 (never 429)
+$ redis-cli keys "rate:login:*"
+rate:login:10.0.0.1
+rate:login:10.0.0.2
+rate:login:10.0.0.3
+rate:login:10.0.0.4
+rate:login:10.0.0.5
+rate:login:10.0.0.6
+```
+6 separate buckets keyed by the **attacker-controlled spoofed IP**, not the real peer — the bypass CHRIS-03's app-level fix was supposed to close still works end-to-end over a real socket. Root cause confirmed independently:
+```
+$ python -c "import uvicorn; c=uvicorn.config.Config(app='main:app'); print(c.proxy_headers, c.forwarded_allow_ips)"
+True 127.0.0.1
+```
+uvicorn 0.52.4's own default (`proxy_headers=True, forwarded_allow_ips="127.0.0.1"`) rewrites `scope["client"]` from the spoofed XFF at the ASGI layer, **before** the app-level `TRUSTED_PROXIES` check ever runs, whenever the connecting peer is loopback — true of every environment used across this entire engagement (dev, this sandbox, and per `grep -rn "proxy.headers\|forwarded.allow.ips" docker-compose*.yml backend/Dockerfile*` → zero results, no override anywhere in any of the 3 compose files or the Dockerfile).
+
+**Finding Q-10 (High, NEW this iteration, independently converges with Chris's CHRIS-16)** — same root cause, same reproduction method (live-uvicorn curl, not `TestClient`), found via my own separate methodology before reading Chris's report in detail. Per house rule ("security finding present = block merge") and Sentinel's threat model (AB-2/AB-6), this alone keeps my verdict at FAIL. Fix/route: same as CHRIS-16 — Dave (Phase 2, pin `--proxy-headers=false`/`forwarded_allow_ips=""` on every uvicorn/gunicorn invocation across all 3 compose files, or explicitly document+accept the loopback trust boundary and correct `rate_limit.py`'s now-inaccurate docstring), escalate to Sentinel for deployment-topology verification.
+
+## Item 5 — WS/pub-sub smoke (AC-M7), re-run on HEAD
+
+```
+PING-> {"type":"pong"}
+SUBSCRIBE-> {"type":"subscribed","symbol":"AAPL"}
+MALFORMED-> {"type":"error","message":"Invalid JSON"}
+PUBSUB-BRIDGE-> {"type":"price_update","symbol":"AAPL","price":123.45}
+```
+**Full PASS, byte-identical to iter0.** AC-B8 + AC-M7 remain fully confirmed, no regression.
+
+## Q-1..Q-9 disposition summary
+
+| ID | iter0 sev | iter1 disposition |
+|---|---|---|
+| Q-1 | 🔴 Critical | **CLOSED** — 17 iter0-new failures resolved by the fixture rewrite; current 26 tests/api failures are a different, now-fully-reclassified set, all pre-existing-identical (Item 1 above) |
+| Q-2 | 🟠 High | **CLOSED** (429 envelope) — see Item 4. Superseded by new Q-10 for the trusted-proxy half |
+| Q-3 | 🟡 Medium | **CLOSED** — `app_client`/`client`/`auth_headers` engine unification (Dave's `110c1e8`), confirmed via clean `test_admin_authz.py`/contract-test runs |
+| Q-4 | 🟡 Medium | **CLOSED** — reproducibility confirmed 3/3 (Item 1) |
+| Q-5 | 🟡 Medium | **CLOSED** — `StaticPool` + forced `models` import in conftest.py; my file's own workaround is now redundant but harmless (untouched, out of scope to remove) |
+| Q-6 | 🟡 Medium | **CLOSED** — health.spec.ts live 3/3 pass (Item 3), corroborates CHRIS-12 |
+| Q-7 | 🟡 Medium | **CLOSED at collection** — ai-chat.spec.ts now executes (14 tests); 8 internal failures reclassified as pre-existing test debt, not re-opening Q-7 |
+| Q-8 | 🟡 Medium | **CLOSED / upgraded to certainty** — 69 pre-existing claim now proven via live baseline execution (71 exact matches, Item 3), not just git-diff inference |
+| Q-9 | 🔵 Low | **NO CHANGE** — CI/tests/e2e node_modules gap, Aaron's territory, not re-checked this iteration (informational, unaffected by this fix pack) |
+
+**NEW this iteration: Q-10 (High)** — see Item 4.
+
+## Not runnable here (iter1, ≤3 lines)
+
+1. Docker build/boot/healthcheck cycle — still no Docker daemon in this sandbox, unchanged constraint.
+2. Warm-cache/Celery-backed perf (AC-C1/C2) — still no reachable yfinance network or live Celery worker; not re-attempted this iteration (iter0's caveat stands).
+3. Full individual root-cause of all 71+8 pre-existing E2E failures — classification is proven (byte-identical test IDs against a live baseline, Item 3), but not every one individually root-caused; recommend a dedicated follow-up bd for locator-fragility cleanup (data-testid migration).
+
+## Artifacts (iter1)
+
+- `tests/api/iter1_head_run{1,2,3}.txt`, `iter1_baseline_run{1,2}.txt` — reproducibility + baseline classification raw output
+- `tests/e2e/iter1_e2e_full2.txt` (HEAD, 194 tests), `iter1_e2e_baseline_run2.txt` (73fac00, 177 tests) — full E2E diff evidence
+- Fresh `73fac00` worktree: `/home/claude/wt-quinn-baseline` (venv + frontend build both rebuilt from scratch this iteration)
+- All raw logs at `/tmp/claude-0/-home-claude/95065622-d12f-5933-9418-0aff975c7c30/scratchpad/iter1_*` (not committed, reference only, per iter0's same convention)
+- This report: `outputs/deps-2026-09/15-quinn-review.md`
+
+## Sign-off (iter1)
+- Quinn: **FAIL**, 2026-09-03 (Phase 3b iter1) — Q-1..Q-9 all closed or reclassified with stronger own-run evidence than iter0; **Q-10 (High)** newly found via live-uvicorn curl, independently converges with Chris's CHRIS-16 (same root cause, same fix). Blocks merge until Dave closes it.
+- Handoff: `Quinn ▸ Dave : Q-10/CHRIS-16 (bd deps-2026-09) — Phase 2 fix (uvicorn/gunicorn proxy-header trust across all 3 compose files), then Quinn/Chris re-verify iter2`
