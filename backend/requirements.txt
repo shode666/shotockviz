@@ -20,9 +20,15 @@ redis==8.1.0
 celery==5.6.3
 
 # Auth
+# bd:deps-2026-09 iter1 (CHRIS-05) — passlib[bcrypt] removed: its
+# CryptContext bcrypt backend is unconditionally broken against bcrypt
+# 5.0.0 (probes the removed bcrypt.__about__ submodule; the resulting
+# self-test crash is unrelated to any real password's length). Replaced
+# with direct bcrypt.hashpw() calls in core/security.py — passlib's
+# multi-scheme abstraction was dead weight anyway (bcrypt is the only
+# scheme ever configured here).
 PyJWT==2.13.0
 bcrypt==5.0.0
-passlib[bcrypt]==1.7.4
 google-auth==2.57.0
 python-multipart==0.0.32
 
