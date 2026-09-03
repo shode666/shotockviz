@@ -1,7 +1,9 @@
+import ipaddress
 import time
 from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from core.config import settings
 from core.redis import get_redis as get_shared_redis
 from schemas.envelope import enveloped_error_body
 
@@ -43,21 +45,55 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return await get_shared_redis()
 
     @staticmethod
+    def _is_trusted_proxy(peer_ip: str) -> bool:
+        """True if `peer_ip` (the ACTUAL TCP socket peer — not attacker-
+        controllable) is in `settings.TRUSTED_PROXIES`.
+
+        bd:deps-2026-09 iter1 (CHRIS-03). Entries may be single IPs or
+        CIDR blocks (e.g. a Docker bridge network subnet). Malformed
+        entries are skipped, not fatal — a typo in one entry shouldn't
+        take down the whole allowlist (fails safe: that entry just never
+        matches, defaulting toward "don't trust").
+        """
+        try:
+            peer = ipaddress.ip_address(peer_ip)
+        except ValueError:
+            return False
+        for entry in settings.trusted_proxies_list:
+            try:
+                if "/" in entry:
+                    if peer in ipaddress.ip_network(entry, strict=False):
+                        return True
+                elif peer == ipaddress.ip_address(entry):
+                    return True
+            except ValueError:
+                continue
+        return False
+
+    @staticmethod
     def _client_ip(request: Request) -> str:
         """Real client IP behind Caddy (bd:deps-2026-09 S2, Sentinel S-AC-4).
 
-        Caddy (`caddy/Caddyfile:47`) is the ONLY reverse proxy in front of
-        this service (single hop, Docker network) and always sets
-        X-Forwarded-For — trust its first value. Without this, gunicorn/
-        uvicorn see every request as coming from the Caddy container's IP
-        (single global bucket — SEC-2/AB-2: one attacker locks out every
-        user). Falls back to the raw ASGI peer when no header is present
-        (e.g. direct connection in dev, no Caddy in front).
+        bd:deps-2026-09 iter1 (CHRIS-03) — was: trust the FIRST
+        X-Forwarded-For value unconditionally, with no check that the
+        request actually arrived via Caddy. `docker-compose.dev.yml`
+        exposes the backend directly on the host (`8000:8000`) alongside
+        Caddy; any caller that reaches that port directly can set
+        `X-Forwarded-For: <anything>` and get a fresh rate-limit bucket on
+        every request (AB-2/AB-6 bypass — confirmed live via curl, Chris's
+        review CHRIS-03). Now only trusts X-Forwarded-For when the
+        request's ACTUAL socket peer (`request.client.host` — NOT
+        attacker-controllable; you can't fake who opened the TCP
+        connection) is itself a configured trusted proxy
+        (`settings.TRUSTED_PROXIES`, default empty = trust nothing = every
+        request's identity is its raw socket peer, safe by default). See
+        .env.example for sizing this for the Caddy-fronted topology.
         """
+        peer_ip = request.client.host if request.client else None
         xff = request.headers.get("x-forwarded-for")
-        if xff:
+        if xff and peer_ip and RateLimitMiddleware._is_trusted_proxy(peer_ip):
             return xff.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        return peer_ip or "unknown"
 
     async def dispatch(self, request: Request, call_next):
         # bd:deps-2026-09 S2 (ADR-001 r3-2, Sentinel S-AC-3/AB-6) — path

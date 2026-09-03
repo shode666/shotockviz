@@ -62,6 +62,16 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = "http://localhost:5173"
 
+    # bd:deps-2026-09 iter1 (CHRIS-03) — comma-separated list of IPs and/or
+    # CIDR blocks for reverse-proxy hops whose X-Forwarded-For header is
+    # safe to trust. Empty (default) = trust NOTHING; every request's rate
+    # -limit/client-IP identity falls back to the raw ASGI socket peer
+    # (request.client.host), which a remote caller cannot spoof — safest
+    # possible default. See .env.example for how to size this for the
+    # Caddy-fronted deployment topology (api/middleware/rate_limit.py's
+    # _is_trusted_proxy()).
+    trusted_proxies: str = ""
+
     # Timezone
     tz: str = "Asia/Bangkok"
 
@@ -74,6 +84,10 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",")]
+
+    @property
+    def trusted_proxies_list(self) -> list[str]:
+        return [p.strip() for p in self.trusted_proxies.split(",") if p.strip()]
 
     @property
     def is_production(self) -> bool:
