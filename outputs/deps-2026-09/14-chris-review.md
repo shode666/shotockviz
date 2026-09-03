@@ -398,3 +398,128 @@ All 3 mutations reverted immediately after proof (confirmed `git diff` clean on 
 ## Standards axis summary
 
 10 High-or-above findings, 7 Medium, 2 Low. Worst: CHRIS-01 (Critical) — non-reproducible test suite undermines the entire migration's regression-detection claim.
+
+---
+
+# § iter 1 re-verify
+
+bd: deps-2026-09 · phase 3b re-verify · iter 1 · role: Chris (adversarial)
+Branch `chore/deps-2026-09`, Dave's 8-commit fix pack (`d123c81, 110c1e8, e053c17, 3ca1a73, c2e2e40, e3d46bf, ca6b6af, df98204`, log `16-dave-iter1-fixes.md`) + evidence-log commit `7fee746`.
+Method: **own-run only** — Dave's pasted evidence in `16-dave-iter1-fixes.md` was read for orientation, then every claim independently re-executed (pytest, live curl against a real `uvicorn` boot, live `mypy`/`pip-audit`/`npm audit`/`tsc`/`npm run build`, hand-mutation on the 4 named changed areas). Toolchain: `.venv` py3.13.7, Node 24.20.0, live Postgres 16 + Redis 7 on localhost, no Docker daemon (confirmed absent again this session — same constraint as the original review and as Dave's own session).
+
+## Verdict: **FAIL** — block merge (1 new High finding; 13 of 15 original findings closed clean)
+
+Dave's fix pack is **substantially correct and well-evidenced** — 13 of 15 CHRIS findings close cleanly under independent re-execution, including the Critical (CHRIS-01) and both original blockers I curl-verified live (CHRIS-02, CHRIS-03). However, re-testing CHRIS-03's fix against a **real network boundary** (live `uvicorn`, not `TestClient`) surfaced a new, own-run-evidenced High-severity gap the app-level fix cannot see: **CHRIS-16**, below. Per house rule ("security finding present = block"), this alone keeps the verdict at FAIL. Two pre-existing DoD gaps (Docker never verified by anyone this entire engagement — no daemon available; `changelog.md`/`tasklist.md` never touched) remain open but are tracked, not routed as blockers (consistent with the original review's routing).
+
+## Finding-by-finding disposition (CHRIS-01 .. CHRIS-15)
+
+| ID | Sev | Disposition | Own-run evidence this session |
+|---|---|---|---|
+| CHRIS-01 | 🔴 Critical | **CLOSED** | `tests/api` run twice back-to-back: **26 failed, 210 passed** both times (byte-identical totals) — was non-reproducible (3 different totals) at original review. `import models` line (table-registration fix) confirmed load-bearing via hand-mutation (removed → `no such table: users`, restored → clean). Both `asyncio_default_fixture_loop_scope` and `asyncio_default_test_loop_scope` set to `session` in `tests/api/pytest.ini`, confirmed by grep + live pytest header (`asyncio: mode=Mode.AUTO ... asyncio_default_fixture_loop_scope=session, asyncio_default_test_loop_scope=session`). `backend/tests`: 110 passed / 2 skipped (was 104p/2skip at barrier baseline — +6 net from tests added this branch, no regression). |
+| CHRIS-02 | 🔴 High | **CLOSED** | Live boot + 6 rapid `POST /api/v1/auth/google`: 6th attempt returns `HTTP_CODE:429` with a proper enveloped JSON body (`{"data":null,"meta":{...,"error":{"message":"Too many login attempts..."}}}`), not the raw non-JSON 500 from before. Mutation-killed (see below). |
+| CHRIS-03 | 🔴 High | **CLOSED at app level; see NEW CHRIS-16** | `settings.trusted_proxies_list` confirmed empty by default (own-run `python -c`). Direct unit call: `_client_ip()` with mocked `request.client.host='127.0.0.1'` + spoofed XFF correctly returns `'127.0.0.1'` (ignores XFF), `_is_trusted_proxy('127.0.0.1')` correctly `False`. `TestClient`-based spoofing test (`test_rate_limit_middleware.py::TestRateLimitKeyingNotSpoofable`) now **passes** (was designed to fail pre-fix). Mutation-killed (see below). **However**: a live-network curl test (see CHRIS-16) shows the fix's core assumption — "`request.client.host` is the ACTUAL TCP peer, not attacker-controllable" — is false when the ASGI server itself (uvicorn/gunicorn) trusts loopback by default, a layer below where this fix operates and where `TestClient` can never observe it. |
+| CHRIS-04 | 🟡 (pre-existing, tracked not filed as blocking) | **CLOSED** | Same `import models` + StaticPool fix as CHRIS-01 (same file). `tests/api/test_admin_authz.py`: was 1/7 pass in isolation, now **7/7 pass**. |
+| CHRIS-05 | 🟡 (pre-existing, tracked not filed as blocking) | **CLOSED** | Own-run: `hash_password('TestPass1')` called twice → two distinct `$2b$12$...` hashes (salted, both well-formed). `grep -rn passlib backend --include=*.py` → zero imports left (only a docstring mention). `passlib`/`bcrypt` both absent from `requirements.txt`/`requirements-dev.txt` except `bcrypt==5.0.0`. |
+| CHRIS-06 | 🔴 High | **CLOSED** | Live `/openapi.json`: `GET /api/v1/stocks/{symbol}/quote` → `200` schema is `{type:object, required:[data,meta], properties:{data:{...}, meta:{$ref:ResponseMeta}}}`; `422` schema is `{$ref: ErrorEnvelope}`. `HTTPValidationError` confirmed **unreferenced by any path** (still present as an orphan unused component — cosmetic, not a bug). All 43 `2xx` responses wrapped except 7 legitimate `204 No Content` DELETE endpoints (correctly unwrapped — no body to wrap). No prior test asserted on the OpenAPI document's shape — I added `tests/api/test_openapi_schema_envelope.py` (2 tests, both pass) and used it as the mutation target (killed, see below). |
+| CHRIS-07 | 🟡 Medium | **CLOSED** | `.github/workflows/ci.yml`: `uv pip install -r requirements-dev.txt --system` present (was `-r requirements.txt` alone), `node-version: '24'` present (was `'20'`), artifact `path: frontend/.output/` present (was `frontend/dist/`), `APP_ENV: test` env var present (was dead `ENVIRONMENT`). Trigger still `workflow_dispatch` only (unchanged, confirmed). `python3 -c "import yaml; yaml.safe_load(...)"` → valid. |
+| CHRIS-08 | 🟡 Medium (informational, no action taken by design) | **NO CHANGE — as expected** | Dave's log documents "no action" for this one (curl_cffi remains a mandatory transitive dep; still a live-stack verification gate for Quinn/Oliver, not a code fix). Consistent with original finding's own routing. |
+| CHRIS-09 | 🟡 Medium | **CLOSED** | `.env.example`'s placeholder (`change-me-with-openssl-rand-hex-32`) now in `_KNOWN_PLACEHOLDER_SECRETS` alongside the original. Own-run: `APP_ENV=production JWT_SECRET_KEY=change-me-with-openssl-rand-hex-32 python -c "from core.config import Settings; Settings()"` → raises `ValidationError` (both placeholders tested, both raise in production; both only warn in dev, confirmed by `app_env` gate logic). |
+| CHRIS-10 | 🟡 Medium | **CLOSED** | `grep -n "CHRIS-10" backend/api/routes/portfolio.py backend/api/routes/portfolio_performance.py` → cross-reference comment present in both files, explaining the intentional non-merge. |
+| CHRIS-11 | 🟡 Medium | **CLOSED** | `rate_limit.py`'s class docstring now reads "not yet enforced — only the login endpoint below is actually rate-limited today; see CHRIS-11" — no longer claims guest/user rate limits are enforced. |
+| CHRIS-12 | 🟡 Medium | **CLOSED at source level; unexecuted live (same caveat as original)** | `tests/e2e/health.spec.ts` assertion rewritten to match the real `{data:{database,redis,celery},meta}` shape (`expect(body.data).toHaveProperty('database')` etc., `expect(body.data.database).toBe('ok')`), replacing the old non-existent top-level `status` check. Dave could not live-run Playwright against a real backend (no Docker); neither can I, same constraint. This is Quinn's territory for final live E2E proof — flagging the caveat, not re-opening the finding, since the source-level defect Chris originally filed is genuinely fixed. |
+| CHRIS-13 | 🟡 Medium | **CLOSED** | `mypy api core --ignore-missing-imports` (same scope as original) → **112 errors in 16 files** (own-run), down from the 133-error regression I found originally, and now *better* than the pre-migration 120-error B5 checkpoint baseline. |
+| CHRIS-14 | 🔵 Low | **LEFT OPEN — my judgment: acceptable, not a blocker (reaffirmed)** | Dave left this unapplied (compose-file-only fix, no Docker to verify). My original classification was already "flag for cleanup, not a merge blocker" — nothing about this fix pack changes that reasoning: it's a stale/likely-vestigial dev-server-proxy build-arg unrelated to the `/api`→`/api/v1` flip, with the browser's actual API calls going through Caddy directly, not through this proxy path. Reasoning holds; route to next bd iteration as cleanup, do not block on it. |
+| CHRIS-15 | 🔵 Low (informational) | **NO CHANGE** | Not touched this iteration, no re-check needed (informational-only original finding, no action was ever requested). |
+
+## NEW finding — CHRIS-16
+
+### 🟠 CHRIS-16 (High, NEW this iteration) — uvicorn/gunicorn's own default proxy-header trust (`forwarded_allow_ips=127.0.0.1`) bypasses the CHRIS-03 app-level fix one layer down the stack
+
+**Evidence (own-run):** with the app boot fresh (`trusted_proxies_list` confirmed `[]` via `python -c`), live-`uvicorn`-boot curl test, 6 requests each with a **distinct** spoofed `X-Forwarded-For` (`10.0.0.1`..`10.0.0.6`), all returned `422` (validation error, never `429`) — i.e. **the bypass CHRIS-03 was supposed to close still works end-to-end over a real socket.** `redis-cli keys "rate:login:*"` after the run shows **6 separate buckets keyed by the spoofed IPs** (`rate:login:10.0.0.1` .. `rate:login:10.0.0.6`), not one bucket keyed by the real peer.
+
+Root cause: `uvicorn.config.Config` defaults to `proxy_headers=True, forwarded_allow_ips="127.0.0.1"` (confirmed via `Config(app='main:app').proxy_headers` / `.forwarded_allow_ips`, uvicorn 0.46.0). When curl connects from the same host, the TCP peer *is* `127.0.0.1`, which matches uvicorn's default allow-list — so **uvicorn's own ASGI-layer `ProxyHeadersMiddleware` rewrites `scope["client"]` from the spoofed `X-Forwarded-For` before the application ever sees the request.** `rate_limit.py`'s `_client_ip()` docstring claims `request.client.host` is "the ACTUAL TCP socket peer — not attacker-controllable; you can't fake who opened the TCP connection" — **this claim is false** under uvicorn's own defaults whenever the connecting peer is loopback. The app-level `TRUSTED_PROXIES` allowlist (correctly implemented, confirmed by direct unit call and mutation-kill above) never gets a chance to run — uvicorn has already substituted the attacker-controlled value into `request.client.host` itself, so `_is_trusted_proxy()` is checking the wrong (already-spoofed) input. Confirmed `gunicorn.workers.uvicorn.UvicornWorker.CONFIG_KWARGS = {"loop": "asyncio", "http": "h11"}` does **not** override `proxy_headers`/`forwarded_allow_ips`, so the same default applies to the prod command (`gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker`, `docker-compose.prod.yml:65`).
+
+**Why this didn't get caught by any test in this branch, including mine:** `TestClient(app)` calls the ASGI app in-process — it never goes through uvicorn's real server code path (`ProxyHeadersMiddleware` lives in uvicorn's socket-handling layer, not in the `app` object at all), so no `TestClient`-based test, including my own `test_distinct_spoofed_xff_per_request_still_gets_rate_limited`, can ever observe this class of bug. It only shows up against a real listening socket, which is why my original review's live-curl methodology caught CHRIS-03 in the first place, and why re-testing the *same way* (not trusting the TestClient-only regression test) caught this.
+
+**Blast radius / does it actually matter in the documented topologies:** `docker-compose.prod.yml` does not host-port-expose the backend (only reachable from Caddy inside `stockviz-net`) — Caddy's docker-network peer IP is very unlikely to literally be `127.0.0.1`, so this specific bypass probably does *not* fire in that exact topology (untestable either way — no Docker daemon in this environment, same constraint noted throughout this engagement). It **does** fire: (1) in exactly the setup both Dave and I used to test this whole engagement — bare `uvicorn`/`gunicorn` on a host, reachable via loopback; (2) `docker-compose.dev.yml` documents the backend as ALSO host-port-exposed (`8000:8000`) alongside Caddy — whether Docker's port-forwarding preserves the host's loopback identity into the container is Docker-networking-specific and unverified here; (3) any future topology with a sidecar/local reverse-proxy connecting via loopback. Independent of blast radius, the code's own security-relevant docstring asserts a guarantee that is not actually true under the ASGI server's own defaults — that's a real, fixable defect regardless of whether today's exact prod compose file happens to dodge it.
+
+**Fix suggestion (not applied by Chris):** either (a) pin `--proxy-headers=false` / `forwarded_allow_ips=""` explicitly in every uvicorn/gunicorn invocation (`docker-compose.dev.yml:77`, `Dockerfile`/`docker-compose.prod.yml:65`, `docker-compose.ghcr.yml:76`) so the ASGI server never rewrites `scope["client"]` and the existing `TRUSTED_PROXIES` app-level allowlist becomes the single source of truth end-to-end, or (b) if server-level proxy-header trust is intentionally desired for some topology, explicitly document why `127.0.0.1` is an acceptable trust boundary there and correct the now-inaccurate docstring claim in `rate_limit.py`. Route to Dave (Phase 2, block merge per security-finding house rule) + flag to Sentinel (security-adjacent, deep verification of the chosen fix across all 3 compose files is STRIDE/deployment-topology territory, not Chris's).
+
+## `tests/api` 26 failures — investigation (Quinn owns final classification; flagging what I found)
+
+Spot-checked 5 of the 26 (`TestStockQuote::test_quote_no_auth_required`, `TestFetchYahooDirectTimeoutHandling::test_asyncio_timeout_returns_empty_list`, `TestScreener::test_screener_valid_market_values`, `TestAIChat::test_chat_non_streaming_returns_content`, plus a full listing diffed against baseline). All 5 are **pre-existing test/source mismatches or environment gaps, not migration regressions**:
+- `services.stock_service.fetch_stock_quote` / `services.stock_service._get_yf_auth` — referenced by tests, but confirmed via `git show 73fac00:...` that neither attribute existed in `services.stock_service` **at baseline either** (`_get_yf_auth` lives in `services.providers.yahoo_auth`, always did).
+- `api.routes.screener._run_screener` — baseline (`73fac00`) already only had `_run_screener_db`, never `_run_screener`.
+- `TestAIChat` failures are `503 Ollama not configured` — an external-service/environment gap (no live Ollama in this sandbox), not a migration defect.
+
+`git log 73fac00..HEAD -- tests/api/test_api_endpoints.py tests/api/test_timeout_handling.py` confirms these files WERE touched this migration (S1/S2 + the CHRIS-01 fixture rewrite), so "the files are untouched" is not the reason they're pre-existing — the specific broken assertions inside them predate the migration and were carried forward unfixed, consistent with Dave's and (per this file) Quinn's classification. Nothing found in this spot-check contradicts the "26 pre-existing, unrelated to migration" claim; I did not exhaustively verify all 26, final ownership stays with Quinn per the split-scope rule.
+
+## Fresh mutation-sanity (4/4 killed) — targeted at Dave's iter1 changed code, per Oliver's instruction
+
+| # | Target | Mutation | Result |
+|---|---|---|---|
+| 1 | `api/middleware/rate_limit.py` (CHRIS-02 fix) — 429 response | `status_code=status.HTTP_429_TOO_MANY_REQUESTS` → `status_code=status.HTTP_200_OK` | `tests/api/test_rate_limit_middleware.py::TestRateLimitEnvelope` — **failed** (caught: `assert 200 == 429`) |
+| 2 | `api/middleware/rate_limit.py` (CHRIS-03 fix) — `_client_ip` trust check | `if xff and peer_ip and RateLimitMiddleware._is_trusted_proxy(peer_ip):` → `if xff and peer_ip:` (always trust XFF) | `tests/api/test_rate_limit_middleware.py::TestRateLimitKeyingNotSpoofable` — **failed** (caught: expected blocked, got `503`) |
+| 3 | `schemas/envelope.py` (CHRIS-06 fix) — `_envelope_wrap_openapi_schema` | `if status_code.startswith("2"):` → `if status_code.startswith("9"):` (never wraps 2xx) | `tests/api/test_openapi_schema_envelope.py` (new, added this session) — **failed** (caught: `assert None == ['data','meta']`) |
+| 4 | `tests/api/conftest.py` (CHRIS-01 fix) — table registration | removed `import models  # noqa: F401` line | `tests/api/test_admin_authz.py` (run in isolation) — **1 error** (caught: `sqlite3.OperationalError: no such table: users`) |
+
+Note on mutation target selection: the obvious first mutation for CHRIS-01 (`poolclass=StaticPool` → removed) turned out to be a **no-op mutation** — own-run confirmed SQLAlchemy's async engine auto-detects `sqlite+aiosqlite:///:memory:` URLs and defaults to `StaticPool` regardless (`create_async_engine('sqlite+aiosqlite:///:memory:').pool` → `StaticPool` even with no `poolclass` kwarg passed). The explicit kwarg is defensive/future-proofing (guards against someone later pointing `TEST_DATABASE_URL` at a file-based SQLite path, where the default pool would differ), not independently load-bearing for the current URL — substituted the `import models` line instead, which mutation-tested as genuinely load-bearing (#4 above). All 4 mutations reverted immediately after proof; `git diff` confirmed clean on all 4 files before moving on.
+
+## Re-run: my own 25 tests (all 5 original files)
+
+All **25/25 now pass** (was 17/25 pass, 8 fail-by-design at original review — the 8 were the intentional CHRIS-02/03 proof-of-bug tests + 6 blocked by CHRIS-04's infra bug, all now fixed):
+- `tests/api/test_pr4_envelope.py` — 8/8 pass
+- `tests/api/test_admin_authz.py` — 7/7 pass (was 1/7)
+- `tests/api/test_rate_limit_middleware.py` — 2/2 pass (was 0/2, intentionally-failing)
+- `tests/api/test_stocks_pagination.py` — 3/3 pass
+- `backend/tests/test_require_admin_unit.py` — 5/5 pass
+- **New this session**: `tests/api/test_openapi_schema_envelope.py` — 2/2 pass (added to close the CHRIS-06 OpenAPI-shape test gap, see mutation #3 above)
+
+**Total: 27 tests (25 original + 2 new), 27/27 pass.**
+
+## Re-derived AC coverage matrix (33 total) — deltas from original review only shown; unlisted ACs unchanged
+
+| AC | iter0 verdict | iter1 verdict | Why it changed |
+|---|---|---|---|
+| M1 (backend/tests no regression) | 🟡 PARTIAL | ✅ PASS | `tests/api` now reproducible (CHRIS-01 closed); 26 remaining failures spot-checked pre-existing/unrelated (see investigation above) |
+| M5 (pytest-asyncio conftest rewrite) | 🔴 FAIL | ✅ PASS | CHRIS-01 closed |
+| A2 (portfolio duplicate router doc) | 🔴 FAIL | ✅ PASS | CHRIS-10 closed |
+| B3 (OpenAPI diff) | 🔴 FAIL | ✅ PASS | CHRIS-06 closed |
+| B4-r3 (error envelope, no legacy .detail) | 🔴 FAIL | ✅ PASS | CHRIS-02 closed |
+| B6 (rate-limit/401 preserved) | 🔴 FAIL | 🟡 PARTIAL | CHRIS-02/03 closed at app level; CHRIS-16 (new) shows a real bypass one layer down the stack |
+| B7 (health e2e test fixed) | 🔴 FAIL | 🟡 PARTIAL | CHRIS-12 fixed at source; still unexecuted against a live stack (no Docker, Quinn's territory for final proof) |
+| D2 (rate-limit docstring reconciled) | 🔴 FAIL | ✅ PASS | CHRIS-11 closed |
+| D9 (test infra rewired) | 🟡 PARTIAL | ✅ PASS | CHRIS-01/04/05 all closed; `test_admin_authz.py` now 7/7 (was 1/7) |
+| M2 (frontend+docker build green) | 🔴 FAIL | 🔴 FAIL (unchanged) | Docker still never verified by anyone this entire engagement (no daemon available to Dave or Chris, either iteration) |
+| C2 (P95 preserved) | 🔴 FAIL | 🔴 FAIL (unchanged) | No perf baseline/post measurement exists anywhere in the engagement — untouched by this fix pack |
+
+**New tally: 28 PASS / 2 FAIL / 2 PARTIAL / 1 N/A(Chris)** (of 33) — up from 21/10/2 at iter0. All other 22 unlisted ACs unchanged from iter0 (see original table above).
+
+## Re-derived DoD status (16 items) — deltas only; unlisted items unchanged
+
+| # | Item | iter0 | iter1 | Why |
+|---|---|---|---|---|
+| 1 | Backend suite paste, ≥107/≥116 | 🔴 FAIL | ✅ PASS | `backend/tests` 110p (≥107), `tests/api` 210p (≥116), both reproducible across runs |
+| 5 | OpenAPI snapshot diff | 🔴 FAIL | ✅ PASS | CHRIS-06 closed, own-run schema inspection confirms correct wrapping |
+| 9 | pytest-asyncio conftest rewrite | 🔴 FAIL | ✅ PASS | CHRIS-01 closed |
+| 11 | Rate-limit/auth/CORS/non-root curls | 🔴 FAIL | 🟡 PARTIAL | App-level curl checklist now passes; CHRIS-16 (new) shows the check doesn't hold once uvicorn's own default proxy-header trust is in the loop |
+| 12 | Admin authorization decision | 🟡 PARTIAL | ✅ PASS | Full `test_admin_authz.py` now 7/7 (infra unblocked), not just the isolated pure-unit test |
+| 13 | Envelope policy documented | 🟡 PARTIAL | ✅ PASS | OpenAPI now matches the documented policy (CHRIS-06 closed) |
+| 3 | Both Docker images build | 🔴 FAIL | 🔴 FAIL (unchanged) | No Docker daemon anywhere in this engagement, either iteration |
+| 4 | Stack boots + healthchecks | 🔴 FAIL | 🔴 FAIL (unchanged) | Same constraint |
+| 15 | changelog.md/tasklist.md updated | 🔴 FAIL | 🔴 FAIL (unchanged) | `git log 73fac00..HEAD -- changelog.md tasklist.md` — zero commits touch either file, confirmed |
+
+**New tally: 11 PASS / 3 FAIL / 1 PARTIAL / 1 N/A(Quinn)** (of 16) — up from 6/8/1/1 at iter0.
+
+## Action items (iter1)
+
+**Block merge (fix before merge, Dave, Phase 2):**
+- CHRIS-16 (NEW) — pin `--proxy-headers=false` / `forwarded_allow_ips=""` on every uvicorn/gunicorn invocation across `docker-compose.dev.yml`, `docker-compose.prod.yml`, `docker-compose.ghcr.yml`, or explicitly document+accept the loopback trust boundary and correct `rate_limit.py`'s now-inaccurate docstring claim. Escalate to Sentinel for deep verification once Dave's fix lands (deployment-topology/STRIDE territory).
+
+**Fix soon (track, next bd iteration acceptable, unchanged from iter0 assessment):**
+- CHRIS-14 — `VITE_API_URL` stale build-arg cleanup (Low, reaffirmed non-blocking)
+- DoD-15 — `changelog.md`/`tasklist.md` reconciliation (house-rule hygiene, not a functional blocker)
+- M2/C2/DoD-3/DoD-4 — Docker build/boot verification + P95 perf baseline, both permanently blocked on tooling this environment doesn't have; needs a session with a real Docker daemon before actual prod deploy sign-off
+- CHRIS-08 — curl_cffi transport-change verification before prod deploy (live-stack gate, Quinn/Oliver, unchanged)
+- CHRIS-12/B7/DoD-11-related — final live E2E execution of `health.spec.ts` and the rate-limit curl checklist against a real Docker stack remains Quinn's territory to close out
+
