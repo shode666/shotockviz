@@ -41,9 +41,20 @@ def test_login_success(client, auth_headers):
     # AC-D9: auth_headers now mints its token directly via
     # core.security.create_access_token (no HTTP round-trip through the
     # removed /register+/login routes) — just verify we can get /me.
+    #
+    # bd:deps-2026-09 iter1 (Dave-discovered, same class as Quinn's Q-1
+    # envelope-unwrap findings in test_api_endpoints.py) — was
+    # `assert "email" in resp.json()`, reading the raw body; S2's ADR-002
+    # envelope flip wraps every /api/v1 2xx body as {data, meta}, so
+    # "email" is at resp.json()["data"], not top-level. Was previously
+    # masked by the auth-fixture/StaticPool bugs (CHRIS-04/Q-3/Q-5) making
+    # this request fail with a DIFFERENT error before this assertion ever
+    # ran; now that auth resolves correctly, the real envelope-unwrap bug
+    # surfaces on its own.
     resp = client.get("/api/v1/auth/me", headers=auth_headers)
     assert resp.status_code == 200
-    assert "email" in resp.json()
+    body = resp.json()
+    assert "email" in body["data"], f"expected 'email' in body['data'], got {body}"
 
 
 def test_me_unauthenticated(client):

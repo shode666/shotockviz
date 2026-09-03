@@ -86,7 +86,17 @@ async def search_stocks(
 
 @router.get("/names")
 async def get_stock_names(
-    symbols: str = Query(..., description="Comma-separated list of symbols, e.g. PTT.BK,AAPL,NVDA"),
+    # bd:deps-2026-09 iter1 (Dave-discovered, not in Chris's/Quinn's original
+    # reports) — was `Query(...)` (required); the function's own next line
+    # (`if not sym_list: return {}`) already has a dedicated empty-input
+    # code path that was dead/unreachable because FastAPI rejected a
+    # symbols-less request with 422 before the handler body ever ran.
+    # tests/api/test_contract_v1.py::TestEnvelopeShapePublic (Quinn,
+    # AC-B1/S-AC-1) documents "empty symbols param -> {}" as the intended
+    # contract for this exact endpoint. Sidebar callers always pass
+    # `symbols`, so this had zero prod impact — caught only by the contract
+    # test exercising the documented-but-unreachable branch.
+    symbols: str = Query("", description="Comma-separated list of symbols, e.g. PTT.BK,AAPL,NVDA"),
     db: AsyncSession = Depends(get_db),
 ):
     """Batch name + market type lookup from the local DB.

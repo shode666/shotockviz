@@ -41,45 +41,65 @@ from fastapi.testclient import TestClient
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def client(app_client):
-    """Alias for app_client from conftest — ASGI TestClient with in-memory DB."""
+    """Alias for app_client from conftest — ASGI TestClient with in-memory DB.
+
+    bd:deps-2026-09 iter1 (Q-3, second half) — was `scope="module"`.
+    `app_client` (conftest.py, own iter1 fix) is now function-scoped and
+    shares its `test_engine`/`db_session` with `client`/`auth_headers`
+    there — a module-scoped fixture can't depend on a function-scoped one
+    (pytest `ScopeMismatch`), so this had to drop to function scope too.
+    Bonus: also means each test method now gets a clean rollback-per-test
+    DB instead of state leaking across the whole module via one shared
+    client.
+    """
     return app_client
 
 
-@pytest.fixture(scope="module")
-def registered_user():
-    """A synthetic authenticated-user JWT payload.
+@pytest.fixture
+async def registered_user(db_session):
+    """A REAL DB-backed authenticated user + JWT payload.
 
-    bd:deps-2026-09 S1 (AC-D9) — was: register+login HTTP round-trip
-    against POST /api/v1/auth/register + POST /api/v1/auth/login, both removed
-    by ADR-007. Mints a JWT directly via
-    core.security.create_access_token instead — no DB round-trip needed
-    for GET /api/v1/auth/me's fast path (payload carries
-    email+display_name, api/routes/auth.py's `/me` handler reads them
-    straight off the token). Routes that require a real DB-backed User
-    row (api/middleware/auth.py get_current_user, e.g. TestWatchlist)
-    were, before this rewire too, unreachable by ANY fixture design in
-    this module: `app_client`'s dependency override
-    (tests/api/v1/conftest.py) opens a brand-new in-memory SQLite engine on
-    every single request, so nothing written by one request (register,
-    or a direct DB insert) is visible to a later request — a
-    pre-existing test-infra limitation, not something this rewire
-    introduces or is in scope to fix.
+    bd:deps-2026-09 iter1 (Q-3) — was a synthetic JWT (`sub: "999001"`)
+    minted with no backing `users` row at all, documented in this
+    docstring's previous revision as "unreachable by ANY fixture design in
+    this module" because `app_client` used to open a brand-new in-memory
+    SQLite engine on every single request (a different, empty database
+    every time). That root cause is now fixed in conftest.py (StaticPool +
+    one shared `test_engine`/`db_session` across `client`/`app_client`/
+    `auth_headers`), so a row created here via `db_session` IS visible to
+    every request `client` makes. Fine for the JWT-fast-path `/me` tests
+    above (they never queried the DB, `sub` value was irrelevant) but
+    silently broke every `TestWatchlist` test below — all of which DO hit
+    `api/middleware/auth.py get_current_user`'s DB-backed lookup by id,
+    which 401'd on a `sub` that mapped to no row (Quinn's review, Finding
+    Q-3, 6 of 17 new failures).
     """
-    from core.security import create_access_token
+    from core.security import create_access_token, hash_password
+    from models.user import User
+
+    user = User(
+        email="apitest@example.com",
+        password_hash=hash_password("TestPass1"),
+        display_name="API Test User",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    await db_session.refresh(user)
 
     access_token = create_access_token({
-        "sub": "999001",
-        "email": "apitest@example.com",
-        "display_name": "API Test User",
-        "role": "user",
-        "created_at": "2026-01-01T00:00:00+00:00",
+        "sub": str(user.id),
+        "email": user.email,
+        "display_name": user.display_name,
+        "role": user.role.value,
+        "created_at": user.created_at.isoformat(),
     })
     return {"access_token": access_token}
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def auth_headers(registered_user):
     """Bearer Authorization header for authenticated requests."""
     return {"Authorization": f"Bearer {registered_user['access_token']}"}
@@ -120,9 +140,13 @@ class TestAuthMe:
         assert resp.status_code == 401
 
     def test_me_with_valid_token_returns_user(self, client, auth_headers):
+        # bd:deps-2026-09 iter1 (Q-1, envelope-unwrap test debt) — was
+        # reading `body["email"]` etc. directly; S2's ADR-002 envelope
+        # wraps every /api/v1 2xx body as {data, meta}. Unwrap via
+        # body["data"] throughout this file's assertions below too.
         resp = client.get("/api/v1/auth/me", headers=auth_headers)
         assert resp.status_code == 200
-        body = resp.json()
+        body = resp.json()["data"]
         assert body["email"] == "apitest@example.com"
         assert body["display_name"] == "API Test User"
         assert "id" in body
@@ -136,7 +160,7 @@ class TestAuthMe:
         resp = client.get("/api/v1/auth/me", headers=auth_headers)
         assert resp.status_code == 200
         # If fast-path works, email and display_name come from JWT payload directly
-        assert resp.json()["email"] == "apitest@example.com"
+        assert resp.json()["data"]["email"] == "apitest@example.com"
 
 
 # ── Auth: config ──────────────────────────────────────────────────────────────
@@ -145,7 +169,7 @@ class TestAuthConfig:
     def test_config_returns_google_client_id_key(self, client):
         resp = client.get("/api/v1/auth/config")
         assert resp.status_code == 200
-        assert "google_client_id" in resp.json()
+        assert "google_client_id" in resp.json()["data"]
 
 
 # ── Stocks: search ───────────────────────────────────────────────────────────
@@ -155,7 +179,7 @@ class TestStockSearch:
         with patch("services.stock_service.search_stocks", new=AsyncMock(return_value=[])):
             resp = client.get("/api/v1/stocks/search", params={"q": "PTT"})
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        assert isinstance(resp.json()["data"], list)
 
     def test_search_missing_q_returns_422(self, client):
         resp = client.get("/api/v1/stocks/search")
@@ -176,7 +200,7 @@ class TestStockNames:
     def test_names_returns_dict(self, client):
         resp = client.get("/api/v1/stocks/names", params={"symbols": "AAPL,PTT.BK"})
         assert resp.status_code == 200
-        body = resp.json()
+        body = resp.json()["data"]
         assert isinstance(body, dict)
         # Symbols not in DB fall back to raw symbol string
         assert "AAPL" in body
@@ -185,7 +209,7 @@ class TestStockNames:
     def test_names_empty_symbols_returns_empty_dict(self, client):
         resp = client.get("/api/v1/stocks/names", params={"symbols": ""})
         assert resp.status_code == 200
-        assert resp.json() == {}
+        assert resp.json()["data"] == {}
 
     def test_names_caps_at_50_symbols(self, client):
         syms = ",".join([f"SYM{i}" for i in range(60)])
@@ -234,7 +258,7 @@ class TestStockHistory:
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
             resp = client.get("/api/v1/stocks/AAPL/history", params={"tf": "1D"})
         assert resp.status_code == 200
-        body = resp.json()
+        body = resp.json()["data"]
         assert body["symbol"] == "AAPL"
         assert body["timeframe"] == "1D"
         assert "bars" in body
@@ -297,13 +321,13 @@ class TestStockNews:
         with patch("feedparser.parse", return_value=mock_feed):
             resp = client.get("/api/v1/stocks/AAPL/news")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        assert isinstance(resp.json()["data"], list)
 
     def test_news_parse_error_returns_empty_list(self, client):
         with patch("feedparser.parse", side_effect=Exception("network error")):
             resp = client.get("/api/v1/stocks/AAPL/news")
         assert resp.status_code == 200
-        assert resp.json() == []
+        assert resp.json()["data"] == []
 
     def test_news_strips_bk_suffix_from_query(self, client):
         """PTT.BK → query should use 'PTT stock', not 'PTT.BK stock'."""
@@ -341,7 +365,7 @@ class TestAIModels:
         with patch("httpx.AsyncClient", return_value=mock_client):
             resp = client.get("/api/ai/models")
         assert resp.status_code == 200
-        body = resp.json()
+        body = resp.json()["data"]
         assert "models" in body
         assert "available" in body
 
@@ -355,7 +379,7 @@ class TestAIModels:
         with patch("httpx.AsyncClient", return_value=mock_client):
             resp = client.get("/api/ai/models")
         assert resp.status_code == 200
-        assert resp.json()["available"] is False
+        assert resp.json()["data"]["available"] is False
 
 
 # ── AI: chat ─────────────────────────────────────────────────────────────────
@@ -456,39 +480,43 @@ class TestWatchlist:
     def test_get_watchlists_returns_list(self, client, auth_headers):
         resp = client.get("/api/v1/watchlists", headers=auth_headers)
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        assert isinstance(resp.json()["data"], list)
 
     def test_create_watchlist(self, client, auth_headers):
+        # bd:deps-2026-09 iter1 (Q-1, envelope-unwrap test debt) — was
+        # reading `body["name"]`/`body["id"]` directly; S2's ADR-002
+        # envelope wraps every /api/v1 2xx body as {data, meta}. Unwrap
+        # via body["data"] throughout this class's assertions below too.
         resp = client.post("/api/v1/watchlists", json={"name": "Tech Stocks"}, headers=auth_headers)
         assert resp.status_code == 201
-        body = resp.json()
+        body = resp.json()["data"]
         assert body["name"] == "Tech Stocks"
         assert "id" in body
         return body["id"]
 
     def test_add_stock_to_watchlist(self, client, auth_headers):
         # Create watchlist first
-        wl = client.post("/api/v1/watchlists", json={"name": "Stocks WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Stocks WL"}, headers=auth_headers).json()["data"]
         wl_id = wl["id"]
         resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "AAPL"}, headers=auth_headers)
         assert resp.status_code == 201
 
     def test_add_duplicate_stock_returns_409(self, client, auth_headers):
-        wl = client.post("/api/v1/watchlists", json={"name": "Dup WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Dup WL"}, headers=auth_headers).json()["data"]
         wl_id = wl["id"]
         client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
         resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
         assert resp.status_code == 409
 
     def test_remove_stock_from_watchlist(self, client, auth_headers):
-        wl = client.post("/api/v1/watchlists", json={"name": "Remove WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Remove WL"}, headers=auth_headers).json()["data"]
         wl_id = wl["id"]
         client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "NVDA"}, headers=auth_headers)
         resp = client.delete(f"/api/v1/watchlists/{wl_id}/stocks/NVDA", headers=auth_headers)
         assert resp.status_code == 204
 
     def test_symbol_is_uppercased(self, client, auth_headers):
-        wl = client.post("/api/v1/watchlists", json={"name": "Upper WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Upper WL"}, headers=auth_headers).json()["data"]
         wl_id = wl["id"]
         resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "aapl"}, headers=auth_headers)
         assert resp.status_code == 201
