@@ -8,6 +8,36 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### bd:deps-2026-09 iter1 — Phase 3b FAIL fix pack (2026-09-03)
+
+Chris (code review) and Quinn (integration/E2E/contract review) both
+returned Phase 3b FAIL on the `/api/v1` + `{data,meta}` envelope
+migration branch (`chore/deps-2026-09`). Full evidence/proof per finding:
+`outputs/deps-2026-09/16-dave-iter1-fixes.md`. Reviews (never edited):
+`outputs/deps-2026-09/14-chris-review.md`, `15-quinn-review.md`.
+
+- **CHRIS-05** — `hash_password()` unconditionally broken (passlib 1.7.4 x
+  bcrypt 5.0.0); replaced with direct `bcrypt.hashpw()`, dropped passlib.
+- **CHRIS-01/Q-1/Q-3/Q-4/Q-5** — `tests/api/conftest.py` pytest-asyncio
+  1.x rewrite (StaticPool, shared engine, `APP_ENV=test`), fixed the 17
+  new test failures the S2 envelope flip owed (11 envelope-unwrap + 6
+  auth-fixture). 3x-reproducible: 28 failed/208 passed, 0 errors.
+- **CHRIS-02/Q-2** — rate-limiter's 429 was an unhandled non-JSON 500
+  (`HTTPException` raised inside `BaseHTTPMiddleware.dispatch()`); now
+  returns the real `{data,meta}` envelope.
+- **CHRIS-03** — added `TRUSTED_PROXIES` allowlist so `X-Forwarded-For`
+  is only honored from a configured trusted hop (default empty = safest,
+  falls back to the raw socket peer) — closes an XFF-spoofing rate-limit
+  bypass.
+- **CHRIS-06** — `/openapi.json` now documents the real `{data,meta}`
+  envelope + error shape (`app.openapi()` override) instead of each
+  handler's raw `response_model` / FastAPI's stock validation-error shape.
+  Regenerated `outputs/deps-2026-09/openapi-v1.json`.
+- **CHRIS-07** — `.github/workflows/ci.yml` steps reconciled
+  (`requirements-dev.txt`, Node 24, `.output/` artifact path, `APP_ENV`
+  env var); trigger stays `workflow_dispatch`-only (unchanged, prior
+  explicit decision).
+
 ### Fix: Dashboard Top Holdings cross-currency sorting (2026-03-11)
 
 - `api/routes/dashboard.py` — Top Holdings now sorts by THB-normalized value using USD/THB exchange rate from cache. Previously compared raw THB and USD values directly, causing Thai funds (~฿5,000) to rank above US stocks (~$4,000 = ฿130,000). Also fixes total portfolio value to show correct THB-normalized sum. Added float precision guard and currency field tracking per holding.
