@@ -1,9 +1,11 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     # App
     app_env: str = "development"
     debug: bool = True
@@ -24,8 +26,21 @@ class Settings(BaseSettings):
     @field_validator("jwt_secret_key")
     @classmethod
     def _check_jwt_secret(cls, v: str) -> str:
+        import os
         import warnings
         if v == "dev-secret-key-change-in-prod":
+            # bd:deps-2026-09 WP-B2 (S-AC-10, 05-sentinel-threat-model.md
+            # SEC-4/§3): boot must FAIL if the default secret reaches
+            # production, not just warn — a warning is silently swallowed
+            # in prod logs. `app_env` isn't parsed yet at validator time
+            # (field order/pydantic validates independently), so read the
+            # raw env var directly rather than depend on another field.
+            if os.environ.get("APP_ENV", "development") == "production":
+                raise ValueError(
+                    "JWT_SECRET_KEY is the default dev value in a production "
+                    "environment (APP_ENV=production) — set a strong, unique "
+                    "JWT_SECRET_KEY in .env before boot."
+                )
             warnings.warn(
                 "JWT_SECRET_KEY is using the default dev value! "
                 "Set a strong, unique JWT_SECRET_KEY in .env for production.",
@@ -68,10 +83,6 @@ class Settings(BaseSettings):
     def sync_database_url(self) -> str:
         """PostgreSQL URL for sync operations (Alembic)."""
         return self.database_url.replace("+asyncpg", "")
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 @lru_cache
