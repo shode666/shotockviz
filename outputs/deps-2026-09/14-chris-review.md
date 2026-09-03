@@ -523,3 +523,82 @@ All **25/25 now pass** (was 17/25 pass, 8 fail-by-design at original review — 
 - CHRIS-08 — curl_cffi transport-change verification before prod deploy (live-stack gate, Quinn/Oliver, unchanged)
 - CHRIS-12/B7/DoD-11-related — final live E2E execution of `health.spec.ts` and the rate-limit curl checklist against a real Docker stack remains Quinn's territory to close out
 
+---
+
+# § iter 2 re-verify
+
+bd: deps-2026-09 · phase 3b re-verify · iter 2 · role: Chris (adversarial) · scope: **CHRIS-16 only** (per Oliver's delegation)
+Dave commit `ef96dee` (`backend/gunicorn.conf.py` new + `backend/Dockerfile` CMD + `api/middleware/rate_limit.py` rightmost-untrusted-hop rewrite + `backend/tests/test_rate_limit_proxy_boundary_live.py` new subprocess-integration test + `.env.example`/`docs/deploy-gha.md` docs + `changelog.md`). Evidence log `16-dave-iter1-fixes.md` § iter 2. Method: own-run only, same discipline as iter 0/1 — nothing here is trusted from Dave's pasted evidence without independent re-execution.
+
+## CHRIS-16 disposition: **CLOSED** (with one Medium test-quality gap found and closed by Chris)
+
+### 1. Live curl reproduction against a real `gunicorn` boot (own-run)
+
+Booted `gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 127.0.0.1:812x` — the exact command `docker-compose.prod.yml:65`/`docker-compose.ghcr.yml:76` run, **no `-c` flag**, from `backend/` as CWD (matching the Dockerfile's `WORKDIR /app` + `COPY . .` layout).
+
+**(a) `TRUSTED_PROXIES` unset (default):** 6 requests, 6 distinct spoofed `X-Forwarded-For` values (`10.0.0.1`..`10.0.0.6`) from the real loopback peer → `422,422,422,422,422,429`. `redis-cli keys "rate:login:*"` → **one bucket**, `rate:login:127.0.0.1` (the real peer, not any spoofed value). This is the exact CHRIS-16 repro from iter1, now closed: it produced 6 separate buckets and never a 429 before this fix.
+
+**(b) `TRUSTED_PROXIES=127.0.0.1` (operator explicitly trusts loopback):** 6 requests, 6 distinct spoofed XFF from the trusted peer → all `422`, `redis-cli keys` shows 6 separate buckets (`rate:login:10.0.0.1`..`.6`) — correct: each is a legitimately-different real client behind a trusted proxy, must not share a bucket. Re-ran with the SAME spoofed XFF 6× (simulating one abusive real client behind the trusted proxy) → `422×5, 429` on the 6th, one bucket (`rate:login:203.0.113.7`) — confirms the fix doesn't merely disable rate-limiting, it correctly re-attributes it.
+
+**(c) Multi-hop XFF from the trusted peer** (`X-Forwarded-For: attacker-injected-fake, 203.0.113.9`) → 6 requests → `429` on the 6th, bucket `rate:login:203.0.113.9` (the rightmost/real hop), not `rate:login:attacker-injected-fake` (the leftmost/claimed hop) — rightmost-untrusted-hop parsing confirmed working end-to-end over a real socket, not just in the app-level unit call.
+
+### 2. `gunicorn.conf.py` auto-load mechanism — confirmed, not just cited
+
+`python -m gunicorn --help` (gunicorn 26.2.0, own-run) → `-c, --config CONFIG ... [./gunicorn.conf.py]`, confirming gunicorn's own CLI default config path is exactly `./gunicorn.conf.py`, matching the file's docstring claim. Combined with the live boot in §1 above (booted with **zero** `-c` flag, from `backend/` CWD, and `TRUSTED_PROXIES` correctly flowed through to the running server's behavior in both directions) — this is not just a citation, it's an end-to-end own-run proof that `docker-compose.prod.yml`/`docker-compose.ghcr.yml`'s existing `command:` lines (unedited, confirmed no diff below) really do pick up this file with zero compose changes.
+
+`git diff 8d1f180..HEAD -- docker-compose.dev.yml docker-compose.prod.yml docker-compose.ghcr.yml` → **empty** — all 3 compose files genuinely untouched this iteration, confirming Dave's "compose files read-only, R1 recorded not applied" claim. `docs/deploy-gha.md` (own-read) documents the two-layer trust model (`§ Proxy trust (TRUSTED_PROXIES)`) and explicitly logs the R1 gap (`docker-compose.dev.yml`'s plain-`uvicorn` command has no equivalent auto-wiring — needs a 1-line compose edit, not applied, compose files read-only this branch) — matches the actual (empty) diff.
+
+### 3. New integration test (`backend/tests/test_rate_limit_proxy_boundary_live.py`) — own-run
+
+`python -m pytest backend/tests/test_rate_limit_proxy_boundary_live.py -m integration -v` → **3/3 PASSED** (11.14s, real subprocess `uvicorn` boots against live Postgres/Redis). Includes a genuinely good adversarial pattern: test 1 is a **negative control** that reproduces the ORIGINAL bug with `FORWARDED_ALLOW_IPS` unset, proving the test harness itself is trustworthy (if this one ever starts passing with a 429, it means uvicorn's own upstream default changed, not that the fix regressed) — tests 2/3 are the actual fix proofs.
+
+### 4. Mutation on the hop-parsing logic — 1 killed, 1 gap found + closed
+
+**Mutation 1** (`_rightmost_untrusted_ip`: walk-from-right-skip-trusted → `return hops[0]` naive leftmost): re-ran Dave's own 3 integration tests → **all 3 still PASSED, mutation SURVIVED.** Root-caused: `test_trusted_proxy_configured_rightmost_untrusted_hop`'s only multi-hop fixture is `"192.0.2.9, 127.0.0.1"` — a 2-hop chain where the trusted proxy's own IP is already rightmost, so "return leftmost" and "return rightmost-untrusted" **coincidentally produce the same answer** (`192.0.2.9`) for that specific input. This test cannot actually distinguish the correct algorithm from the old broken one — a real gap, though the underlying fix logic is not itself broken (confirmed next).
+
+Constructed a genuinely discriminating fixture (`"203.0.113.5, 192.0.2.9, 127.0.0.1"` — attacker decoy leftmost, real trusted-proxy-observed client in the middle, trusted hop rightmost) and confirmed via direct call: correct code → `192.0.2.9` (right answer); same mutation applied → `203.0.113.5` (wrong, the decoy). **Mutation killed** once tested against a fixture that actually discriminates. Added `backend/tests/test_rightmost_untrusted_hop_unit.py` (3 tests, fast pure-function unit tests, no subprocess needed) to close this gap permanently — re-ran: 3/3 pass at baseline, 1/3 fails under the same mutation (own-run, both directions confirmed, mutation reverted, `git diff` clean).
+
+**Disposition:** 🟡 Medium (test-quality gap, not a security regression — the shipped algorithm is correct, own-run confirmed both via the new discriminating unit test and via the live multi-hop curl repro in §1(c) above, which DOES use a genuinely discriminating header and passed). Closed by Chris this session (added test, no production code change needed).
+
+### 5. CIDR / IPv6 / invalid-entry edge cases on `_is_trusted_proxy` (own-run, 14 cases)
+
+| Input (`trusted_proxies`, `peer_ip`) | Expected | Got | Note |
+|---|---|---|---|
+| `10.0.0.0/8`, `10.5.5.5` | trusted | ✅ trusted | CIDR match |
+| `10.0.0.0/8`, `11.5.5.5` | untrusted | ✅ untrusted | CIDR non-match |
+| `not-an-ip`, `127.0.0.1` | untrusted | ✅ untrusted | malformed entry skipped, not fatal |
+| `not-an-ip,127.0.0.1`, `127.0.0.1` | trusted | ✅ trusted | malformed entry doesn't poison a valid one after it |
+| `` (empty), `127.0.0.1` | untrusted | ✅ untrusted | empty = trust nothing |
+| `::1`, `::1` | trusted | ✅ trusted | IPv6 loopback exact match |
+| `::1`, `127.0.0.1` | untrusted | ✅ untrusted | IPv6 entry never matches an IPv4 peer |
+| `fe80::/10`, `fe80::1` | trusted | ✅ trusted | IPv6 CIDR match |
+| `  127.0.0.1  ` (whitespace), `127.0.0.1` | trusted | ✅ trusted | `trusted_proxies_list`'s `.strip()` handles it |
+| `127.0.0.1/33` (invalid mask), `127.0.0.1` | untrusted, no crash | ✅ untrusted, no crash | malformed CIDR skipped safely |
+| `0.0.0.0/0`, `8.8.8.8` | trusted | ✅ trusted | correct mechanically — an operator setting this would be a self-inflicted misconfig, not a code bug |
+| garbage `peer_ip` (`'not-an-ip'`, `''`, `'localhost'`) | untrusted, no crash | ✅ untrusted, no crash (all 3) | `ipaddress.ip_address()` `ValueError` caught, fails safe |
+
+No crashes, no fail-open cases found across all 14. `_is_trusted_proxy` and `trusted_proxies_list` are sound.
+
+## New finding this session
+
+🟡 **CHRIS-17 (Medium, found and closed by Chris same session)** — `test_rate_limit_proxy_boundary_live.py`'s rightmost-untrusted-hop regression test uses a 2-hop fixture that cannot discriminate the fix from the bug it claims to prevent (see §4 above). Not a merge blocker (production logic is correct, confirmed multiple independent ways); closed via `backend/tests/test_rightmost_untrusted_hop_unit.py` (new, 3 tests) added this session — no further action needed from Dave.
+
+## Regression check (own-run)
+
+`backend/tests` → **113 passed, 2 skipped, 40 deselected** (was 110p/2skip at iter1; +3 = the new `test_rightmost_untrusted_hop_unit.py`). `tests/api` → **212 passed, 26 failed** (was 210p/26f at iter1; +2 = iter1's `test_openapi_schema_envelope.py`, unrelated to this session — confirms no new regressions from `ef96dee`, same 26 pre-existing failures). `tests/api/test_rate_limit_middleware.py` (iter1's own regression tests) → still **2/2 pass**.
+
+## Updated AC / DoD (CHRIS-16-relevant items only; all other iter1 values unchanged)
+
+| Item | iter1 | iter2 | Why |
+|---|---|---|---|
+| AC B6 (rate-limit/401 preserved) | 🟡 PARTIAL | ✅ PASS | CHRIS-16 closed — app-level allowlist AND ASGI-server-level trust now consistently derive from the same `TRUSTED_PROXIES` source, live-verified against real gunicorn |
+| DoD-11 (rate-limit/auth/CORS/non-root curls) | 🟡 PARTIAL | ✅ PASS | Same — live curl checklist now holds even at the ASGI-server boundary, not just app-level/TestClient |
+
+**Final AC tally: 30 PASS / 2 FAIL / 0 PARTIAL / 1 N/A(Chris)** (of 33) — up from 28/2/2/1 at iter1. Remaining 2 FAIL: M2 (Docker build/boot never verified by anyone this entire engagement, no daemon available) and C2 (no P95 perf baseline ever measured) — both unchanged, both pre-existing environmental/scope gaps, neither routed as a merge blocker (consistent with iter0/iter1).
+
+**Final DoD tally: 12 PASS / 3 FAIL / 0 PARTIAL / 1 N/A(Quinn)** (of 16) — up from 11/3/1/1 at iter1. Remaining 3 FAIL: DoD-3/4 (Docker images/boot, same no-daemon constraint), DoD-15 (`tasklist.md` still never touched — `changelog.md` WAS updated this iteration per `git diff 8d1f180..HEAD -- changelog.md`, 38 lines added, but `tasklist.md` has zero diff across all 3 iterations; partial credit not given, DoD-15 requires both per its own wording).
+
+## Verdict: **PASS**
+
+CHRIS-16 (the sole blocker carried from iter1) is closed with own-run live-network evidence across both configuration directions (`TRUSTED_PROXIES` unset and explicitly set), a genuine subprocess-level integration test suite (3/3, own-run), and CIDR/IPv6/invalid-entry edge-case coverage (14/14, own-run) with no crashes or fail-open cases. The one gap found this session (CHRIS-17, Dave's own integration test not actually discriminating the algorithm it claims to prove) is a test-quality issue, not a functional regression — verified via an independently-constructed discriminating input that the production code handles correctly, and closed with a new unit test this session, not routed back to Dave. No other CHRIS-## finding is open (all 13 closed at iter1 remain closed; CHRIS-14 remains open by design, non-blocking, unchanged). Remaining AC/DoD gaps (Docker verification, P95 baseline, `tasklist.md`) are environmental/pre-existing and were never treated as code-review blockers in any iteration of this engagement.
+
