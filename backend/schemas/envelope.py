@@ -113,7 +113,7 @@ class EnvelopingAPIRoute(APIRoute):
         return enveloping_handler
 
 
-def _enveloped_error_body(request: Request, message: str) -> dict:
+def enveloped_error_body(request: Request, message: str) -> dict:
     request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
     return {
         "data": None,
@@ -149,7 +149,7 @@ def install_error_envelope(app: FastAPI) -> None:
             return await _default_http_exception_handler(request, exc)
         detail = exc.detail if isinstance(exc.detail, str) else "Request failed"
         return JSONResponse(
-            _enveloped_error_body(request, detail),
+            enveloped_error_body(request, detail),
             status_code=exc.status_code,
             headers=exc.headers,
         )
@@ -159,6 +159,6 @@ def install_error_envelope(app: FastAPI) -> None:
         if not _is_enveloped_path(request.url.path):
             return await _default_validation_exception_handler(request, exc)
         return JSONResponse(
-            _enveloped_error_body(request, "Validation failed"),
+            enveloped_error_body(request, "Validation failed"),
             status_code=422,
         )

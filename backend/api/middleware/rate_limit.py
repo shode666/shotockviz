@@ -1,29 +1,46 @@
 import time
-from fastapi import Request, HTTPException, status
+from fastapi import Request, status
 from starlette.middleware.base import BaseHTTPMiddleware
-import redis.asyncio as aioredis
-from core.config import settings
+from starlette.responses import JSONResponse
+from core.redis import get_redis as get_shared_redis
+from schemas.envelope import enveloped_error_body
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
     Per-IP rate limiting using Redis sliding window.
-    Limits: guest=30/min, user=120/min (enforced at route level via dependency).
+    Limits: guest=30/min, user=120/min (not yet enforced — only the login
+    endpoint below is actually rate-limited today; see CHRIS-11).
     This middleware handles login endpoint brute-force protection.
     """
 
     LOGIN_LIMIT = 5
     LOGIN_WINDOW = 15 * 60  # 15 minutes
 
-    def __init__(self, app, redis_url: str):
+    def __init__(self, app):
         super().__init__(app)
-        self.redis_url = redis_url
-        self._redis: aioredis.Redis | None = None
 
-    async def get_redis(self) -> aioredis.Redis:
-        if self._redis is None:
-            self._redis = await aioredis.from_url(self.redis_url, decode_responses=True)
-        return self._redis
+    async def get_redis(self):
+        # bd:deps-2026-09 iter1 (Dave-discovered, not in Chris's/Quinn's
+        # original reports) — was its own lazily-created, permanently-
+        # cached `aioredis.from_url(...)` client on `self`, independent of
+        # `main.py`'s lifespan. `BaseHTTPMiddleware` instances are built
+        # once by Starlette's `build_middleware_stack()` and cached on the
+        # `app` singleton for the life of the PROCESS; a redis-py asyncio
+        # client's pooled connections bind to whichever event loop first
+        # opened them. In production there's exactly one event loop for
+        # the process's lifetime, so this was invisible — but every
+        # `TestClient(app)` __enter__ spins up its own event loop, so a
+        # 2nd+ test that hit the login rate-limit path reused a connection
+        # from an already-closed loop ("RuntimeError: Event loop is
+        # closed", surfaced fixing CHRIS-02/Q-2 above — this middleware's
+        # dispatch() previously never returned far enough to reach a
+        # second real redis call in the same test session, masking it).
+        # `core.redis.get_redis()` is the ALREADY-correct pattern
+        # (`init_redis()`/`close_redis()` cycle every lifespan, so tests
+        # get a fresh client bound to the current loop every time) — reuse
+        # it instead of a second, differently-lifecycled connection.
+        return await get_shared_redis()
 
     @staticmethod
     def _client_ip(request: Request) -> str:
@@ -57,10 +74,30 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 await redis.expire(key, self.LOGIN_WINDOW)
 
             if count > self.LOGIN_LIMIT:
+                # bd:deps-2026-09 iter1 (CHRIS-02/Q-2) — was
+                # `raise HTTPException(429, ...)`. This middleware is a
+                # `BaseHTTPMiddleware`, which sits OUTSIDE Starlette's
+                # `ExceptionMiddleware` in the ASGI stack (added via
+                # `app.add_middleware`, not route-scoped `Depends()`); an
+                # HTTPException raised here propagates straight past both
+                # `install_error_envelope`'s handlers AND FastAPI's own
+                # defaults to `ServerErrorMiddleware`, which returns a raw
+                # non-JSON 500 — verified live via curl (14-chris-review.md
+                # CHRIS-02, independently reproduced by Quinn against the
+                # 73fac00 baseline app too — pre-existing, architecturally,
+                # not a Starlette 0.52->1.6 version-bump artifact). Return
+                # the same enveloped error body `install_error_envelope`
+                # produces for router-level errors directly, instead of
+                # raising — reuses `enveloped_error_body` so both code
+                # paths stay in sync (single source of truth for the
+                # {data:null, meta:{error:{message}}} shape, S-AC-5-safe:
+                # no exception class/traceback/SQL fragment).
                 ttl = await redis.ttl(key)
-                raise HTTPException(
+                return JSONResponse(
+                    content=enveloped_error_body(
+                        request, f"Too many login attempts. Try again in {ttl} seconds."
+                    ),
                     status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail=f"Too many login attempts. Try again in {ttl} seconds.",
                 )
 
         return await call_next(request)

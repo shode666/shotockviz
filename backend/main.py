@@ -266,7 +266,11 @@ app.add_middleware(
 )
 
 # Rate limiting (before routing, after CORS)
-app.add_middleware(RateLimitMiddleware, redis_url=settings.redis_url)
+# bd:deps-2026-09 iter1 (Dave-discovered) — `redis_url=` param dropped;
+# RateLimitMiddleware now uses core.redis's shared, lifespan-scoped client
+# instead of building its own separately-cycled one (see
+# api/middleware/rate_limit.py's get_redis() docstring).
+app.add_middleware(RateLimitMiddleware)
 
 # Request-ID (innermost — runs first, so request_id is available to all downstream)
 app.add_middleware(RequestIDMiddleware)
