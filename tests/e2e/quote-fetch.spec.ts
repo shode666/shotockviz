@@ -58,7 +58,7 @@ test.describe('Quote fetch — 202 cache miss handling', () => {
 
   test('202 response does not crash the app', async ({ page }) => {
     // Override quote to return 202
-    await page.route('**/api/stocks/*/quote', (route) =>
+    await page.route('**/api/v1/stocks/*/quote', (route) =>
       route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -75,7 +75,7 @@ test.describe('Quote fetch — 202 cache miss handling', () => {
   });
 
   test('202 response shows dash (—) instead of price', async ({ page }) => {
-    await page.route('**/api/stocks/*/quote', (route) =>
+    await page.route('**/api/v1/stocks/*/quote', (route) =>
       route.fulfill({
         status: 202,
         contentType: 'application/json',
@@ -140,7 +140,7 @@ test.describe('Quote fetch — error resilience', () => {
   });
 
   test('network error on quote does not crash the app', async ({ page }) => {
-    await page.route('**/api/stocks/*/quote', (route) => route.abort('failed'));
+    await page.route('**/api/v1/stocks/*/quote', (route) => route.abort('failed'));
     await page.goto('/');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1_000);
@@ -151,7 +151,7 @@ test.describe('Quote fetch — error resilience', () => {
   });
 
   test('malformed quote JSON does not crash the app', async ({ page }) => {
-    await page.route('**/api/stocks/*/quote', (route) =>
+    await page.route('**/api/v1/stocks/*/quote', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: 'not-valid-json' }),
     );
     await page.goto('/');
@@ -161,7 +161,7 @@ test.describe('Quote fetch — error resilience', () => {
   });
 
   test('500 error on quote does not crash the app', async ({ page }) => {
-    await page.route('**/api/stocks/*/quote', (route) =>
+    await page.route('**/api/v1/stocks/*/quote', (route) =>
       route.fulfill({ status: 500, body: JSON.stringify({ detail: 'Internal error' }) }),
     );
     await page.goto('/');

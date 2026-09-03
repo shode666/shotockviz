@@ -12,10 +12,13 @@ from models.schemas import TokenResponse, UserResponse, GoogleAuthRequest
 from api.middleware.auth import bearer_scheme
 from fastapi.security import HTTPAuthorizationCredentials
 from core.logger import get_logger
+from schemas.envelope import EnvelopingAPIRoute
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/auth", tags=["auth"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/auth -> /auth,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=EnvelopingAPIRoute)
 
 # bd:deps-2026-09 S1 (ADR-007) — POST /register, POST /login, POST /refresh,
 # POST /logout removed (dead code: no frontend caller for register/login;

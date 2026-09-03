@@ -20,8 +20,11 @@ from models.portfolio import Transaction
 from models.alert import Alert
 from api.middleware.auth import get_current_user_optional
 from services import stock_service
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/dashboard -> /dashboard,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/dashboard", tags=["dashboard"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 
 # Market index symbols

@@ -8,8 +8,11 @@ from core.database import get_db
 from models.user import User
 from models.note import StockNote
 from api.middleware.auth import get_current_user
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/notes", tags=["notes"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/notes -> /notes,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/notes", tags=["notes"], route_class=EnvelopingAPIRoute)
 
 
 class NoteUpsert(BaseModel):

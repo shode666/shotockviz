@@ -11,9 +11,12 @@ from core.database import get_db
 from core.logger import get_logger
 from core.redis import get_redis
 from models.user import User
-from api.middleware.auth import get_current_user
+from api.middleware.auth import require_admin
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/admin -> /admin,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/admin", tags=["admin"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 
 RETENTION_CONFIG_KEY = "config:retention_policy"
@@ -44,7 +47,7 @@ class RetentionPolicyResponse(BaseModel):
 
 @router.get("/retention-policy")
 async def get_retention_policy(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db),
 ):
     """Get current data retention policy and disk usage stats."""
@@ -81,7 +84,7 @@ async def get_retention_policy(
 @router.put("/retention-policy")
 async def update_retention_policy(
     body: RetentionPolicyUpdate,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
     """Update data retention policy. Stored in Redis, read by housekeeping worker."""
     r = await get_redis()
@@ -112,7 +115,7 @@ async def update_retention_policy(
 
 @router.post("/retention-policy/run-now")
 async def run_housekeeping_now(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_admin),
 ):
     """Trigger housekeeping worker immediately."""
     try:

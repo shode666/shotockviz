@@ -13,7 +13,7 @@ const MOCK_SEARCH_RESULTS = [
 ];
 
 async function mockSearchAPI(page: any, results = MOCK_SEARCH_RESULTS) {
-  await page.route('**/api/stocks/search**', (route: any) =>
+  await page.route('**/api/v1/stocks/search**', (route: any) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',

@@ -105,7 +105,7 @@ test.describe('Screener Page — Run Screen flow', () => {
     await mockStockAPIs(page);
 
     // Delay screener response so we can observe loading state
-    await page.route('**/api/screener**', async (route) => {
+    await page.route('**/api/v1/screener**', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 500));
       await route.fulfill({
         status: 200,

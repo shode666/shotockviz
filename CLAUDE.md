@@ -76,11 +76,19 @@ ssh do 'cd /root/shotockviz && docker compose -f docker-compose.prod.yml run --r
 Client → [ShoDe Town Caddy :443] (shared-proxy network)
   ├─ town.shode.dev  → ShoDe Town
   └─ stock.shode.dev → ShotockViz
-      ├─ /api/ws/*   → stockviz-backend:8000 (WebSocket)
-      ├─ /api/ai/*   → stockviz-backend:8000 (SSE)
-      ├─ /api/*      → stockviz-backend:8000 (REST)
-      └─ /*          → stockviz-frontend:3000 (Nitro SSR)
+      ├─ /api/ws/*    → stockviz-backend:8000 (WebSocket)
+      ├─ /api/ai/*    → stockviz-backend:8000 (SSE + JSON, unversioned)
+      ├─ /api/health  → stockviz-backend:8000 (unversioned, infra healthcheck)
+      ├─ /api/v1/*    → stockviz-backend:8000 (REST, {data,meta} envelope)
+      └─ /*           → stockviz-frontend:3000 (Nitro SSR)
 ```
+
+> bd:deps-2026-09 S2 (ADR-001 r3) — REST moved under `/api/v1` with a
+> `{data, meta}` response envelope (ADR-002) on all 13 route modules.
+> `/api/ws/prices`, `/api/ai/*`, and `/api/health` are the 3 deliberate
+> unversioned exceptions (WS protocol, Caddy SSE-flush matcher, infra
+> healthcheck contract). No legacy `/api` alias — frontend and backend
+> flipped together in one commit.
 
 **Prod `.env`:** `/root/shotockviz/.env` — must have `GOOGLE_CLIENT_ID`, `VITE_GOOGLE_CLIENT_ID`, `JWT_SECRET_KEY`, `DATABASE_URL` (asyncpg), etc. See `docs/deploy.md` for full list.
 

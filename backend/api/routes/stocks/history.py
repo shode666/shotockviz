@@ -9,8 +9,11 @@ from models.user import User
 from services import stock_service
 
 from ._shared import VALID_TIMEFRAMES, _is_yahoo_fetchable
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter()
+# bd:deps-2026-09 S2 — route_class = envelope wrap (ADR-002); prefix comes
+# from the parent (stocks/__init__.py, lifted /api/stocks -> /stocks).
+router = APIRouter(route_class=EnvelopingAPIRoute)
 
 
 @router.get("/{symbol}/history", response_model=StockHistory)

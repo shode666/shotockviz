@@ -23,8 +23,16 @@ handler, not be captured by a `/{symbol}/quote`-shaped route).
 from fastapi import APIRouter
 
 from . import fundamentals, history, news_events, quotes, search
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/stocks", tags=["stocks"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/stocks -> /stocks,
+# mounted under /api/v1 in main.py. route_class here covers routes defined
+# directly on THIS router object (none today); each sub-router
+# (search/quotes/history/fundamentals/news_events) sets its own
+# route_class=EnvelopingAPIRoute too — include_router() does NOT inherit
+# route_class from the parent for routes defined on the child (verified:
+# FastAPI 0.141.1 include_router keeps each route's own route_class).
+router = APIRouter(prefix="/stocks", tags=["stocks"], route_class=EnvelopingAPIRoute)
 
 # ORDER MATTERS — see module docstring. Static-path routers first.
 router.include_router(search.router)        # /search, /names — static

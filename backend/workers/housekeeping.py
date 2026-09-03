@@ -24,7 +24,7 @@ def run_housekeeping(self):
     """
     Compress old price data following the retention policy.
 
-    Reads policy from Redis (set by PUT /api/admin/retention-policy).
+    Reads policy from Redis (set by PUT /api/v1/admin/retention-policy).
     Default:
       - 1m data: keep 7 days
       - 5m data: keep 90 days

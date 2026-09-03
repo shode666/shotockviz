@@ -6,28 +6,28 @@ Tests run against an in-memory SQLite DB via TestClient (ASGI).
 External services (Redis, Yahoo Finance, Ollama) are mocked.
 
 Endpoints covered:
-  ✓ POST /api/auth/google  (removal-only coverage — no live Google token
+  ✓ POST /api/v1/auth/google  (removal-only coverage — no live Google token
     in tests; see TestAuthRemoved for the AC-D7 404 proof of the routes
     that no longer exist)
-  ✓ GET  /api/auth/me  (JWT fast-path — no DB query)
-  ✓ GET  /api/auth/config
-  ✓ GET  /api/stocks/search
-  ✓ GET  /api/stocks/names
-  ✓ GET  /api/stocks/{symbol}/quote  (no-auth)
-  ✓ GET  /api/stocks/{symbol}/history
-  ✓ GET  /api/stocks/{symbol}/fundamentals
-  ✓ GET  /api/stocks/{symbol}/news
+  ✓ GET  /api/v1/auth/me  (JWT fast-path — no DB query)
+  ✓ GET  /api/v1/auth/config
+  ✓ GET  /api/v1/stocks/search
+  ✓ GET  /api/v1/stocks/names
+  ✓ GET  /api/v1/stocks/{symbol}/quote  (no-auth)
+  ✓ GET  /api/v1/stocks/{symbol}/history
+  ✓ GET  /api/v1/stocks/{symbol}/fundamentals
+  ✓ GET  /api/v1/stocks/{symbol}/news
   ✓ GET  /api/ai/models  (fast, 3s timeout)
   ✓ POST /api/ai/chat  (non-streaming)
-  ✓ GET  /api/watchlists
-  ✓ POST /api/watchlists
-  ✓ POST /api/watchlists/{id}/stocks
-  ✓ DELETE /api/watchlists/{id}/stocks/{symbol}
-  ✓ GET  /api/screener
-  ✓ GET  /api/system/ready
+  ✓ GET  /api/v1/watchlists
+  ✓ POST /api/v1/watchlists
+  ✓ POST /api/v1/watchlists/{id}/stocks
+  ✓ DELETE /api/v1/watchlists/{id}/stocks/{symbol}
+  ✓ GET  /api/v1/screener
+  ✓ GET  /api/v1/system/ready
 
-bd:deps-2026-09 S1 (ADR-007) — POST /api/auth/register, POST
-/api/auth/login, POST /api/auth/refresh, POST /api/auth/logout were
+bd:deps-2026-09 S1 (ADR-007) — POST /api/v1/auth/register, POST
+/api/v1/auth/login, POST /api/v1/auth/refresh, POST /api/v1/auth/logout were
 removed (dead code / client-side-refresh lifecycle CLAUDE.md rule 5
 prohibits). TestRegister/TestLogin/TestRefresh/TestLogout classes (tested
 those routes directly) are deleted, replaced by TestAuthRemoved (AC-D7).
@@ -52,16 +52,16 @@ def registered_user():
     """A synthetic authenticated-user JWT payload.
 
     bd:deps-2026-09 S1 (AC-D9) — was: register+login HTTP round-trip
-    against POST /api/auth/register + POST /api/auth/login, both removed
+    against POST /api/v1/auth/register + POST /api/v1/auth/login, both removed
     by ADR-007. Mints a JWT directly via
     core.security.create_access_token instead — no DB round-trip needed
-    for GET /api/auth/me's fast path (payload carries
+    for GET /api/v1/auth/me's fast path (payload carries
     email+display_name, api/routes/auth.py's `/me` handler reads them
     straight off the token). Routes that require a real DB-backed User
     row (api/middleware/auth.py get_current_user, e.g. TestWatchlist)
     were, before this rewire too, unreachable by ANY fixture design in
     this module: `app_client`'s dependency override
-    (tests/api/conftest.py) opens a brand-new in-memory SQLite engine on
+    (tests/api/v1/conftest.py) opens a brand-new in-memory SQLite engine on
     every single request, so nothing written by one request (register,
     or a direct DB insert) is visible to a later request — a
     pre-existing test-infra limitation, not something this rewire
@@ -92,23 +92,23 @@ class TestAuthRemoved:
     not merely untested."""
 
     def test_register_route_removed(self, client):
-        resp = client.post("/api/auth/register", json={
+        resp = client.post("/api/v1/auth/register", json={
             "email": "x@x.com", "password": "Pass1234", "display_name": "X",
         })
         assert resp.status_code in (404, 405)
 
     def test_login_route_removed(self, client):
-        resp = client.post("/api/auth/login", json={
+        resp = client.post("/api/v1/auth/login", json={
             "email": "x@x.com", "password": "Pass1234",
         })
         assert resp.status_code in (404, 405)
 
     def test_refresh_route_removed(self, client):
-        resp = client.post("/api/auth/refresh", json={"refresh_token": "anything"})
+        resp = client.post("/api/v1/auth/refresh", json={"refresh_token": "anything"})
         assert resp.status_code in (404, 405)
 
     def test_logout_route_removed(self, client):
-        resp = client.post("/api/auth/logout", json={"refresh_token": "anything"})
+        resp = client.post("/api/v1/auth/logout", json={"refresh_token": "anything"})
         assert resp.status_code in (404, 405)
 
 
@@ -116,11 +116,11 @@ class TestAuthRemoved:
 
 class TestAuthMe:
     def test_me_without_token_returns_401(self, client):
-        resp = client.get("/api/auth/me")
+        resp = client.get("/api/v1/auth/me")
         assert resp.status_code == 401
 
     def test_me_with_valid_token_returns_user(self, client, auth_headers):
-        resp = client.get("/api/auth/me", headers=auth_headers)
+        resp = client.get("/api/v1/auth/me", headers=auth_headers)
         assert resp.status_code == 200
         body = resp.json()
         assert body["email"] == "apitest@example.com"
@@ -128,12 +128,12 @@ class TestAuthMe:
         assert "id" in body
 
     def test_me_with_invalid_token_returns_401(self, client):
-        resp = client.get("/api/auth/me", headers={"Authorization": "Bearer invalid.token.here"})
+        resp = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer invalid.token.here"})
         assert resp.status_code == 401
 
     def test_me_does_not_hit_db_for_modern_tokens(self, client, auth_headers):
         """Token contains email+display_name → fast path reads from JWT, no DB."""
-        resp = client.get("/api/auth/me", headers=auth_headers)
+        resp = client.get("/api/v1/auth/me", headers=auth_headers)
         assert resp.status_code == 200
         # If fast-path works, email and display_name come from JWT payload directly
         assert resp.json()["email"] == "apitest@example.com"
@@ -143,7 +143,7 @@ class TestAuthMe:
 
 class TestAuthConfig:
     def test_config_returns_google_client_id_key(self, client):
-        resp = client.get("/api/auth/config")
+        resp = client.get("/api/v1/auth/config")
         assert resp.status_code == 200
         assert "google_client_id" in resp.json()
 
@@ -153,20 +153,20 @@ class TestAuthConfig:
 class TestStockSearch:
     def test_search_returns_list(self, client):
         with patch("services.stock_service.search_stocks", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/stocks/search", params={"q": "PTT"})
+            resp = client.get("/api/v1/stocks/search", params={"q": "PTT"})
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
     def test_search_missing_q_returns_422(self, client):
-        resp = client.get("/api/stocks/search")
+        resp = client.get("/api/v1/stocks/search")
         assert resp.status_code == 422
 
     def test_search_empty_q_returns_422(self, client):
-        resp = client.get("/api/stocks/search", params={"q": ""})
+        resp = client.get("/api/v1/stocks/search", params={"q": ""})
         assert resp.status_code == 422
 
     def test_search_too_long_q_returns_422(self, client):
-        resp = client.get("/api/stocks/search", params={"q": "X" * 51})
+        resp = client.get("/api/v1/stocks/search", params={"q": "X" * 51})
         assert resp.status_code == 422
 
 
@@ -174,7 +174,7 @@ class TestStockSearch:
 
 class TestStockNames:
     def test_names_returns_dict(self, client):
-        resp = client.get("/api/stocks/names", params={"symbols": "AAPL,PTT.BK"})
+        resp = client.get("/api/v1/stocks/names", params={"symbols": "AAPL,PTT.BK"})
         assert resp.status_code == 200
         body = resp.json()
         assert isinstance(body, dict)
@@ -183,13 +183,13 @@ class TestStockNames:
         assert "PTT.BK" in body
 
     def test_names_empty_symbols_returns_empty_dict(self, client):
-        resp = client.get("/api/stocks/names", params={"symbols": ""})
+        resp = client.get("/api/v1/stocks/names", params={"symbols": ""})
         assert resp.status_code == 200
         assert resp.json() == {}
 
     def test_names_caps_at_50_symbols(self, client):
         syms = ",".join([f"SYM{i}" for i in range(60)])
-        resp = client.get("/api/stocks/names", params={"symbols": syms})
+        resp = client.get("/api/v1/stocks/names", params={"symbols": syms})
         assert resp.status_code == 200
         # Should not error — just truncates to 50
 
@@ -199,7 +199,7 @@ class TestStockNames:
 class TestStockQuote:
     def test_quote_returns_202_on_cache_miss(self, client):
         with patch("services.stock_service.fetch_stock_quote", new=AsyncMock(return_value=None)):
-            resp = client.get("/api/stocks/AAPL/quote")
+            resp = client.get("/api/v1/stocks/AAPL/quote")
         assert resp.status_code == 202
         body = resp.json()
         assert body["status"] == "pending"
@@ -211,19 +211,19 @@ class TestStockQuote:
         mock_quote.change = 1.5
         mock_quote.change_pct = 1.01
         with patch("services.stock_service.fetch_stock_quote", new=AsyncMock(return_value=mock_quote)):
-            resp = client.get("/api/stocks/AAPL/quote")
+            resp = client.get("/api/v1/stocks/AAPL/quote")
         assert resp.status_code == 200
 
     def test_quote_no_auth_required(self, client):
         """Endpoint must NOT require auth (removed _user dependency)."""
         with patch("services.stock_service.fetch_stock_quote", new=AsyncMock(return_value=None)):
-            resp = client.get("/api/stocks/PTT.BK/quote")
+            resp = client.get("/api/v1/stocks/PTT.BK/quote")
         # Should respond (202 or 200) — not 401
         assert resp.status_code in {200, 202}
 
     def test_quote_uppercases_symbol(self, client):
         with patch("services.stock_service.fetch_stock_quote", new=AsyncMock(return_value=None)) as mock:
-            client.get("/api/stocks/aapl/quote")
+            client.get("/api/v1/stocks/aapl/quote")
         mock.assert_called_once_with("AAPL")
 
 
@@ -232,7 +232,7 @@ class TestStockQuote:
 class TestStockHistory:
     def test_history_returns_200_with_bars(self, client):
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/stocks/AAPL/history", params={"tf": "1D"})
+            resp = client.get("/api/v1/stocks/AAPL/history", params={"tf": "1D"})
         assert resp.status_code == 200
         body = resp.json()
         assert body["symbol"] == "AAPL"
@@ -240,23 +240,23 @@ class TestStockHistory:
         assert "bars" in body
 
     def test_history_invalid_timeframe_returns_400(self, client):
-        resp = client.get("/api/stocks/AAPL/history", params={"tf": "99X"})
+        resp = client.get("/api/v1/stocks/AAPL/history", params={"tf": "99X"})
         assert resp.status_code == 400
 
     def test_history_valid_timeframes(self, client):
         for tf in ["1m", "5m", "15m", "1h", "4h", "1D", "1W", "1M"]:
             with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
-                resp = client.get("/api/stocks/AAPL/history", params={"tf": tf})
+                resp = client.get("/api/v1/stocks/AAPL/history", params={"tf": tf})
             assert resp.status_code == 200, f"tf={tf} should return 200, got {resp.status_code}"
 
     def test_history_default_tf_is_1d(self, client):
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])) as mock:
-            client.get("/api/stocks/AAPL/history")
+            client.get("/api/v1/stocks/AAPL/history")
         mock.assert_called_once_with("AAPL", "1D")
 
     def test_history_uppercase_symbol(self, client):
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])) as mock:
-            client.get("/api/stocks/aapl/history", params={"tf": "1D"})
+            client.get("/api/v1/stocks/aapl/history", params={"tf": "1D"})
         mock.assert_called_once_with("AAPL", "1D")
 
 
@@ -272,18 +272,18 @@ class TestStockFundamentals:
         mock_data.dividend_yield = 0.52
         mock_data.pb_ratio = 3.2
         with patch("services.stock_service.fetch_stock_fundamentals", new=AsyncMock(return_value=mock_data)):
-            resp = client.get("/api/stocks/AAPL/fundamentals")
+            resp = client.get("/api/v1/stocks/AAPL/fundamentals")
         assert resp.status_code == 200
 
     def test_fundamentals_returns_404_when_not_found(self, client):
         with patch("services.stock_service.fetch_stock_fundamentals", new=AsyncMock(return_value=None)):
-            resp = client.get("/api/stocks/FAKESYM/fundamentals")
+            resp = client.get("/api/v1/stocks/FAKESYM/fundamentals")
         assert resp.status_code == 404
 
     def test_fundamentals_timeout_returns_404_not_500(self, client):
         """Timeout in service → None → 404, not an unhandled 500."""
         with patch("services.stock_service.fetch_stock_fundamentals", new=AsyncMock(return_value=None)):
-            resp = client.get("/api/stocks/AAPL/fundamentals")
+            resp = client.get("/api/v1/stocks/AAPL/fundamentals")
         assert resp.status_code == 404
 
 
@@ -295,13 +295,13 @@ class TestStockNews:
         mock_feed = MagicMock()
         mock_feed.entries = []
         with patch("feedparser.parse", return_value=mock_feed):
-            resp = client.get("/api/stocks/AAPL/news")
+            resp = client.get("/api/v1/stocks/AAPL/news")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
     def test_news_parse_error_returns_empty_list(self, client):
         with patch("feedparser.parse", side_effect=Exception("network error")):
-            resp = client.get("/api/stocks/AAPL/news")
+            resp = client.get("/api/v1/stocks/AAPL/news")
         assert resp.status_code == 200
         assert resp.json() == []
 
@@ -315,7 +315,7 @@ class TestStockNews:
             m.entries = []
             return m
         with patch("feedparser.parse", side_effect=capture_parse):
-            client.get("/api/stocks/PTT.BK/news")
+            client.get("/api/v1/stocks/PTT.BK/news")
         assert captured_url, "feedparser.parse was not called"
         assert ".BK" not in captured_url[0], f"URL should strip .BK: {captured_url[0]}"
 
@@ -450,16 +450,16 @@ class TestAIChat:
 
 class TestWatchlist:
     def test_get_watchlists_requires_auth(self, client):
-        resp = client.get("/api/watchlists")
+        resp = client.get("/api/v1/watchlists")
         assert resp.status_code == 401
 
     def test_get_watchlists_returns_list(self, client, auth_headers):
-        resp = client.get("/api/watchlists", headers=auth_headers)
+        resp = client.get("/api/v1/watchlists", headers=auth_headers)
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
 
     def test_create_watchlist(self, client, auth_headers):
-        resp = client.post("/api/watchlists", json={"name": "Tech Stocks"}, headers=auth_headers)
+        resp = client.post("/api/v1/watchlists", json={"name": "Tech Stocks"}, headers=auth_headers)
         assert resp.status_code == 201
         body = resp.json()
         assert body["name"] == "Tech Stocks"
@@ -468,39 +468,39 @@ class TestWatchlist:
 
     def test_add_stock_to_watchlist(self, client, auth_headers):
         # Create watchlist first
-        wl = client.post("/api/watchlists", json={"name": "Stocks WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Stocks WL"}, headers=auth_headers).json()
         wl_id = wl["id"]
-        resp = client.post(f"/api/watchlists/{wl_id}/stocks", json={"symbol": "AAPL"}, headers=auth_headers)
+        resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "AAPL"}, headers=auth_headers)
         assert resp.status_code == 201
 
     def test_add_duplicate_stock_returns_409(self, client, auth_headers):
-        wl = client.post("/api/watchlists", json={"name": "Dup WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Dup WL"}, headers=auth_headers).json()
         wl_id = wl["id"]
-        client.post(f"/api/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
-        resp = client.post(f"/api/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
+        client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
+        resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "TSLA"}, headers=auth_headers)
         assert resp.status_code == 409
 
     def test_remove_stock_from_watchlist(self, client, auth_headers):
-        wl = client.post("/api/watchlists", json={"name": "Remove WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Remove WL"}, headers=auth_headers).json()
         wl_id = wl["id"]
-        client.post(f"/api/watchlists/{wl_id}/stocks", json={"symbol": "NVDA"}, headers=auth_headers)
-        resp = client.delete(f"/api/watchlists/{wl_id}/stocks/NVDA", headers=auth_headers)
+        client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "NVDA"}, headers=auth_headers)
+        resp = client.delete(f"/api/v1/watchlists/{wl_id}/stocks/NVDA", headers=auth_headers)
         assert resp.status_code == 204
 
     def test_symbol_is_uppercased(self, client, auth_headers):
-        wl = client.post("/api/watchlists", json={"name": "Upper WL"}, headers=auth_headers).json()
+        wl = client.post("/api/v1/watchlists", json={"name": "Upper WL"}, headers=auth_headers).json()
         wl_id = wl["id"]
-        resp = client.post(f"/api/watchlists/{wl_id}/stocks", json={"symbol": "aapl"}, headers=auth_headers)
+        resp = client.post(f"/api/v1/watchlists/{wl_id}/stocks", json={"symbol": "aapl"}, headers=auth_headers)
         assert resp.status_code == 201
 
     def test_access_other_users_watchlist_returns_404(self, client, auth_headers):
         """User can't access watchlist they don't own."""
-        resp = client.get("/api/watchlists/99999", headers=auth_headers)
+        resp = client.get("/api/v1/watchlists/99999", headers=auth_headers)
         # Should be 404 or 405 (no GET single watchlist endpoint) — not 200
         assert resp.status_code in {404, 405}
 
     def test_watchlist_requires_auth_for_add(self, client):
-        resp = client.post("/api/watchlists/1/stocks", json={"symbol": "AAPL"})
+        resp = client.post("/api/v1/watchlists/1/stocks", json={"symbol": "AAPL"})
         assert resp.status_code == 401
 
 
@@ -510,23 +510,23 @@ class TestScreener:
     def test_screener_returns_list_without_auth(self, client):
         """Screener is open to guests."""
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/screener")
+            resp = client.get("/api/v1/screener")
         # Should not return 401
         assert resp.status_code in {200, 500}  # 500 ok if no stocks in DB
 
     def test_screener_market_filter_validated(self, client):
         """Invalid market filter → 422."""
-        resp = client.get("/api/screener", params={"market": "INVALID"})
+        resp = client.get("/api/v1/screener", params={"market": "INVALID"})
         assert resp.status_code == 422
 
     def test_screener_rsi_filter_validated(self, client):
-        resp = client.get("/api/screener", params={"rsi": "invalid_val"})
+        resp = client.get("/api/v1/screener", params={"rsi": "invalid_val"})
         assert resp.status_code == 422
 
     def test_screener_valid_market_values(self, client):
         for market in ["SET", "US", "all"]:
             with patch("api.routes.screener._run_screener", return_value=[]):
-                resp = client.get("/api/screener", params={"market": market})
+                resp = client.get("/api/v1/screener", params={"market": market})
             assert resp.status_code == 200, f"market={market} returned {resp.status_code}"
 
 
@@ -534,12 +534,12 @@ class TestScreener:
 
 class TestSystemReady:
     def test_system_ready_returns_200(self, client):
-        resp = client.get("/api/system/ready")
+        resp = client.get("/api/v1/system/ready")
         # Should return 200 when app is running
         assert resp.status_code in {200, 503}  # 503 if DB/Redis not connected
 
     def test_system_ready_returns_json(self, client):
-        resp = client.get("/api/system/ready")
+        resp = client.get("/api/v1/system/ready")
         if resp.status_code == 200:
             assert isinstance(resp.json(), dict)
 
@@ -551,26 +551,26 @@ class TestInputSanitization:
 
     def test_search_sql_like_input_does_not_crash(self, client):
         with patch("services.stock_service.search_stocks", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/stocks/search", params={"q": "' OR '1'='1"})
+            resp = client.get("/api/v1/stocks/search", params={"q": "' OR '1'='1"})
         assert resp.status_code in {200, 422}
 
     def test_search_unicode_input_handled(self, client):
         with patch("services.stock_service.search_stocks", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/stocks/search", params={"q": "ปตท"})
+            resp = client.get("/api/v1/stocks/search", params={"q": "ปตท"})
         assert resp.status_code == 200
 
     def test_history_symbol_with_special_chars(self, client):
         with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
-            resp = client.get("/api/stocks/PTT.BK/history", params={"tf": "1D"})
+            resp = client.get("/api/v1/stocks/PTT.BK/history", params={"tf": "1D"})
         assert resp.status_code == 200
 
     def test_history_extremely_long_symbol(self, client):
-        resp = client.get(f"/api/stocks/{'A' * 200}/history", params={"tf": "1D"})
+        resp = client.get(f"/api/v1/stocks/{'A' * 200}/history", params={"tf": "1D"})
         # Should not crash with 500 — 200 or 422 or 404
         assert resp.status_code != 500
 
     def test_names_sql_injection_in_symbols(self, client):
-        resp = client.get("/api/stocks/names", params={"symbols": "AAPL; DROP TABLE stocks;--"})
+        resp = client.get("/api/v1/stocks/names", params={"symbols": "AAPL; DROP TABLE stocks;--"})
         assert resp.status_code == 200
 
 
@@ -587,7 +587,7 @@ class TestConcurrentQuoteRequests:
             base_url="http://test",
         ) as client:
             with patch("services.stock_service.fetch_stock_quote", new=AsyncMock(return_value=None)):
-                tasks = [client.get(f"/api/stocks/SYM{i}/quote") for i in range(10)]
+                tasks = [client.get(f"/api/v1/stocks/SYM{i}/quote") for i in range(10)]
                 responses = await asyncio.gather(*tasks)
 
         for i, resp in enumerate(responses):
@@ -600,7 +600,7 @@ class TestConcurrentQuoteRequests:
             base_url="http://test",
         ) as client:
             with patch("services.stock_service.fetch_stock_history", new=AsyncMock(return_value=[])):
-                tasks = [client.get(f"/api/stocks/AAPL/history?tf=1D") for _ in range(5)]
+                tasks = [client.get(f"/api/v1/stocks/AAPL/history?tf=1D") for _ in range(5)]
                 responses = await asyncio.gather(*tasks)
 
         for resp in responses:

@@ -104,7 +104,7 @@ export const MOCK_AI_MODELS = {
  */
 export async function mockStockAPIs(page: Page): Promise<void> {
   // Quote — 200 with price data
-  await page.route('**/api/stocks/*/quote', (route) =>
+  await page.route('**/api/v1/stocks/*/quote', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -113,7 +113,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // History — wraps bars in {symbol, timeframe, bars:[...]} to match StockHistory schema
-  await page.route('**/api/stocks/*/history**', (route) => {
+  await page.route('**/api/v1/stocks/*/history**', (route) => {
     const url = new URL(route.request().url());
     const tf = url.searchParams.get('tf') ?? '1D';
     const symMatch = route.request().url().match(/\/stocks\/([^/]+)\/history/);
@@ -126,7 +126,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   });
 
   // Fundamentals — matches backend StockFundamentals schema keys
-  await page.route('**/api/stocks/*/fundamentals', (route) =>
+  await page.route('**/api/v1/stocks/*/fundamentals', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -142,7 +142,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // News
-  await page.route('**/api/stocks/*/news', (route) =>
+  await page.route('**/api/v1/stocks/*/news', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -153,7 +153,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // Batch names lookup — returns {symbol: displayName} map
-  await page.route('**/api/stocks/names**', (route) =>
+  await page.route('**/api/v1/stocks/names**', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -162,7 +162,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // Stock search
-  await page.route('**/api/stocks/search**', (route) =>
+  await page.route('**/api/v1/stocks/search**', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -171,7 +171,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // Watchlist — 401 for unauthenticated guests
-  await page.route('**/api/watchlists**', (route) =>
+  await page.route('**/api/v1/watchlists**', (route) =>
     route.fulfill({ status: 401, body: JSON.stringify({ detail: 'Not authenticated' }) }),
   );
 
@@ -185,7 +185,7 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // System ready
-  await page.route('**/api/system/ready', (route) =>
+  await page.route('**/api/v1/system/ready', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ready: true }) }),
   );
 }
@@ -197,7 +197,7 @@ export async function mockScreener(
   page: Page,
   results = MOCK_SCREENER_RESULTS,
 ): Promise<void> {
-  await page.route('**/api/screener**', (route) =>
+  await page.route('**/api/v1/screener**', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -207,7 +207,7 @@ export async function mockScreener(
 }
 
 /**
- * Mock /api/auth/me to simulate an authenticated session.
+ * Mock /api/v1/auth/me to simulate an authenticated session.
  * Call BEFORE page.goto() so the token check on mount resolves correctly.
  */
 export async function mockAuthSession(page: Page, user = MOCK_AUTH_ME): Promise<void> {
@@ -216,7 +216,7 @@ export async function mockAuthSession(page: Page, user = MOCK_AUTH_ME): Promise<
     localStorage.setItem('refresh_token', 'mock-refresh-token');
   });
 
-  await page.route('**/api/auth/me', (route) =>
+  await page.route('**/api/v1/auth/me', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -236,10 +236,10 @@ export async function mockWatchlistAPIs(
   watchlist = MOCK_WATCHLIST,
 ): Promise<void> {
   // Remove the 401 catch-all added by mockStockAPIs so our handlers take effect
-  await page.unroute('**/api/watchlists**');
+  await page.unroute('**/api/v1/watchlists**');
 
-  // GET /api/watchlists
-  await page.route('**/api/watchlists', (route) => {
+  // GET /api/v1/watchlists
+  await page.route('**/api/v1/watchlists', (route) => {
     if (route.request().method() === 'GET') {
       return route.fulfill({
         status: 200,
@@ -247,7 +247,7 @@ export async function mockWatchlistAPIs(
         body: JSON.stringify([watchlist]),
       });
     }
-    // POST /api/watchlists — create
+    // POST /api/v1/watchlists — create
     if (route.request().method() === 'POST') {
       return route.fulfill({
         status: 201,
@@ -258,8 +258,8 @@ export async function mockWatchlistAPIs(
     return route.continue();
   });
 
-  // POST /api/watchlists/:id/stocks — add stock
-  await page.route('**/api/watchlists/*/stocks', (route) => {
+  // POST /api/v1/watchlists/:id/stocks — add stock
+  await page.route('**/api/v1/watchlists/*/stocks', (route) => {
     if (route.request().method() === 'POST') {
       return route.fulfill({
         status: 201,
@@ -274,8 +274,8 @@ export async function mockWatchlistAPIs(
     return route.continue();
   });
 
-  // DELETE /api/watchlists/:id/stocks/:symbol
-  await page.route('**/api/watchlists/*/stocks/*', (route) => {
+  // DELETE /api/v1/watchlists/:id/stocks/:symbol
+  await page.route('**/api/v1/watchlists/*/stocks/*', (route) => {
     if (route.request().method() === 'DELETE') {
       return route.fulfill({ status: 204, body: '' });
     }

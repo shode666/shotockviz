@@ -1,5 +1,5 @@
 /**
- * useBackendReady — polls /api/system/ready until the backend cache is warm,
+ * useBackendReady — polls /api/v1/system/ready until the backend cache is warm,
  * then calls bumpDataVersion() so all data-fetching components automatically
  * re-run their queries and display real prices instead of "—".
  *

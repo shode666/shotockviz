@@ -14,8 +14,11 @@ from models.schemas import (
 )
 from api.middleware.auth import get_current_user
 from services import stock_service
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/portfolio", tags=["portfolio"], route_class=EnvelopingAPIRoute)
 
 # Yahoo Finance only accepts simple ticker symbols (letters, digits, dots, hyphens, carets).
 # Thai mutual fund names like "SCBS&P500", "PRINCIPAL IPROP-D", "MPDIVMF" that contain

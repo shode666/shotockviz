@@ -4,12 +4,18 @@ import toast from 'react-hot-toast';
 // Always use relative path — Vite proxy forwards /api → http://backend:8000
 // (VITE_API_URL=http://backend:8000 is not resolvable from the browser)
 //
+// bd:deps-2026-09 S2 (ADR-001 r3, AC-B2-r3) — baseURL flips /api -> /api/v1
+// (no legacy alias, single atomic flip with the backend prefix lift).
+// aiService.js's 3 axios call sites explicitly override this instance's
+// baseURL per-request (config.baseURL: '/api') to keep hitting the
+// unversioned /api/ai/* path (r3-1) — see aiService.js.
+//
 // timeout: 12 s — prevents connection-starvation when stock-data requests
 // (PTT.BK, CPALL.BK) hang waiting for Yahoo/Stooq fallbacks.
 // Chrome allows only 6 concurrent connections per host; if all 6 are held
 // by pending quote requests, the login POST gets queued indefinitely.
 const api = axios.create({
-    baseURL: '/api',
+    baseURL: '/api/v1',
     headers: { 'Content-Type': 'application/json' },
     timeout: 12_000,
 });
@@ -35,11 +41,28 @@ api.interceptors.request.use((config) => {
 const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready'];
 const isSilentPath = (url = '') => SILENT_PATHS.some((p) => url.includes(p));
 
+// bd:deps-2026-09 S2 (ADR-002, AC-B4-r3) — single central unwrap point.
+// Every /api/v1/* and /api/ai/* JSON response is now enveloped as
+// {data, meta} (schemas/envelope.py). Unwrap here so the ~40 existing
+// call sites across services/*.js keep reading `response.data.<field>`
+// unchanged (they get the inner `data`, not the envelope). `meta` is not
+// discarded — attached as `response.meta` for the rare caller that wants
+// data_status/cached_layer/pagination (opt-in, doesn't break anyone).
+const _isEnvelope = (body) =>
+    body !== null && typeof body === 'object' && 'data' in body && 'meta' in body;
+
 api.interceptors.response.use(
-    (response) => response,
+    (response) => {
+        if (_isEnvelope(response.data)) {
+            response.meta = response.data.meta;
+            response.data = response.data.data;
+        }
+        return response;
+    },
     (error) => {
         const url = error.config?.url || '';
         const status = error.response?.status;
+        const body = error.response?.data;
 
         // Silently drop data-fetching errors — chart shows stale/mock data instead
         if (isSilentPath(url)) {
@@ -52,12 +75,20 @@ api.interceptors.response.use(
             return Promise.reject(error);
         }
 
+        // bd:deps-2026-09 S2 (AC-B4-r3) — error body is now the enveloped
+        // shape {data: null, meta: {..., error: {message}}}; the old
+        // FastAPI-default `detail` (string | validation-error array) no
+        // longer appears on /api/v1/* or /api/ai/* (schemas/envelope.py
+        // install_error_envelope). Keep the `detail` fallback only for any
+        // response that somehow isn't enveloped (defense in depth).
         let msg = error.message || 'API Request Failed';
-        if (error.response?.data?.detail) {
-            if (Array.isArray(error.response.data.detail)) {
-                msg = error.response.data.detail.map(e => e.msg).join(', ');
-            } else if (typeof error.response.data.detail === 'string') {
-                msg = error.response.data.detail;
+        if (body?.meta?.error?.message) {
+            msg = body.meta.error.message;
+        } else if (body?.detail) {
+            if (Array.isArray(body.detail)) {
+                msg = body.detail.map((e) => e.msg).join(', ');
+            } else if (typeof body.detail === 'string') {
+                msg = body.detail;
             }
         }
 

@@ -7,6 +7,7 @@ from models.user import User
 from models.alert import Alert, AlertType, AlertChannel
 from models.schemas import AlertCreate, AlertUpdate, AlertResponse
 from api.middleware.auth import get_current_user
+from schemas.envelope import EnvelopingAPIRoute
 
 
 def _resolve_alert_type(raw: str) -> AlertType:
@@ -38,7 +39,9 @@ def _resolve_channel(raw: str) -> AlertChannel:
             detail=f"Invalid channel '{raw}'. Valid: {[e.value for e in AlertChannel]}",
         )
 
-router = APIRouter(prefix="/api/alerts", tags=["alerts"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/alerts -> /alerts,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/alerts", tags=["alerts"], route_class=EnvelopingAPIRoute)
 
 
 @router.get("", response_model=list[AlertResponse])

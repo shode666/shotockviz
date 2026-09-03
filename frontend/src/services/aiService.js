@@ -1,17 +1,25 @@
 import api from './api';
 import { useAuthStore } from '@/store/authStore';
 
+// bd:deps-2026-09 S2 (ADR-001 r3-1) — /api/ai/* stays unversioned (Caddy's
+// SSE-flush matcher targets this exact path). `api`'s shared instance
+// defaults to baseURL '/api/v1' (api.js); override it per-request here so
+// these 3 calls keep hitting '/api/ai/...' instead of accidentally
+// becoming '/api/v1/ai/...'. Same instance = same response interceptor
+// (envelope unwrap + error toast) still applies.
+const AI_BASE = { baseURL: '/api' };
+
 const aiService = {
     /** Non-streaming chat (returns full response) */
     chat: (messages, symbol = null) =>
-        api.post('/ai/chat', { messages, symbol, stream: false }),
+        api.post('/ai/chat', { messages, symbol, stream: false }, AI_BASE),
 
     /** Quick analysis for a symbol (non-streaming) */
     analyzeStock: (symbol) =>
-        api.post(`/ai/analyze/${symbol}`),
+        api.post(`/ai/analyze/${symbol}`, undefined, AI_BASE),
 
     /** List available Ollama models */
-    listModels: () => api.get('/ai/models'),
+    listModels: () => api.get('/ai/models', AI_BASE),
 
     /** Streaming chat via fetch (bypasses axios so we can read a ReadableStream).
      *

@@ -51,6 +51,14 @@ class ResponseMeta(BaseModel):
         ge=0,
         description="Hint: seconds until data will be re-fetched by background worker",
     )
+    # bd:deps-2026-09 S2 (ADR-004) — pagination meta, additive/optional so it
+    # never breaks non-paginated responses (api-contract additive rule).
+    # Populated only by list endpoints that opt in via
+    # `request.state.pagination` (see schemas/envelope.py); everything else
+    # leaves these None and clients must treat that as "not paginated".
+    total: Optional[int] = Field(None, ge=0, description="Total items available (list endpoints only)")
+    limit: Optional[int] = Field(None, ge=1, le=200, description="Page size applied (list endpoints only)")
+    offset: Optional[int] = Field(None, ge=0, description="Page offset applied (list endpoints only)")
 
 
 # ── Envelope ─────────────────────────────────────────────────────────────────

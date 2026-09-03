@@ -8,7 +8,7 @@ Covers:
   ✓ US symbols (no .BK) do NOT retry on timeout (max_retries=1)
   ✓ Thai .BK symbols retry up to 3 times on timeout
   ✓ fetch_stock_history returns [] (not raises) when all sources time out
-  ✓ GET /api/stocks/{symbol}/history returns 200 with empty bars on timeout
+  ✓ GET /api/v1/stocks/{symbol}/history returns 200 with empty bars on timeout
   ✓ Stock history endpoint responds within acceptable time on timeout
 """
 import asyncio
@@ -293,7 +293,7 @@ class TestStockHistoryEndpointOnTimeout:
     HTTP-level tests via ASGI TestClient.
 
     These tests mock the stock_service layer to avoid real network calls,
-    then verify the /api/stocks/{symbol}/history endpoint's behaviour when
+    then verify the /api/v1/stocks/{symbol}/history endpoint's behaviour when
     the underlying service encounters timeout conditions.
     """
 
@@ -311,10 +311,13 @@ class TestStockHistoryEndpointOnTimeout:
             'services.stock_service.fetch_stock_history',
             new=AsyncMock(return_value=[]),
         ):
-            response = aclient.get('/api/stocks/AAPL/history?tf=1D')
+            response = aclient.get('/api/v1/stocks/AAPL/history?tf=1D')
 
         assert response.status_code == 200
-        body = response.json()
+        # bd:deps-2026-09 S2 (ADR-002) — /api/v1/* responses are now
+        # enveloped {data, meta}; the endpoint's own payload lives at
+        # body['data'].
+        body = response.json()['data']
         assert 'bars' in body, f"Response missing 'bars' key: {body}"
         assert body['bars'] == []
 
@@ -329,7 +332,7 @@ class TestStockHistoryEndpointOnTimeout:
             new=AsyncMock(side_effect=slow_fetch),
         ):
             start = time.monotonic()
-            response = aclient.get('/api/stocks/AAPL/history?tf=1D')
+            response = aclient.get('/api/v1/stocks/AAPL/history?tf=1D')
             elapsed = time.monotonic() - start
 
         assert elapsed < 35.0, f"Endpoint took {elapsed:.1f}s — too slow"
@@ -337,7 +340,7 @@ class TestStockHistoryEndpointOnTimeout:
 
     def test_history_endpoint_handles_invalid_timeframe(self, aclient):
         """Invalid timeframe returns HTTP 400 (not 500)."""
-        response = aclient.get('/api/stocks/AAPL/history?tf=99X')
+        response = aclient.get('/api/v1/stocks/AAPL/history?tf=99X')
         assert response.status_code == 400
 
     def test_history_endpoint_returns_correct_symbol(self, aclient):
@@ -346,10 +349,10 @@ class TestStockHistoryEndpointOnTimeout:
             'services.stock_service.fetch_stock_history',
             new=AsyncMock(return_value=[]),
         ):
-            response = aclient.get('/api/stocks/TSLA/history?tf=1D')
+            response = aclient.get('/api/v1/stocks/TSLA/history?tf=1D')
 
         assert response.status_code == 200
-        body = response.json()
+        body = response.json()['data']  # bd:deps-2026-09 S2 (ADR-002) envelope
         assert body.get('symbol') == 'TSLA'
 
     def test_history_endpoint_returns_correct_timeframe(self, aclient):
@@ -358,10 +361,10 @@ class TestStockHistoryEndpointOnTimeout:
             'services.stock_service.fetch_stock_history',
             new=AsyncMock(return_value=[]),
         ):
-            response = aclient.get('/api/stocks/AAPL/history?tf=1W')
+            response = aclient.get('/api/v1/stocks/AAPL/history?tf=1W')
 
         assert response.status_code == 200
-        body = response.json()
+        body = response.json()['data']  # bd:deps-2026-09 S2 (ADR-002) envelope
         assert body.get('timeframe') == '1W'
 
 
@@ -385,10 +388,10 @@ class TestStockHistoryEndpointAsync:
             'services.stock_service.fetch_stock_history',
             new=AsyncMock(return_value=[]),
         ):
-            resp = await aclient.get('/api/stocks/AAPL/history?tf=1D')
+            resp = await aclient.get('/api/v1/stocks/AAPL/history?tf=1D')
 
         assert resp.status_code == 200
-        assert resp.json()['bars'] == []
+        assert resp.json()['data']['bars'] == []  # bd:deps-2026-09 S2 (ADR-002) envelope
 
     async def test_endpoint_elapsed_time_under_35s_on_service_timeout(self, aclient):
         """Endpoint latency is acceptable even when service is slow (mocked 0.1s)."""
@@ -401,7 +404,7 @@ class TestStockHistoryEndpointAsync:
             new=AsyncMock(side_effect=slow_service),
         ):
             start = asyncio.get_event_loop().time()
-            resp = await aclient.get('/api/stocks/AAPL/history?tf=1D')
+            resp = await aclient.get('/api/v1/stocks/AAPL/history?tf=1D')
             elapsed = asyncio.get_event_loop().time() - start
 
         assert elapsed < 35.0, f"Endpoint took {elapsed:.2f}s"

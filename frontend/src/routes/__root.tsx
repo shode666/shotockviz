@@ -87,7 +87,7 @@ function RootComponent() {
   // Keep websocket alive at root level
   useWebSocket()
 
-  // Poll /api/system/ready; bumps dataVersion when cache is warm
+  // Poll /api/v1/system/ready; bumps dataVersion when cache is warm
   useBackendReady()
 
   useEffect(() => {

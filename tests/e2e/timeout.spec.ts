@@ -50,7 +50,7 @@ test.describe('Request Timeout UI — overlay appearance', () => {
     // We delay 200ms then abort so the browser sees a network abort.
     // Axios treats abort errors from XHR as ECONNABORTED.
     let requestCount = 0;
-    await page.route('**/api/stocks/*/history**', async (route) => {
+    await page.route('**/api/v1/stocks/*/history**', async (route) => {
       requestCount++;
       // Wait long enough for axios timeout to fire (we'll patch it to 50ms via
       // addInitScript so the browser XHR fires the ontimeout handler).
@@ -104,7 +104,7 @@ test.describe('Request Timeout UI — overlay appearance', () => {
     await mockStockAPIs(page);
 
     // Block history so the component stays in loading state
-    await page.route('**/api/stocks/*/history**', async (route) => {
+    await page.route('**/api/v1/stocks/*/history**', async (route) => {
       // Fulfill with empty bars to exhaust retries quickly
       await route.fulfill({
         status: 200,
@@ -194,7 +194,7 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
     await mockStockAPIs(page);
 
     // This route will never respond — axios will timeout after 30s
-    await page.route('**/api/stocks/*/history**', async (route) => {
+    await page.route('**/api/v1/stocks/*/history**', async (route) => {
       // Hold the request open for 35 seconds (past the 30s axios timeout)
       await new Promise((resolve) => setTimeout(resolve, 35_000));
       await route.fulfill({
@@ -225,7 +225,7 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
     await mockStockAPIs(page);
 
     let callCount = 0;
-    await page.route('**/api/stocks/*/history**', async (route) => {
+    await page.route('**/api/v1/stocks/*/history**', async (route) => {
       callCount++;
       if (callCount === 1) {
         // First call: delay 35s so axios times out (ECONNABORTED)
@@ -273,7 +273,7 @@ test.describe('Request Timeout UI — component structure verification', () => {
 
     await mockStockAPIs(page);
 
-    await page.route('**/api/stocks/*/history**', async (route) => {
+    await page.route('**/api/v1/stocks/*/history**', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 35_000));
       await route.abort('timedout');
     });

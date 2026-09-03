@@ -25,7 +25,7 @@ const MOCK_ALERTS = [
 ];
 
 async function mockAlertsAPI(page: any, data = MOCK_ALERTS) {
-  await page.route('**/api/alerts**', (route: any) => {
+  await page.route('**/api/v1/alerts**', (route: any) => {
     if (route.request().method() === 'GET') {
       route.fulfill({
         status: 200,
@@ -175,7 +175,7 @@ test.describe('Alerts Page — empty state', () => {
   test('shows empty state when no alerts exist', async ({ page }) => {
     await mockStockAPIs(page);
     await mockAuthSession(page, MOCK_AUTH_ME);
-    await page.route('**/api/alerts**', (route) =>
+    await page.route('**/api/v1/alerts**', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',

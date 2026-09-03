@@ -18,8 +18,15 @@ from models.portfolio import Transaction
 from models.watchlist import WatchlistItem
 from api.middleware.auth import get_current_user_optional
 from services import stock_service
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/ai", tags=["ai"])
+# bd:deps-2026-09 S2 (ADR-001 r3-1) — prefix stays /api/ai (unversioned:
+# Caddy's @ai SSE-flush matcher targets this exact path, r3-1). The JSON
+# endpoints (/models, /analyze/{symbol}, non-stream /chat) still adopt the
+# envelope (envelope != path version) — route_class handles that;
+# EnvelopingAPIRoute detects and passes through the streaming /chat
+# response (StreamingResponse) untouched.
+router = APIRouter(prefix="/api/ai", tags=["ai"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 
 OLLAMA_MODEL = "llama3.2"  # fast, good for analysis; user can override
