@@ -1,0 +1,114 @@
+{
+ "label": "head",
+ "icons": {
+  "login": {
+   "svgTotal": 12,
+   "lucide": 10,
+   "emptyLucide": 0
+  },
+  "chart": {
+   "svgTotal": 30,
+   "lucide": 28,
+   "emptyLucide": 0
+  },
+  "dashboard": {
+   "svgTotal": 21,
+   "lucide": 20,
+   "emptyLucide": 0
+  },
+  "portfolio": {
+   "svgTotal": 17,
+   "lucide": 16,
+   "emptyLucide": 0
+  },
+  "alerts": {
+   "svgTotal": 17,
+   "lucide": 16,
+   "emptyLucide": 0
+  },
+  "screener": {
+   "svgTotal": 17,
+   "lucide": 16,
+   "emptyLucide": 0
+  },
+  "news": {
+   "svgTotal": 17,
+   "lucide": 16,
+   "emptyLucide": 0
+  }
+ },
+ "tooltips": {
+  "VIX": {
+   "visible": true,
+   "tooltipBox": {
+    "x": 215,
+    "y": 196.5,
+    "width": 268.078125,
+    "height": 63.5
+   },
+   "triggerBox": {
+    "x": 12,
+    "y": 220,
+    "width": 18.171875,
+    "height": 16.5
+   },
+   "positionedRight": true,
+   "text": "VIX — ดัชนีความผันผวน (Volatility Index)"
+  },
+  "FGI": {
+   "visible": true,
+   "tooltipBox": {
+    "x": 215,
+    "y": 232,
+    "width": 312.109375,
+    "height": 63.5
+   },
+   "triggerBox": {
+    "x": 12,
+    "y": 255.5,
+    "width": 17.4375,
+    "height": 16.5
+   },
+   "positionedRight": true,
+   "text": "FGI — Fear & Greed Index (ดัชนีความกลัวแ"
+  }
+ },
+ "toast": {
+  "shape": "envelope",
+  "expected": "MOCK-ENVELOPE-ERROR",
+  "shown": true,
+  "toastText": "MOCK-ENVELOPE-ERROR"
+ },
+ "oneTap": {
+  "gsiScriptLoaded": true,
+  "initializeCalled": true,
+  "clientId": "mock-client-id.apps.googleusercontent.com",
+  "autoSelect": null,
+  "promptCalled": true,
+  "buttonRendered": true
+ },
+ "tabOrder": {
+  "login": [
+   "A[Dashboard]@245,14 ring=true tabindex=-",
+   "A[Chart]@361,14 ring=true tabindex=-",
+   "A[Screener]@443,14 ring=true tabindex=-",
+   "A[Portfolio]@544,14 ring=true tabindex=-",
+   "A[Alerts]@642,14 ring=true tabindex=-",
+   "A[News]@724,14 ring=true tabindex=-"
+  ],
+  "chart": [
+   "A[Dashboard]@245,14 ring=true tabindex=-",
+   "A[Chart]@361,14 ring=true tabindex=-",
+   "A[Screener]@443,14 ring=true tabindex=-",
+   "A[Portfolio]@544,14 ring=true tabindex=-",
+   "A[Alerts]@642,14 ring=true tabindex=-",
+   "A[News]@724,14 ring=true tabindex=-",
+   "BUTTON[ค้นหา PTT, AAPL... ⌘K]@983,14 ring=true tabindex=-",
+   "BUTTON[]@1354,15 ring=true tabindex=-",
+   "BUTTON[T]@1392,12 ring=true tabindex=-",
+   "BUTTON[]@189,67 ring=true tabindex=-",
+   "BUTTON[PTTปตท.35.50+1.43%]@15,293 ring=true tabindex=-",
+   "BUTTON[✕]@201,309 ring=true tabindex=-"
+  ]
+ }
+}
