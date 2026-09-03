@@ -432,3 +432,98 @@ PUBSUB-BRIDGE-> {"type":"price_update","symbol":"AAPL","price":123.45}
 ## Sign-off (iter1)
 - Quinn: **FAIL**, 2026-09-03 (Phase 3b iter1) — Q-1..Q-9 all closed or reclassified with stronger own-run evidence than iter0; **Q-10 (High)** newly found via live-uvicorn curl, independently converges with Chris's CHRIS-16 (same root cause, same fix). Blocks merge until Dave closes it.
 - Handoff: `Quinn ▸ Dave : Q-10/CHRIS-16 (bd deps-2026-09) — Phase 2 fix (uvicorn/gunicorn proxy-header trust across all 3 compose files), then Quinn/Chris re-verify iter2`
+
+---
+
+# § iter 2 re-verify
+
+bd: deps-2026-09 · phase 3b re-verify · iter 2 · role: Quinn (adversarial) · scope: Q-10 only + regression sweep
+Branch `chore/deps-2026-09`, Dave's iter2 fix (`ef96dee`, log `16-dave-iter1-fixes.md § iter 2`), plus Chris's own parallel iter2 re-verify already landed (`c4d9460`, appended to `14-chris-review.md`, verdict PASS — CHRIS-16 closed). HEAD for this re-verify: `ef96dee`.
+Method: own-run only. Chris's `§ iter 2 re-verify` read for orientation, not trusted — re-executed independently below, including booting the app via **gunicorn + UvicornWorker from `backend/`** (not bare `uvicorn`, which was iter1's method and does NOT exercise this fix — `gunicorn.conf.py` only auto-loads under gunicorn) to actually exercise the fix path.
+
+## Verdict: **PASS** — Q-10/CHRIS-16 closed with own-run evidence, zero new failures in the regression sweep
+
+## Q-10 live-uvicorn spoof reproduction — both scenarios, own-run
+
+**Scenario A — `TRUSTED_PROXIES` unset (default), via `gunicorn -k uvicorn.workers.UvicornWorker` from `backend/` (so `gunicorn.conf.py` auto-loads, matching how prod/ghcr actually run this app):**
+```
+$ redis-cli del rate:login:127.0.0.1
+$ for xff in 10.0.1.1..6: curl -H "X-Forwarded-For: $xff" POST /api/v1/auth/google
+attempt 1-5: HTTP:503
+attempt 6:   HTTP:429
+$ redis-cli keys "rate:login:*"
+rate:login:127.0.0.1        (only key — zero spoofed-IP buckets)
+$ redis-cli get rate:login:127.0.0.1
+6
+```
+**Exactly matches Oliver's expected outcome ("1 bucket / 429 on 6th when unset").** All 6 spoofed XFF values collapsed into the single real-peer bucket; `forwarded_allow_ips=""` (derived from empty `TRUSTED_PROXIES`) makes uvicorn's `_TrustedHosts` trust nothing, so `scope["client"]` stays the real socket peer regardless of the header.
+
+**Scenario B — `TRUSTED_PROXIES=127.0.0.1` explicitly set (simulating a legitimate reverse-proxy at loopback), same gunicorn boot:**
+```
+$ for xff in 10.0.2.1..6: curl -H "X-Forwarded-For: $xff" POST /api/v1/auth/google
+attempt 1-6: HTTP:503 (never 429)
+$ redis-cli keys "rate:login:*"
+rate:login:10.0.2.1
+rate:login:10.0.2.2
+rate:login:10.0.2.3
+rate:login:10.0.2.4
+rate:login:10.0.2.5
+rate:login:10.0.2.6
+```
+**Exactly matches Oliver's expected outcome ("separate buckets when TRUSTED_PROXIES=127.0.0.1").** This is the *intended* behavior once you've explicitly declared trust in a proxy at that address — real client IPs behind a genuinely trusted reverse-proxy get bucketed correctly; the iter1 bug was specifically that this trust applied **by default, unconfigured**. Deliberately opting in is a documented, accepted trust boundary, not the vulnerability.
+
+**Q-10/CHRIS-16 CONFIRMED CLOSED** — own-run, both directions, via the actual fix mechanism (gunicorn boot, not bare uvicorn — re-running iter1's exact bare-uvicorn method would not have exercised the fix at all and would have been a false test).
+
+## Regression sweep
+
+**`tests/api`** — 1 run (no need to re-establish reproducibility, already proven 3/3 in iter1; this run checks for drift only):
+```
+================= 26 failed, 212 passed, 7 warnings in 52.70s ==================
+```
+**Exactly 26F/212P as expected.** Diffed the failing test-ID list against iter1's saved 26-ID set: `diff` → **empty, byte-identical set.** Zero new.
+
+**`test_contract_v1.py`**:
+```
+======================== 23 passed, 2 warnings in 8.64s ========================
+```
+23/23, unchanged from iter1.
+
+**`backend/tests`** (default, `-m "not integration"`):
+```
+113 passed, 2 skipped, 40 deselected, 2 warnings in 0.23s
+```
+Then explicitly with the new integration marker, targeting Dave's new file:
+```
+$ pytest -q -m integration tests/test_rate_limit_proxy_boundary_live.py -v
+collected 3 items
+tests/test_rate_limit_proxy_boundary_live.py ...                         [100%]
+======================== 3 passed, 2 warnings in 11.37s ========================
+```
+3/3 pass, own-run (subprocess-`uvicorn` integration tests, negative-control + both fix directions) — matches Dave's claim, independently confirmed.
+
+**E2E quick run** (`health.spec.ts` + `auth.spec.ts` + `navigation.spec.ts` as the "one page spec", live, fresh frontend build pointed at a bare-`uvicorn` HEAD instance):
+```
+26 tests: 22 passed, 4 failed (1.1m)
+health.spec.ts: 3/3 pass
+auth.spec.ts: 6/8... 5 pass, 2 fail (shows the Google Sign-in button container; shows user avatar button when logged in)
+navigation.spec.ts: 14/16 (sidebar "+ เพิ่มหุ้น" redirects; can load / directly)
+```
+All 4 failing test names are **byte-identical to iter1's per-file failures for these same 3 files** (already proven pre-existing-identical against a live `73fac00` baseline in iter1 §Item 3). Zero new.
+
+## Not runnable here (iter2, final)
+
+1. Docker build/boot/healthcheck cycle, `docker-compose.dev.yml`'s bare-uvicorn R1 gap (documented open by Dave, needs a compose edit not applied on this branch, no Docker daemon here to verify either way) — unchanged constraint across all 3 iterations.
+2. Warm-cache/Celery-backed perf (AC-C1/C2) — still no reachable yfinance network or live Celery worker; not re-attempted.
+3. Full individual root-cause of the remaining pre-existing E2E failures outside this iteration's 3-file quick sweep — classification already proven in iter1 (byte-identical against a live baseline), not re-litigated here per Oliver's Q-10-only + regression-sweep scope.
+
+## Artifacts (iter2)
+
+- `iter2_gunicorn_unset.log` / `iter2_gunicorn_set.log`, `iter2_unset_*.json` / `iter2_set_*.json` — Q-10 both-scenario reproduction, own-run
+- `iter2_tests_api.txt`, `iter2_contract.txt`, `iter2_backend_tests.txt`, `iter2_backend_integration.txt` — regression sweep raw output
+- `iter2_e2e_quick.txt` — E2E quick-run raw output
+- All raw logs at `/tmp/claude-0/-home-claude/95065622-d12f-5933-9418-0aff975c7c30/scratchpad/iter2_*` (not committed, reference only)
+- This report: `outputs/deps-2026-09/15-quinn-review.md`
+
+## Sign-off (iter2)
+- Quinn: **PASS**, 2026-09-03 (Phase 3b iter2) — Q-10/CHRIS-16 closed with own-run evidence in both configurations (unset → single bucket/429; explicitly-trusted → separate buckets, by design). Full regression sweep (tests/api, contract, backend/tests incl. integration marker, E2E quick run) shows zero new failures, all byte-identical to iter1's already-classified pre-existing set. **No open blocking findings remain from Quinn's axis.**
+- Handoff: `Quinn ▸ Oliver : bd deps-2026-09 Phase 3b — Quinn's axis clear (PASS). Cross-check Chris's own PASS (c4d9460) before merge; both axes now green.`
