@@ -6,10 +6,28 @@ import api from '@/services/api';
  * Prevents "localStorage is not defined" hydration errors.
  */
 const ls = {
-    get: (key) => (typeof window !== 'undefined' ? localStorage.getItem(key) : null),
-    set: (key, val) => { if (typeof window !== 'undefined') localStorage.setItem(key, val); },
-    del: (key) => { if (typeof window !== 'undefined') localStorage.removeItem(key); },
+    get: (key: string): string | null => (typeof window !== 'undefined' ? localStorage.getItem(key) : null),
+    set: (key: string, val: string): void => { if (typeof window !== 'undefined') localStorage.setItem(key, val); },
+    del: (key: string): void => { if (typeof window !== 'undefined') localStorage.removeItem(key); },
 };
+
+export interface AuthUser {
+    id: number;
+    email: string;
+    display_name: string;
+    role: string;
+    created_at: string;
+}
+
+interface AuthState {
+    user: AuthUser | null;
+    isAuthenticated: boolean;
+    isLoading: boolean;
+    token: string | null;
+    googleLogin: (credential: string) => Promise<AuthUser>;
+    logout: () => Promise<void>;
+    checkAuth: (retryCount?: number) => Promise<void>;
+}
 
 // bd:deps-2026-09 S1 (ADR-007) — removed: JWT-expiry parsing + proactive
 // re-issue timer, the proactive silent-reissue action, register(), and
@@ -19,7 +37,7 @@ const ls = {
 // (Authorization: Bearer, api.js) and lets Google One Tap
 // (GoogleOneTapManager, __root.tsx) silently re-authenticate when the
 // session ends — no client-side refresh lifecycle.
-const useAuthStore = create((set, get) => ({
+const useAuthStore = create<AuthState>()((set, get) => ({
     user: null,
     isAuthenticated: false,
     isLoading: true,
@@ -27,7 +45,7 @@ const useAuthStore = create((set, get) => ({
     token: ls.get('access_token'),
 
     // ── Google OAuth login ────────────────────────────────────────────────────
-    googleLogin: async (credential) => {
+    googleLogin: async (credential: string) => {
         const { data } = await api.post('/auth/google', { credential });
         ls.set('access_token', data.access_token);
         const me = await api.get('/auth/me');
@@ -61,7 +79,7 @@ const useAuthStore = create((set, get) => ({
             // 15 s timeout — Docker cold-start can take 10-15 s on first request
             const { data } = await api.get('/auth/me', { timeout: 15000 });
             set({ token, user: data, isAuthenticated: true, isLoading: false });
-        } catch (err) {
+        } catch (err: any) {
             if (err?.response?.status === 401) {
                 // Access token invalid/expired — clear it. Google One Tap
                 // (GoogleOneTapManager, __root.tsx) picks up from here:

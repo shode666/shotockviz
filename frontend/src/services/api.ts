@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import toast from 'react-hot-toast';
 
 // Always use relative path — Vite proxy forwards /api → http://backend:8000
@@ -21,7 +21,7 @@ const api = axios.create({
 });
 
 // Attach JWT to every request
-api.interceptors.request.use((config) => {
+api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
     const token = localStorage.getItem('access_token');
     if (token) {
         config.headers.Authorization = `Bearer ${token}`;
@@ -39,7 +39,7 @@ api.interceptors.request.use((config) => {
 // Data endpoints (quotes, history) are silent on failure — chart/panel handles fallback UI
 // /search is silent — the sidebar search box shows empty results on failure, no toast needed
 const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready'];
-const isSilentPath = (url = '') => SILENT_PATHS.some((p) => url.includes(p));
+const isSilentPath = (url = ''): boolean => SILENT_PATHS.some((p) => url.includes(p));
 
 // bd:deps-2026-09 S2 (ADR-002, AC-B4-r3) — single central unwrap point.
 // Every /api/v1/* and /api/ai/* JSON response is now enveloped as
@@ -48,18 +48,28 @@ const isSilentPath = (url = '') => SILENT_PATHS.some((p) => url.includes(p));
 // unchanged (they get the inner `data`, not the envelope). `meta` is not
 // discarded — attached as `response.meta` for the rare caller that wants
 // data_status/cached_layer/pagination (opt-in, doesn't break anyone).
-const _isEnvelope = (body) =>
+interface Envelope {
+    data: unknown;
+    meta: unknown;
+}
+
+const _isEnvelope = (body: unknown): body is Envelope =>
     body !== null && typeof body === 'object' && 'data' in body && 'meta' in body;
 
+interface ApiErrorBody {
+    detail?: string | Array<{ msg: string }>;
+    meta?: { error?: { message?: string } };
+}
+
 api.interceptors.response.use(
-    (response) => {
+    (response: AxiosResponse & { meta?: unknown }) => {
         if (_isEnvelope(response.data)) {
             response.meta = response.data.meta;
             response.data = response.data.data;
         }
         return response;
     },
-    (error) => {
+    (error: AxiosError<ApiErrorBody>) => {
         const url = error.config?.url || '';
         const status = error.response?.status;
         const body = error.response?.data;

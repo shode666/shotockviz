@@ -9,13 +9,18 @@ import { useAuthStore } from '@/store/authStore';
 // (envelope unwrap + error toast) still applies.
 const AI_BASE = { baseURL: '/api' };
 
+export interface ChatMessage {
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+}
+
 const aiService = {
     /** Non-streaming chat (returns full response) */
-    chat: (messages, symbol = null) =>
+    chat: (messages: ChatMessage[], symbol: string | null = null) =>
         api.post('/ai/chat', { messages, symbol, stream: false }, AI_BASE),
 
     /** Quick analysis for a symbol (non-streaming) */
-    analyzeStock: (symbol) =>
+    analyzeStock: (symbol: string) =>
         api.post(`/ai/analyze/${symbol}`, undefined, AI_BASE),
 
     /** List available Ollama models */
@@ -32,7 +37,13 @@ const aiService = {
      *    errors (chunk.error) propagate up to the component.
      *  - SSE keepalive comments (": keepalive") from backend are silently ignored.
      */
-    chatStream: async (messages, symbol = null, model = 'llama3.2', onChunk, onDone) => {
+    chatStream: async (
+        messages: ChatMessage[],
+        symbol: string | null = null,
+        model = 'llama3.2',
+        onChunk: (content: string) => void,
+        onDone?: () => void,
+    ): Promise<void> => {
         const token = useAuthStore.getState().token;
 
         // ── AbortController — 5-minute hard timeout ───────────────────────────
@@ -40,7 +51,7 @@ const aiService = {
         const hardTimeout = setTimeout(() => controller.abort(), 5 * 60 * 1000);
 
         const body = JSON.stringify({ messages, symbol, model, stream: true });
-        let resp;
+        let resp: Response;
         try {
             resp = await fetch('/api/ai/chat', {
                 method: 'POST',
@@ -51,7 +62,7 @@ const aiService = {
                 body,
                 signal: controller.signal,
             });
-        } catch (fetchErr) {
+        } catch (fetchErr: any) {
             clearTimeout(hardTimeout);
             if (fetchErr.name === 'AbortError') {
                 throw new Error('AI ใช้เวลานานเกินไป (5 นาที) — กรุณาลองใหม่');
@@ -66,7 +77,7 @@ const aiService = {
             throw new Error(`AI request failed: ${resp.status}`);
         }
 
-        const reader = resp.body.getReader();
+        const reader = resp.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
 
@@ -77,11 +88,11 @@ const aiService = {
 
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
-                buffer = lines.pop(); // keep incomplete line in buffer
+                buffer = lines.pop() as string; // keep incomplete line in buffer
 
                 for (const line of lines) {
                     if (!line.startsWith('data: ')) continue; // ignore SSE comments / blank lines
-                    let chunk;
+                    let chunk: { error?: string; content?: string; done?: boolean };
                     try {
                         chunk = JSON.parse(line.slice(6));
                     } catch {

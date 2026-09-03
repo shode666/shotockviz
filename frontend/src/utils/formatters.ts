@@ -1,8 +1,8 @@
 /**
  * Format a number as price with commas and decimals (US locale).
  */
-export function formatPrice(value, decimals = 2) {
-    if (value == null || isNaN(value)) return '—';
+export function formatPrice(value: number | string | null | undefined, decimals = 2): string {
+    if (value == null || isNaN(value as number)) return '—';
     return Number(value).toLocaleString('en-US', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
@@ -12,8 +12,8 @@ export function formatPrice(value, decimals = 2) {
 /**
  * Format a number as price with Thai locale.
  */
-export function formatPriceTH(value, decimals = 2) {
-    if (value == null || isNaN(value)) return '—';
+export function formatPriceTH(value: number | string | null | undefined, decimals = 2): string {
+    if (value == null || isNaN(value as number)) return '—';
     return Number(value).toLocaleString('th-TH', {
         minimumFractionDigits: decimals,
         maximumFractionDigits: decimals,
@@ -23,8 +23,8 @@ export function formatPriceTH(value, decimals = 2) {
 /**
  * Format a percentage value with + sign.
  */
-export function formatPct(value, decimals = 2) {
-    if (value == null || isNaN(value)) return '—';
+export function formatPct(value: number | string | null | undefined, decimals = 2): string {
+    if (value == null || isNaN(value as number)) return '—';
     const num = Number(value);
     const sign = num >= 0 ? '+' : '';
     return `${sign}${num.toFixed(decimals)}%`;
@@ -33,8 +33,8 @@ export function formatPct(value, decimals = 2) {
 /**
  * Format a change value with + sign.
  */
-export function formatChange(value, decimals = 2) {
-    if (value == null || isNaN(value)) return '—';
+export function formatChange(value: number | string | null | undefined, decimals = 2): string {
+    if (value == null || isNaN(value as number)) return '—';
     const num = Number(value);
     const sign = num >= 0 ? '+' : '';
     return `${sign}${num.toFixed(decimals)}`;
@@ -43,8 +43,8 @@ export function formatChange(value, decimals = 2) {
 /**
  * Format volume (e.g., 1500000 → "1.5M").
  */
-export function formatVolume(value) {
-    if (value == null || isNaN(value)) return '—';
+export function formatVolume(value: number | string | null | undefined): string {
+    if (value == null || isNaN(value as number)) return '—';
     const num = Number(value);
     if (num >= 1e9) return `${(num / 1e9).toFixed(1)}B`;
     if (num >= 1e6) return `${(num / 1e6).toFixed(1)}M`;
@@ -55,8 +55,8 @@ export function formatVolume(value) {
 /**
  * Format market cap (e.g., 450000000000 → "450B").
  */
-export function formatMarketCap(value) {
-    if (value == null || isNaN(value)) return '—';
+export function formatMarketCap(value: number | string | null | undefined): string {
+    if (value == null || isNaN(value as number)) return '—';
     const num = Number(value);
     if (num >= 1e12) return `${(num / 1e12).toFixed(1)}T`;
     if (num >= 1e9) return `${(num / 1e9).toFixed(0)}B`;
@@ -69,7 +69,7 @@ export function formatMarketCap(value) {
  * Internal symbol keeps suffix for API calls,
  * but display strips it and shows market tag instead.
  */
-const SUFFIX_MARKET_MAP = {
+const SUFFIX_MARKET_MAP: Record<string, string> = {
     '.BK': 'SET',    // Thailand SET/MAI
     '.T':  'JP',     // Tokyo Stock Exchange
     '.SS': 'CN',     // Shanghai Stock Exchange
@@ -87,6 +87,12 @@ const SUFFIX_MARKET_MAP = {
     '.SI': 'SG',     // Singapore Exchange
 };
 
+export interface ParsedSymbol {
+    display: string;
+    market: string;
+    suffix: string;
+}
+
 /**
  * Strip exchange suffix from symbol for display.
  * Returns { display, market, suffix }
@@ -97,7 +103,7 @@ const SUFFIX_MARKET_MAP = {
  *   parseSymbol('AAPL')       → { display: 'AAPL',   market: 'US',  suffix: '' }
  *   parseSymbol('SCBS&P500')  → { display: 'SCBS&P500', market: 'FUND', suffix: '' }
  */
-export function parseSymbol(symbol, marketHint) {
+export function parseSymbol(symbol: string | null | undefined, marketHint?: string): ParsedSymbol {
     if (!symbol) return { display: '—', market: '', suffix: '' };
 
     for (const [suffix, market] of Object.entries(SUFFIX_MARKET_MAP)) {
@@ -122,14 +128,14 @@ export function parseSymbol(symbol, marketHint) {
  * Get just the display symbol (no suffix).
  * Shorthand for parseSymbol(sym).display
  */
-export function displaySymbol(symbol) {
+export function displaySymbol(symbol: string | null | undefined): string {
     return parseSymbol(symbol).display;
 }
 
 /**
  * Market tag color config for badges.
  */
-export const MARKET_COLORS = {
+export const MARKET_COLORS: Record<string, { bg: string; text: string }> = {
     US:   { bg: 'rgba(124,92,252,0.15)',  text: '#7c5cfc' },
     SET:  { bg: 'rgba(52,211,153,0.15)',   text: '#34d399' },
     FUND: { bg: 'rgba(251,191,36,0.15)',   text: '#fbbf24' },
@@ -145,7 +151,7 @@ export const MARKET_COLORS = {
 /**
  * Market → currency mapping for display.
  */
-export const MARKET_CURRENCY = {
+export const MARKET_CURRENCY: Record<string, { sign: string; code: string }> = {
     US:   { sign: '$',  code: 'USD' },
     SET:  { sign: '฿',  code: 'THB' },
     FUND: { sign: '฿',  code: 'THB' },
@@ -162,7 +168,7 @@ export const MARKET_CURRENCY = {
  * Relative time label (e.g., "10 นาทีที่แล้ว").
  * Returns Thai-language relative time strings.
  */
-export function timeAgo(dateStr) {
+export function timeAgo(dateStr: string | null | undefined): string {
     if (!dateStr) return '';
     const diff = Date.now() - new Date(dateStr).getTime();
     if (isNaN(diff)) return '';
@@ -178,7 +184,7 @@ export function timeAgo(dateStr) {
  * Get color for up/down values (green for positive, red for negative).
  * Returns CSS color variable or default neutral gray.
  */
-export function upColor(value) {
+export function upColor(value: number | null | undefined): string {
     if (value == null) return 'var(--color-text-sub)';
     return value >= 0 ? 'var(--color-green)' : 'var(--color-red)';
 }
