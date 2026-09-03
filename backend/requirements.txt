@@ -1,54 +1,53 @@
+# bd:deps-2026-09 WP-B1 — all pins are exact `==`, frozen from
+# `uv pip install` resolve against the target floors in
+# outputs/deps-2026-09/01-sara-adr-migration.md §1.3 (`uv pip freeze`
+# output pasted in outputs/deps-2026-09/10-dave-backend-b0-b5.md).
+# No floating specifiers on this branch (§1.4 pin rule).
+
 # Web framework
-fastapi==0.131.0
-uvicorn[standard]==0.41.0
-gunicorn==23.0.0
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+gunicorn==26.2.0
+uvicorn-worker==0.4.0
 
 # Database
-asyncpg==0.30.0
-sqlalchemy[asyncio]==2.0.46
-alembic==1.14.1
+asyncpg==0.31.0
+sqlalchemy[asyncio]==2.0.52
+alembic==1.19.1
 
 # Redis & Cache
-redis==7.1.0
-celery==5.6.2
+redis==8.1.0
+celery==5.6.3
 
 # Auth
-PyJWT==2.10.1
+PyJWT==2.13.0
 bcrypt==5.0.0
 passlib[bcrypt]==1.7.4
-google-auth==2.38.0
-python-multipart==0.0.20
+google-auth==2.57.0
+python-multipart==0.0.32
 
 # Data
-pandas==2.2.3
-numpy==2.2.3
-requests==2.32.3
+pandas==3.0.5
+numpy==2.5.2
+requests==2.34.2
 httpx==0.28.1
-yfinance==0.2.65
+yfinance==1.4.1
 
 # Sync DB driver (required by Celery workers — asyncpg is async-only)
 psycopg2-binary==2.9.10
 
 # Validation
-pydantic==2.12.5
-pydantic-settings==2.8.1
+pydantic==2.13.5
+pydantic-settings==2.15.0
 email-validator==2.2.0
 
 # Logging
-structlog==25.1.0
+structlog==26.1.0
 
 # Telegram
-python-telegram-bot==22.6
+python-telegram-bot==22.8
 
 # Feed parsing
 feedparser==6.0.11
 
 # Thai mutual fund NAV — fetched directly from SEC Open Data API (no pythainav dep)
-
-# Testing
-pytest==8.3.5
-pytest-asyncio==0.25.3
-aiosqlite==0.20.0
-
-# Dev tools
-pip-audit==2.9.0
