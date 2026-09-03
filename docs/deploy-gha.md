@@ -37,6 +37,43 @@
    - `POSTGRES_PASSWORD`, `DATABASE_URL` (matching password), `JWT_SECRET_KEY`
    - `FINNHUB_API_KEY`, `CORS_ORIGINS` (`https://<DOMAIN>`)
    - `DOMAIN`, `CADDY_EMAIL`, `GOOGLE_CLIENT_ID`, `VITE_GOOGLE_CLIENT_ID`
+   - `TRUSTED_PROXIES` — see § Proxy trust below; safe to leave empty for the default
+     `docker-compose.ghcr.yml` topology (backend not host-port-exposed, only reachable
+     from Caddy inside `stockviz-net`).
+
+## Proxy trust (`TRUSTED_PROXIES`)
+
+bd:deps-2026-09 iter2 (CHRIS-16/Q-10). Two independent layers decide whether a request's
+`X-Forwarded-For` header is honored for rate-limit client-IP identity, and BOTH must agree
+or the weaker one wins:
+
+1. **ASGI server** (uvicorn/gunicorn) — its own `forwarded_allow_ips`, defaults to trusting
+   `127.0.0.1` regardless of anything in this app's config. `backend/gunicorn.conf.py` derives
+   this from `TRUSTED_PROXIES` and is auto-loaded by `gunicorn` (the command
+   `docker-compose.ghcr.yml`/`docker-compose.prod.yml` both run) with **no compose edit
+   needed** — own-run confirmed: `gunicorn --help` defaults `-c/--config` to `./gunicorn.conf.py`,
+   and the Dockerfile's `WORKDIR /app` (where that file lands) is gunicorn's CWD.
+2. **App layer** — `api/middleware/rate_limit.py`'s `TRUSTED_PROXIES` allowlist (this repo's
+   `core/config.py` setting), which only ever runs AFTER layer 1 has already decided what
+   `request.client.host` is.
+
+Leaving `TRUSTED_PROXIES` empty (default) is safe end-to-end: layer 1 trusts nothing
+(`gunicorn.conf.py` sets `forwarded_allow_ips=""`, own-run confirmed this makes uvicorn's
+`_TrustedHosts` reject even `127.0.0.1`), layer 2 falls back to the raw socket peer. The
+tradeoff (documented, not fixed by this bd): every request that legitimately passes through
+Caddy then shares Caddy's own container IP as ONE rate-limit bucket — still correctly
+enforced, just coarser per-real-user granularity. To get per-real-user buckets behind Caddy,
+set `TRUSTED_PROXIES` to the `stockviz-net` bridge subnet (`docker network inspect
+<project>_stockviz-net | grep Subnet`) on the server's `.env` — both layers read the same var.
+
+**Known gap, not closed by this bd (R1 — logged in
+`outputs/deps-2026-09/16-dave-iter1-fixes.md` § iter 2):** `docker-compose.dev.yml`'s backend
+`command:` runs plain `uvicorn` (not `gunicorn` — `gunicorn.conf.py` does not apply), and
+uvicorn's own env-var-driven default (`$FORWARDED_ALLOW_IPS`, own-run confirmed via uvicorn
+0.52.4 CLI `--help` + a live test) never reaches the dev container because that variable isn't
+in `docker-compose.dev.yml`'s backend `environment:` allowlist. Compose files are read-only on
+this branch; the fix is a 1-line addition (`FORWARDED_ALLOW_IPS: ${TRUSTED_PROXIES:-}` next to
+the existing `environment:` entries) for whoever picks up that follow-up.
 
 4. **Run the workflow** (manual trigger — `workflow_dispatch` only, matches CI's trigger style
    in `.github/workflows/ci.yml:4`):

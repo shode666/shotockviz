@@ -418,3 +418,224 @@ working Python venv, Node 24 — but **no Docker**. This means:
 6. `e3d46bf` — CHRIS-07 (ci.yml reconciliation)
 7. `ca6b6af` — CHRIS-09/10/12/13 (small AC gaps)
 8. `df98204` — Q-7/Q-8/Q-9 (E2E collection fix + classification + note)
+
+---
+
+## § iter 2 — CHRIS-16/Q-10 (uvicorn/gunicorn proxy-header trust bypasses
+the app-level TRUSTED_PROXIES allowlist)
+
+Delegated by Oliver after both Chris (`14-chris-review.md`, re-verify)
+and Quinn (`15-quinn-review.md`, re-verify) independently found the same
+new High-severity finding via live-`uvicorn`/`gunicorn` curl (not
+`TestClient`, which cannot see this class of bug at all — it never goes
+through the real ASGI socket-handling layer where the bug lives).
+
+### Root cause (confirmed via source inspection + own-run repro, not
+assumed from either report)
+
+uvicorn 0.52.4's `Config` defaults to `proxy_headers=True,
+forwarded_allow_ips='127.0.0.1'`. When a caller connects from loopback
+and sets a spoofed `X-Forwarded-For`, uvicorn's own
+`ProxyHeadersMiddleware` (`uvicorn/middleware/proxy_headers.py`) rewrites
+`scope["client"]` from that header **before** `main.py`'s ASGI `app`
+callable — and therefore this app's own `TRUSTED_PROXIES` allowlist
+(`api/middleware/rate_limit.py::_client_ip()`, iter1/CHRIS-03) — ever
+runs. `gunicorn.workers.uvicorn.UvicornWorker.CONFIG_KWARGS` does not
+override this; own-run confirmed via `uvicorn/workers.py` source: it
+*always* forwards gunicorn's own `forwarded_allow_ips` setting into
+uvicorn's `Config`, but there is no gunicorn-level `proxy_headers`
+setting for it to also wire through (uvicorn's own default,
+`proxy_headers=True`, always applies under gunicorn too — the only real
+lever is `forwarded_allow_ips`).
+
+Own-run repro (bare loopback curl, `TRUSTED_PROXIES` unset, matching
+Chris's/Quinn's methodology exactly):
+```
+$ curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:8000/api/v1/auth/google \
+    -H "X-Forwarded-For: <6 distinct spoofed IPs>" -d '{"credential":"x"}'
+-> all 6 different rate:login:<spoofed-ip> Redis keys created, none 429
+```
+
+### Fix mechanism — `gunicorn.conf.py` auto-load (no compose edit needed)
+
+Own-run confirmed (`gunicorn --help`): `-c/--config`'s **default value is
+literally `./gunicorn.conf.py`** — gunicorn auto-loads a config file from
+its CWD even when the invoking command passes zero `-c` flags. Verified
+with a throwaway probe app + `gunicorn app:app -w 1 --bind ...` (no `-c`)
+— a `print()` inside `gunicorn.conf.py` fired. The Dockerfile's
+`WORKDIR /app` (where `COPY . .` lands `backend/gunicorn.conf.py`) is
+gunicorn's CWD at container start, and CLI flags always win over conf-file
+settings (confirmed: `--bind` on the command line overrode the conf
+file's own `bind =`) — so this file cannot conflict with
+`docker-compose.prod.yml:65` / `docker-compose.ghcr.yml:76`'s existing
+`command: gunicorn main:app -w 2 -k uvicorn.workers.UvicornWorker --bind
+0.0.0.0:8000` lines. **Those two compose files needed zero edits** —
+confirmed live below.
+
+`forwarded_allow_ips=""` (the value used when `TRUSTED_PROXIES` is
+unset/empty) is a real, safe "trust nothing" value, not equivalent to
+leaving the setting unset: own-run, `uvicorn.middleware.proxy_headers.
+_TrustedHosts("")` (and gunicorn's own parsed `[]` for the same input)
+both reject even `127.0.0.1` (`'127.0.0.1' in _TrustedHosts("")` ->
+`False`), whereas the *unset* default trusts it (the bug).
+
+`docker-compose.dev.yml:77`'s `command: uvicorn main:app --host 0.0.0.0
+--port 8000 --reload --reload-include "*.py"` runs **bare uvicorn, not
+gunicorn** — `gunicorn.conf.py` does not apply there, and bare uvicorn has
+no equivalent CWD-auto-discovery. It does default `--forwarded-allow-ips`
+from the `$FORWARDED_ALLOW_IPS` env var (own-run confirmed via `uvicorn
+--help` + a live throwaway-app test: set empty -> no rewrite; unset ->
+rewrites) — but that var is not in `docker-compose.dev.yml`'s backend
+`environment:` allowlist (lines 45-58), so it never reaches the dev
+container even if set in `.env`. **R1 — logged, not applied** (compose
+files are read-only on this branch): add one line,
+`FORWARDED_ALLOW_IPS: ${TRUSTED_PROXIES:-}`, next to the existing
+`environment:` entries in `docker-compose.dev.yml` (and, if per-real-user
+dev rate-limit granularity is ever wanted, `TRUSTED_PROXIES: ${TRUSTED_
+PROXIES:-}` to `docker-compose.prod.yml`/`docker-compose.ghcr.yml`'s
+backend `environment:` blocks too — not required to CLOSE the finding,
+since empty/unset there is already the safe default via `gunicorn.conf.py`,
+only required if an operator later wants to configure a non-empty
+allowlist for prod/ghcr).
+
+### App-level hardening (item 2) — rightmost-untrusted-hop XFF parsing
+
+`_client_ip()`'s XFF parsing was `xff.split(",")[0]` (leftmost/
+client-claimed value). Replaced with a new `_rightmost_untrusted_ip()`
+static method: walks the header from the right, skipping any hop that is
+itself a configured trusted proxy, returning the first untrusted one —
+the same algorithm uvicorn's own `_TrustedHosts.get_trusted_client_
+address()` uses (independently reimplemented at the app layer as
+defense-in-depth for `TestClient`-based tests, which never exercise the
+real ASGI middleware at all). Falls back to the leftmost entry only if
+every hop in the chain is trusted (matches uvicorn's own documented
+edge-case behavior).
+
+### Live curl proof — (a) and (b), exact `gunicorn` command lines from
+`docker-compose.prod.yml`/`docker-compose.ghcr.yml`, run from `backend/`
+(CWD = gunicorn's config-discovery root), **zero compose edits, zero
+`-c` flag**
+
+**(a) TRUSTED_PROXIES unset (default) — spoofed XFF from loopback must
+collapse to ONE bucket:**
+```
+$ unset TRUSTED_PROXIES
+$ gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:18500
+$ for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+    http://127.0.0.1:18500/api/v1/auth/google -H "Content-Type: application/json" \
+    -H "X-Forwarded-For: 172.16.5.$i" -d '{"credential":"not-a-real-token"}'; done
+req 1 (XFF=172.16.5.1) -> HTTP 503
+req 2 (XFF=172.16.5.2) -> HTTP 503
+req 3 (XFF=172.16.5.3) -> HTTP 503
+req 4 (XFF=172.16.5.4) -> HTTP 503
+req 5 (XFF=172.16.5.5) -> HTTP 503
+req 6 (XFF=172.16.5.6) -> HTTP 429   <- was never 429 pre-fix (CHRIS-16/Q-10)
+$ redis-cli KEYS "rate:login:*"
+rate:login:127.0.0.1   <- ONE shared bucket, not 6 per-spoofed-IP buckets
+```
+(503 on requests 1-5 = Google OAuth token verification failing against a
+fake credential/no network in this sandbox — expected, irrelevant to the
+rate limiter, which intercepts BEFORE the handler runs on request 6
+regardless.)
+
+**(b) TRUSTED_PROXIES=127.0.0.1 (stands in for "peer is Caddy's real,
+configured container IP") — 6 DIFFERENT real users must NOT collapse
+into one bucket (the prod "inverse case" from the original bug report):**
+```
+$ export TRUSTED_PROXIES=127.0.0.1
+$ gunicorn main:app -w 1 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:18501
+$ for i in 1 2 3 4 5 6; do curl ... -H "X-Forwarded-For: 203.0.113.$i" ...; done
+req 1..6 -> HTTP 503 each (same Google-OAuth-network caveat as (a); none 429)
+$ redis-cli KEYS "rate:login:*" | sort
+rate:login:203.0.113.1
+rate:login:203.0.113.2
+rate:login:203.0.113.3
+rate:login:203.0.113.4
+rate:login:203.0.113.5
+rate:login:203.0.113.6
+$ for k in $(redis-cli KEYS "rate:login:*"); do echo -n "$k = "; redis-cli GET "$k"; done
+rate:login:203.0.113.1 = 1   (... all 6, each = 1 — isolated per-user buckets)
+```
+
+### Tests
+
+`tests/api/test_rate_limit_middleware.py` (Chris's iter1 tests, unit,
+`TestClient`) — still green, unchanged behavior at that layer:
+```
+$ pytest tests/api/test_rate_limit_middleware.py -v
+2 passed in 0.70s
+```
+
+**NEW** `backend/tests/test_rate_limit_proxy_boundary_live.py` — 3
+subprocess-`uvicorn` tests, marked `integration` (deselected by
+`backend/pytest.ini`'s default `-m "not integration"`, same convention as
+`test_user_simulation.py`; run explicitly). Boots a real `uvicorn main:app`
+subprocess per test and hits it over a real loopback socket — the only
+way to exercise this bug at all:
+1. `test_unset_forwarded_allow_ips_reproduces_chris16_q10` — negative
+   control, reproduces the ORIGINAL bug (asserts it still bypasses when
+   `FORWARDED_ALLOW_IPS` is left unset, uvicorn's own default).
+2. `test_forwarded_allow_ips_empty_spoofed_xff_collapses_to_one_bucket` —
+   (a), asserts the fix.
+3. `test_trusted_proxy_configured_rightmost_untrusted_hop` — (b) +
+   rightmost-untrusted-hop 2-hop-chain parsing.
+```
+$ pytest backend/tests/test_rate_limit_proxy_boundary_live.py -m integration -v
+3 passed in 10.95s
+$ pytest backend/tests/test_rate_limit_proxy_boundary_live.py -m integration -v   (rerun)
+3 passed in 10.93s
+```
+Two debugging notes worth recording (both fixed in the test file, neither
+is a product-code bug): (1) an early draft redirected the subprocess's
+stdout to `subprocess.PIPE` without a draining reader — this app's
+SQLAlchemy engine runs `echo=True`, and the accumulated unread log output
+eventually filled the OS pipe buffer and blocked the child's `write()`,
+stalling its whole event loop (looked exactly like a dead server: TCP
+`ConnectError` during startup, then permanent `ReadTimeout` once the
+socket opened); fixed by redirecting to a real temp file instead of a
+pipe. (2) the readiness-poll's initial per-attempt HTTP timeout (1.0s)
+was shorter than `/api/health`'s real cold-start latency in this sandbox
+(~2.2s — it does synchronous Postgres + Redis round-trips on every call,
+no cache) — reproduced identically with stdlib `urllib.request`, ruling
+out an httpx-specific bug; fixed by raising the per-attempt timeout to
+5.0s.
+
+### Full suite totals (unchanged pre-existing counts; new file adds 3
+`integration`-marked tests, correctly deselected by default)
+
+```
+$ pytest backend/tests -q
+110 passed, 2 skipped, 40 deselected in 0.40s
+```
+(iter1 baseline: 110p/2s/37d — 37+3 = 40, the exact delta from this
+iteration's 3 new `integration`-marked tests; 110p/2s unchanged, zero
+regression.)
+```
+$ pytest tests/api -q
+26 failed, 212 passed in 52.33s
+```
+(byte-identical to iter1's re-verified baseline, 26F/212P — untouched by
+this iteration, confirms no collateral regression from the rate_limit.py
+/config.py changes.)
+```
+$ mypy api core --ignore-missing-imports
+Found 112 errors in 16 files
+```
+(unchanged from iter1's CHRIS-13 checkpoint — `gunicorn.conf.py` is
+outside `api`/`core`'s mypy scope; `rate_limit.py`'s new method introduced
+no new errors.)
+
+### Commit
+
+`fix(deps-2026-09 iter2): CHRIS-16/Q-10 uvicorn/gunicorn proxy-header
+trust bypasses TRUSTED_PROXIES allowlist`
+
+Files: `backend/gunicorn.conf.py` (new), `backend/Dockerfile`,
+`backend/api/middleware/rate_limit.py`, `.env.example`,
+`docs/deploy-gha.md`, `backend/tests/test_rate_limit_proxy_boundary_live.py`
+(new), `changelog.md`, `outputs/deps-2026-09/16-dave-iter1-fixes.md` (this
+file). Compose files (`docker-compose.dev.yml`, `docker-compose.prod.yml`,
+`docker-compose.ghcr.yml`) — **not touched**, per explicit instruction;
+the one real gap (`docker-compose.dev.yml`'s bare-`uvicorn` command
+missing `FORWARDED_ALLOW_IPS` in its `environment:` allowlist) is recorded
+above as R1 for whoever picks up that follow-up.

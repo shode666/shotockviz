@@ -71,6 +71,39 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return False
 
     @staticmethod
+    def _rightmost_untrusted_ip(xff: str) -> str | None:
+        """Walk `X-Forwarded-For` from the RIGHT (nearest hop to us first),
+        skipping any entry that is itself a configured trusted proxy, and
+        return the first (rightmost) untrusted entry.
+
+        bd:deps-2026-09 iter2 (CHRIS-16/Q-10, item 2) — was
+        `xff.split(",")[0]`: the LEFTMOST entry, i.e. whatever the ORIGINAL
+        caller claimed. Each proxy in a real chain APPENDS its observed
+        peer to the header (RFC 7239 intent; `X-Forwarded-For` is the
+        de-facto convention), so the trustworthy value is the one the
+        LAST-trusted hop actually observed, found by scanning from the
+        right and skipping over any hop that is itself a known/trusted
+        proxy (matches uvicorn's own `_TrustedHosts.get_trusted_client_
+        address()`, `uvicorn/middleware/proxy_headers.py`, own-run source
+        inspection — same algorithm, independently reimplemented at the
+        app layer as defense-in-depth for paths that never go through that
+        ASGI middleware at all, e.g. `TestClient`-based unit tests, which
+        `docs/deploy-gha.md`/CHRIS-16 confirmed cannot exercise the real
+        `uvicorn`/`gunicorn` proxy-header code path). If every hop is
+        trusted (all proxies, no client segment left — a malformed/attacker
+        chain), falls back to the leftmost entry rather than returning
+        None, matching uvicorn's own documented behavior for that edge
+        case.
+        """
+        hops = [h.strip() for h in xff.split(",") if h.strip()]
+        if not hops:
+            return None
+        for hop in reversed(hops):
+            if not RateLimitMiddleware._is_trusted_proxy(hop):
+                return hop
+        return hops[0]
+
+    @staticmethod
     def _client_ip(request: Request) -> str:
         """Real client IP behind Caddy (bd:deps-2026-09 S2, Sentinel S-AC-4).
 
@@ -82,18 +115,36 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         `X-Forwarded-For: <anything>` and get a fresh rate-limit bucket on
         every request (AB-2/AB-6 bypass — confirmed live via curl, Chris's
         review CHRIS-03). Now only trusts X-Forwarded-For when the
-        request's ACTUAL socket peer (`request.client.host` — NOT
-        attacker-controllable; you can't fake who opened the TCP
-        connection) is itself a configured trusted proxy
-        (`settings.TRUSTED_PROXIES`, default empty = trust nothing = every
-        request's identity is its raw socket peer, safe by default). See
-        .env.example for sizing this for the Caddy-fronted topology.
+        request's socket peer (`request.client.host`) is itself a
+        configured trusted proxy (`settings.TRUSTED_PROXIES`, default
+        empty = trust nothing = every request's identity is its raw socket
+        peer, safe by default). See .env.example for sizing this for the
+        Caddy-fronted topology.
+
+        bd:deps-2026-09 iter2 (CHRIS-16/Q-10) — `request.client.host` is
+        NOT unconditionally "the actual TCP peer, unspoofable" as iter1's
+        docstring here used to claim: when the ASGI server itself
+        (uvicorn/gunicorn) is configured to trust proxy headers for the
+        connecting peer (its OWN `forwarded_allow_ips`, separate from and
+        upstream of this allowlist — see `gunicorn.conf.py` / this repo's
+        uvicorn dev-run guidance in `docs/deploy-gha.md`), it rewrites
+        `request.client.host` from the spoofed header BEFORE this function
+        ever runs — this app-level check alone cannot see or prevent that;
+        it must be closed one layer down (ASGI-server config), which
+        `gunicorn.conf.py` now does by deriving `forwarded_allow_ips` from
+        this SAME `TRUSTED_PROXIES` env var, single source of truth
+        end-to-end. This function remains correct AS A LAYER: given
+        whatever `request.client.host` the ASGI layer hands it, it applies
+        the SAME allowlist consistently, and now parses multi-hop XFF
+        chains correctly (rightmost-untrusted-hop, not leftmost-claimed).
         """
         peer_ip = request.client.host if request.client else None
+        if not peer_ip:
+            return "unknown"
         xff = request.headers.get("x-forwarded-for")
-        if xff and peer_ip and RateLimitMiddleware._is_trusted_proxy(peer_ip):
-            return xff.split(",")[0].strip()
-        return peer_ip or "unknown"
+        if not xff or not RateLimitMiddleware._is_trusted_proxy(peer_ip):
+            return peer_ip
+        return RateLimitMiddleware._rightmost_untrusted_ip(xff) or peer_ip
 
     async def dispatch(self, request: Request, call_next):
         # bd:deps-2026-09 S2 (ADR-001 r3-2, Sentinel S-AC-3/AB-6) — path

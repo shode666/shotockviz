@@ -39,3 +39,15 @@ COPY --chown=stockviz:stockviz . .
 USER stockviz
 
 EXPOSE 8000
+
+# bd:deps-2026-09 iter2 (CHRIS-16/Q-10) — default CMD for standalone
+# `docker run`/no-compose-override use. NOTE: all 3 compose files in this
+# repo (`docker-compose.dev.yml`, `docker-compose.prod.yml`,
+# `docker-compose.ghcr.yml`) set their own backend `command:`, which
+# replaces this CMD entirely (Docker semantics — compose `command:` always
+# wins over image CMD) — so this line is NOT what actually closes
+# CHRIS-16/Q-10 for those 3 topologies; `gunicorn.conf.py`'s CWD-relative
+# auto-load (see that file's docstring) is what does. This CMD is kept
+# correct/explicit anyway so a bare `docker run stockviz-backend` (no
+# compose) gets the same safe-by-default proxy-header trust.
+CMD ["gunicorn", "main:app", "-w", "2", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000", "-c", "gunicorn.conf.py"]

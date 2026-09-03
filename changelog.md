@@ -38,6 +38,44 @@ migration branch (`chore/deps-2026-09`). Full evidence/proof per finding:
   env var); trigger stays `workflow_dispatch`-only (unchanged, prior
   explicit decision).
 
+### bd:deps-2026-09 iter2 — CHRIS-16/Q-10 fix (2026-09-03)
+
+Chris's and Quinn's iter1 re-verify both surfaced the same new High
+finding via live-`uvicorn`/`gunicorn` curl (not `TestClient`, which
+structurally cannot see this class of bug): uvicorn/gunicorn's OWN
+proxy-header trust (`forwarded_allow_ips` defaults to `'127.0.0.1'`)
+rewrites `request.client.host` from a spoofed `X-Forwarded-For` BEFORE
+the CHRIS-03/iter1 app-level `TRUSTED_PROXIES` allowlist ever runs, when
+the connecting peer is loopback. Full evidence:
+`outputs/deps-2026-09/16-dave-iter1-fixes.md` § iter 2.
+
+- **NEW `backend/gunicorn.conf.py`** — derives `forwarded_allow_ips` from
+  the same `TRUSTED_PROXIES` env var `core/config.py` reads. Auto-loaded
+  by `gunicorn` (own-run confirmed: `gunicorn --help` defaults `-c` to
+  `./gunicorn.conf.py`) — closes the gap for `docker-compose.prod.yml`/
+  `docker-compose.ghcr.yml`'s existing `command:` lines with **zero
+  compose edit**, live-curl-verified (6 spoofed XFF from loopback -> 1
+  bucket, 429 on the 6th).
+- **`backend/Dockerfile`** — added `CMD` wiring `-c gunicorn.conf.py`
+  explicitly (for standalone `docker run`; the 3 compose files' own
+  `command:` still wins over it, unaffected).
+- **`api/middleware/rate_limit.py`** — `_client_ip()` now parses
+  multi-hop `X-Forwarded-For` chains via rightmost-untrusted-hop (was
+  leftmost-claimed), matching uvicorn's own `_TrustedHosts` algorithm;
+  defense-in-depth for paths (e.g. `TestClient`) that never go through
+  the real ASGI proxy-header middleware at all.
+- **`.env.example` / `docs/deploy-gha.md`** — documented the two-layer
+  (ASGI server + app) proxy-trust model and the still-open R1 gap:
+  `docker-compose.dev.yml`'s plain `uvicorn` command has no equivalent
+  auto-wiring in this repo yet (needs a 1-line compose edit, not applied
+  — compose files are read-only on this branch).
+- **NEW `backend/tests/test_rate_limit_proxy_boundary_live.py`** —
+  subprocess-`uvicorn` integration tests (marked `integration`,
+  deselected by default, run explicitly): reproduces the original bug as
+  a negative control, then proves both directions of the fix (spoofed XFF
+  collapses to one bucket when unset; distinct real users behind a
+  correctly-configured trusted proxy do NOT collapse into one).
+
 ### Fix: Dashboard Top Holdings cross-currency sorting (2026-03-11)
 
 - `api/routes/dashboard.py` — Top Holdings now sorts by THB-normalized value using USD/THB exchange rate from cache. Previously compared raw THB and USD values directly, causing Thai funds (~฿5,000) to rank above US stocks (~$4,000 = ฿130,000). Also fixes total portfolio value to show correct THB-normalized sum. Added float precision guard and currency field tracking per holding.
