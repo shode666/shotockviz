@@ -1,5 +1,3 @@
-import hashlib
-import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -12,13 +10,15 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds
 
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt with cost factor 12."""
+    """Hash a password using bcrypt with cost factor 12.
+
+    bd:deps-2026-09 S1 — kept: still used by ``scripts/create_user.py`` (ops
+    tool) and by tests that construct a User row directly (e.g.
+    ``backend/tests/conftest.py``). ``verify_password`` was removed with the
+    password-login route (ADR-007) — its only caller was
+    ``api/routes/auth.py``'s now-deleted ``/login`` handler.
+    """
     return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -29,16 +29,6 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     )
     to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
-
-
-def create_refresh_token() -> str:
-    """Create a secure random refresh token."""
-    return secrets.token_urlsafe(64)
-
-
-def hash_refresh_token(token: str) -> str:
-    """Hash a refresh token for storage."""
-    return hashlib.sha256(token.encode()).hexdigest()
 
 
 def decode_access_token(token: str) -> Optional[dict]:

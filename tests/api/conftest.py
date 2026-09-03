@@ -71,18 +71,41 @@ def client(db_session):
 
 
 @pytest.fixture
-def auth_headers(client):
-    """Register a test user and return Authorization header."""
-    client.post("/api/auth/register", json={
-        "email": "test@example.com",
-        "password": "TestPass1",
-        "display_name": "Test User",
+async def _test_user(db_session):
+    """Create a test user directly in the DB (no HTTP round-trip)."""
+    from core.security import hash_password
+    from models.user import User
+
+    user = User(
+        email="test@example.com",
+        password_hash=hash_password("TestPass1"),
+        display_name="Test User",
+        is_active=True,
+    )
+    db_session.add(user)
+    await db_session.flush()
+    await db_session.refresh(user)
+    return user
+
+
+@pytest.fixture
+def auth_headers(_test_user):
+    """Bearer Authorization header for a directly-minted JWT.
+
+    bd:deps-2026-09 S1 (AC-D9) — was: register+login HTTP round-trip against
+    POST /api/auth/register + POST /api/auth/login, both removed by
+    ADR-007. Mints the token via core.security.create_access_token instead,
+    mirroring backend/tests/conftest.py:98's already-safe pattern.
+    """
+    from core.security import create_access_token
+
+    token = create_access_token({
+        "sub": str(_test_user.id),
+        "email": _test_user.email,
+        "display_name": _test_user.display_name,
+        "role": _test_user.role.value,
+        "created_at": _test_user.created_at.isoformat(),
     })
-    resp = client.post("/api/auth/login", json={
-        "email": "test@example.com",
-        "password": "TestPass1",
-    })
-    token = resp.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 

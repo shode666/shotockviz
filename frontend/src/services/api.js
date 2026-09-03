@@ -23,43 +23,11 @@ api.interceptors.request.use((config) => {
     return config;
 });
 
-// Auto-refresh on 401
-api.interceptors.response.use(
-    (res) => res,
-    async (error) => {
-        // Timeout errors should propagate immediately — don't attempt refresh
-        if (error.code === 'ECONNABORTED') {
-            return Promise.reject(error);
-        }
-
-        const original = error.config;
-        if (error.response?.status === 401 && !original._retry) {
-            original._retry = true;
-            const refreshToken = localStorage.getItem('refresh_token');
-            if (refreshToken) {
-                try {
-                    const { data } = await axios.post('/api/auth/refresh', {
-                        refresh_token: refreshToken,
-                    });
-                    localStorage.setItem('access_token', data.access_token);
-                    localStorage.setItem('refresh_token', data.refresh_token);
-                    original.headers.Authorization = `Bearer ${data.access_token}`;
-                    return api(original);
-                } catch (refreshErr) {
-                    // Only clear tokens if refresh was rejected (401/403),
-                    // not on network errors (backend still starting up).
-                    if (refreshErr?.response?.status === 401 || refreshErr?.response?.status === 403) {
-                        localStorage.removeItem('access_token');
-                        localStorage.removeItem('refresh_token');
-                        window.location.href = '/login';
-                    }
-                    return Promise.reject(error);
-                }
-            }
-        }
-        return Promise.reject(error);
-    },
-);
+// bd:deps-2026-09 S1 (ADR-007) — the 401 auto-refresh interceptor was removed
+// (there is no POST /auth/refresh anymore; CLAUDE.md rule 5 "NO custom token
+// management on frontend"). A 401 now falls straight through to the generic
+// error interceptor below; authStore.checkAuth() clears the stale token and
+// Google One Tap silently re-authenticates.
 
 // Global error handling and toast notifications
 // Data endpoints (quotes, history) are silent on failure — chart/panel handles fallback UI
@@ -93,7 +61,8 @@ api.interceptors.response.use(
             }
         }
 
-        // 401 handled by refresh interceptor above; 404 for data is silent
+        // 401 is silent here — authStore.checkAuth() clears the token and
+        // Google One Tap re-authenticates (ADR-007); 404 for data is silent
         if (status === 401 || status === 404) return Promise.reject(error);
 
         toast.error(msg, { id: `api-err-${status}` });

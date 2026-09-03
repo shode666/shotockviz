@@ -26,8 +26,10 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return self._redis
 
     async def dispatch(self, request: Request, call_next):
-        # Only rate-limit the login endpoint
-        if request.url.path == "/api/auth/login" and request.method == "POST":
+        # bd:deps-2026-09 S1 (ADR-007 + Sentinel S-AC-3/AB-6) — /api/auth/login
+        # was removed; re-point brute-force protection to the one remaining
+        # unauthenticated auth endpoint. S2 lifts this to /api/v1/auth/google.
+        if request.url.path == "/api/auth/google" and request.method == "POST":
             client_ip = request.client.host if request.client else "unknown"
             redis = await self.get_redis()
             key = f"rate:login:{client_ip}"

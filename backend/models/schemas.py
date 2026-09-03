@@ -1,41 +1,18 @@
 """Pydantic schemas for request/response validation."""
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────────
-
-class RegisterRequest(BaseModel):
-    email: EmailStr
-    password: str
-    display_name: str
-
-    @field_validator("password")
-    @classmethod
-    def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Password must be at least 8 characters")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Password must contain at least one uppercase letter")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Password must contain at least one digit")
-        return v
-
-
-class LoginRequest(BaseModel):
-    email: EmailStr
-    password: str
-
+# bd:deps-2026-09 S1 (ADR-007) — RegisterRequest, LoginRequest, RefreshRequest
+# removed with their routes (POST /register, /login, /refresh, /logout).
+# TokenResponse no longer carries refresh_token — /google issues an access
+# token only (no server-side refresh lifecycle, CLAUDE.md rule 5).
 
 class TokenResponse(BaseModel):
     access_token: str
-    refresh_token: str
     token_type: str = "bearer"
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str
 
 
 class GoogleAuthRequest(BaseModel):

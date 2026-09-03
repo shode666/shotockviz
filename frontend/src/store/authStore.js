@@ -11,39 +11,14 @@ const ls = {
     del: (key) => { if (typeof window !== 'undefined') localStorage.removeItem(key); },
 };
 
-/**
- * Parse JWT expiry without a library.
- * Returns seconds-until-expiry, or 0 if invalid/expired.
- */
-function jwtSecondsLeft(token) {
-    try {
-        const payload = JSON.parse(atob(token.split('.')[1]));
-        return Math.max(0, payload.exp - Math.floor(Date.now() / 1000));
-    } catch {
-        return 0;
-    }
-}
-
-// Singleton refresh timer so we never schedule more than one
-let _refreshTimer = null;
-
-function clearRefreshTimer() {
-    if (_refreshTimer) { clearTimeout(_refreshTimer); _refreshTimer = null; }
-}
-
-/**
- * Schedule a proactive token refresh 2 minutes before expiry.
- * Falls back gracefully — if refresh fails the reactive 401 interceptor still works.
- */
-function scheduleRefresh(token, refreshFn) {
-    clearRefreshTimer();
-    const secsLeft = jwtSecondsLeft(token);
-    if (secsLeft <= 0) return;
-    // Refresh 2 min before expiry, but no sooner than 30 s from now
-    const delay = Math.max(30, secsLeft - 120) * 1000;
-    _refreshTimer = setTimeout(refreshFn, delay);
-}
-
+// bd:deps-2026-09 S1 (ADR-007) — removed: JWT-expiry parsing + proactive
+// re-issue timer, the proactive silent-reissue action, register(), and
+// the secondary long-lived token's localStorage read/write.
+// CLAUDE.md rule 5 ("NO custom token management on frontend") is now
+// actually true: this store only stores + attaches the issued access JWT
+// (Authorization: Bearer, api.js) and lets Google One Tap
+// (GoogleOneTapManager, __root.tsx) silently re-authenticate when the
+// session ends — no client-side refresh lifecycle.
 const useAuthStore = create((set, get) => ({
     user: null,
     isAuthenticated: false,
@@ -51,50 +26,19 @@ const useAuthStore = create((set, get) => ({
     // ── token exposed in state so useWebSocket can subscribe ─────────────────
     token: ls.get('access_token'),
 
-    // ── Silent proactive token refresh (uses the backend refresh endpoint) ───
-    silentRefresh: async () => {
-        const rt = ls.get('refresh_token');
-        if (!rt) return;
-        try {
-            const { data } = await api.post('/auth/refresh', { refresh_token: rt });
-            ls.set('access_token',  data.access_token);
-            ls.set('refresh_token', data.refresh_token);
-            set({ token: data.access_token });
-            scheduleRefresh(data.access_token, get().silentRefresh);
-        } catch {
-            // Refresh failed — the reactive 401 interceptor will handle it
-        }
-    },
-
     // ── Google OAuth login ────────────────────────────────────────────────────
     googleLogin: async (credential) => {
         const { data } = await api.post('/auth/google', { credential });
-        ls.set('access_token',  data.access_token);
-        ls.set('refresh_token', data.refresh_token);
+        ls.set('access_token', data.access_token);
         const me = await api.get('/auth/me');
         set({ token: data.access_token, user: me.data, isAuthenticated: true, isLoading: false });
-        scheduleRefresh(data.access_token, get().silentRefresh);
         return me.data;
-    },
-
-    // ── Register (email only) ─────────────────────────────────────────────────
-    register: async (email, password, displayName) => {
-        await api.post('/auth/register', {
-            email,
-            password,
-            display_name: displayName,
-        });
     },
 
     // ── Logout ────────────────────────────────────────────────────────────────
     logout: async () => {
-        clearRefreshTimer();
-        const rt = ls.get('refresh_token');
-        if (rt) {
-            try { await api.post('/auth/logout', { refresh_token: rt }); } catch { /* ignore */ }
-        }
+        // No refresh token to revoke server-side (ADR-007) — local clear only.
         ls.del('access_token');
-        ls.del('refresh_token');
         set({ token: null, user: null, isAuthenticated: false, isLoading: false });
     },
 
@@ -117,38 +61,21 @@ const useAuthStore = create((set, get) => ({
             // 15 s timeout — Docker cold-start can take 10-15 s on first request
             const { data } = await api.get('/auth/me', { timeout: 15000 });
             set({ token, user: data, isAuthenticated: true, isLoading: false });
-            scheduleRefresh(token, get().silentRefresh);
         } catch (err) {
             if (err?.response?.status === 401) {
-                // Access token invalid. The refresh interceptor already tried
-                // to use the refresh token:
-                //   • If refresh succeeded → the interceptor retried /auth/me
-                //     and we'd be in the success branch above, not here.
-                //   • If refresh failed with 401/403 → interceptor cleared
-                //     tokens and redirected to /login.
-                //   • If refresh failed with a network error → interceptor did
-                //     NOT clear tokens (they may still be valid later).
-                // So: only clear tokens when there's definitely no refresh token.
-                const hasRefresh = !!ls.get('refresh_token');
-                if (!hasRefresh) {
-                    clearRefreshTimer();
-                    ls.del('access_token');
-                    set({ token: null, user: null, isAuthenticated: false, isLoading: false });
-                } else {
-                    // Refresh token exists but network failed — unblock UI,
-                    // keep tokens, and retry once more after 30 s.
-                    set({ isLoading: false });
-                    if (retryCount === 0) {
-                        setTimeout(() => get().checkAuth(1), 30_000);
-                    }
-                }
+                // Access token invalid/expired — clear it. Google One Tap
+                // (GoogleOneTapManager, __root.tsx) picks up from here:
+                // isAuthenticated flips false → its `disabled` flag flips
+                // false → it silently re-authenticates without a popup.
+                ls.del('access_token');
+                set({ token: null, user: null, isAuthenticated: false, isLoading: false });
             } else if (retryCount < 5) {
                 // Network error / 502 — backend still starting up
                 const delays = [2000, 4000, 6000, 10000, 15000];
                 const delay = delays[retryCount] ?? 15000;
                 setTimeout(() => get().checkAuth(retryCount + 1), delay);
             } else {
-                // Gave up — unblock UI, keep tokens for next page load
+                // Gave up — unblock UI, keep token for next page load
                 set({ isLoading: false });
             }
         }

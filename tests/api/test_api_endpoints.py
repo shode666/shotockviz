@@ -6,11 +6,10 @@ Tests run against an in-memory SQLite DB via TestClient (ASGI).
 External services (Redis, Yahoo Finance, Ollama) are mocked.
 
 Endpoints covered:
-  ✓ POST /api/auth/register
-  ✓ POST /api/auth/login
+  ✓ POST /api/auth/google  (removal-only coverage — no live Google token
+    in tests; see TestAuthRemoved for the AC-D7 404 proof of the routes
+    that no longer exist)
   ✓ GET  /api/auth/me  (JWT fast-path — no DB query)
-  ✓ POST /api/auth/refresh
-  ✓ POST /api/auth/logout
   ✓ GET  /api/auth/config
   ✓ GET  /api/stocks/search
   ✓ GET  /api/stocks/names
@@ -26,6 +25,12 @@ Endpoints covered:
   ✓ DELETE /api/watchlists/{id}/stocks/{symbol}
   ✓ GET  /api/screener
   ✓ GET  /api/system/ready
+
+bd:deps-2026-09 S1 (ADR-007) — POST /api/auth/register, POST
+/api/auth/login, POST /api/auth/refresh, POST /api/auth/logout were
+removed (dead code / client-side-refresh lifecycle CLAUDE.md rule 5
+prohibits). TestRegister/TestLogin/TestRefresh/TestLogout classes (tested
+those routes directly) are deleted, replaced by TestAuthRemoved (AC-D7).
 """
 import asyncio
 import pytest
@@ -43,18 +48,35 @@ def client(app_client):
 
 
 @pytest.fixture(scope="module")
-def registered_user(client):
-    """Register once per module; return login tokens for auth tests."""
-    client.post("/api/auth/register", json={
+def registered_user():
+    """A synthetic authenticated-user JWT payload.
+
+    bd:deps-2026-09 S1 (AC-D9) — was: register+login HTTP round-trip
+    against POST /api/auth/register + POST /api/auth/login, both removed
+    by ADR-007. Mints a JWT directly via
+    core.security.create_access_token instead — no DB round-trip needed
+    for GET /api/auth/me's fast path (payload carries
+    email+display_name, api/routes/auth.py's `/me` handler reads them
+    straight off the token). Routes that require a real DB-backed User
+    row (api/middleware/auth.py get_current_user, e.g. TestWatchlist)
+    were, before this rewire too, unreachable by ANY fixture design in
+    this module: `app_client`'s dependency override
+    (tests/api/conftest.py) opens a brand-new in-memory SQLite engine on
+    every single request, so nothing written by one request (register,
+    or a direct DB insert) is visible to a later request — a
+    pre-existing test-infra limitation, not something this rewire
+    introduces or is in scope to fix.
+    """
+    from core.security import create_access_token
+
+    access_token = create_access_token({
+        "sub": "999001",
         "email": "apitest@example.com",
-        "password": "TestPass123",
         "display_name": "API Test User",
+        "role": "user",
+        "created_at": "2026-01-01T00:00:00+00:00",
     })
-    resp = client.post("/api/auth/login", json={
-        "email": "apitest@example.com",
-        "password": "TestPass123",
-    })
-    return resp.json()
+    return {"access_token": access_token}
 
 
 @pytest.fixture(scope="module")
@@ -63,64 +85,31 @@ def auth_headers(registered_user):
     return {"Authorization": f"Bearer {registered_user['access_token']}"}
 
 
-# ── Auth: register ──────────────────────────────────────────────────────────
+# ── Auth: removed routes (AC-D7) ─────────────────────────────────────────────
 
-class TestRegister:
-    def test_register_creates_user(self, client):
+class TestAuthRemoved:
+    """bd:deps-2026-09 S1 (ADR-007, AC-D7) — proves the routes are gone,
+    not merely untested."""
+
+    def test_register_route_removed(self, client):
         resp = client.post("/api/auth/register", json={
-            "email": "newuser@test.com",
-            "password": "SecurePass1",
-            "display_name": "New User",
+            "email": "x@x.com", "password": "Pass1234", "display_name": "X",
         })
-        assert resp.status_code == 201
-        body = resp.json()
-        assert body["email"] == "newuser@test.com"
-        assert body["display_name"] == "New User"
-        assert "id" in body
+        assert resp.status_code in (404, 405)
 
-    def test_register_duplicate_email_returns_409(self, client):
-        data = {"email": "dup@test.com", "password": "Pass123", "display_name": "Dup"}
-        client.post("/api/auth/register", json=data)
-        resp = client.post("/api/auth/register", json=data)
-        assert resp.status_code == 409
-
-    def test_register_missing_fields_returns_422(self, client):
-        resp = client.post("/api/auth/register", json={"email": "x@x.com"})
-        assert resp.status_code == 422
-
-    def test_register_invalid_email_returns_422(self, client):
-        resp = client.post("/api/auth/register", json={
-            "email": "not-an-email",
-            "password": "Pass123",
-            "display_name": "User",
-        })
-        assert resp.status_code == 422
-
-
-# ── Auth: login ──────────────────────────────────────────────────────────────
-
-class TestLogin:
-    def test_login_returns_tokens(self, client, registered_user):
-        assert "access_token" in registered_user
-        assert "refresh_token" in registered_user
-
-    def test_login_wrong_password_returns_401(self, client):
+    def test_login_route_removed(self, client):
         resp = client.post("/api/auth/login", json={
-            "email": "apitest@example.com",
-            "password": "WrongPass",
+            "email": "x@x.com", "password": "Pass1234",
         })
-        assert resp.status_code == 401
+        assert resp.status_code in (404, 405)
 
-    def test_login_unknown_email_returns_401(self, client):
-        resp = client.post("/api/auth/login", json={
-            "email": "nobody@example.com",
-            "password": "Pass123",
-        })
-        assert resp.status_code == 401
+    def test_refresh_route_removed(self, client):
+        resp = client.post("/api/auth/refresh", json={"refresh_token": "anything"})
+        assert resp.status_code in (404, 405)
 
-    def test_login_missing_body_returns_422(self, client):
-        resp = client.post("/api/auth/login", json={})
-        assert resp.status_code == 422
+    def test_logout_route_removed(self, client):
+        resp = client.post("/api/auth/logout", json={"refresh_token": "anything"})
+        assert resp.status_code in (404, 405)
 
 
 # ── Auth: /me (JWT fast-path) ────────────────────────────────────────────────
@@ -148,49 +137,6 @@ class TestAuthMe:
         assert resp.status_code == 200
         # If fast-path works, email and display_name come from JWT payload directly
         assert resp.json()["email"] == "apitest@example.com"
-
-
-# ── Auth: refresh ────────────────────────────────────────────────────────────
-
-class TestRefresh:
-    def test_refresh_returns_new_tokens(self, client, registered_user):
-        resp = client.post("/api/auth/refresh", json={
-            "refresh_token": registered_user["refresh_token"],
-        })
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "access_token" in body
-        assert "refresh_token" in body
-        # Tokens should be different (rotation)
-        assert body["refresh_token"] != registered_user["refresh_token"]
-
-    def test_refresh_invalid_token_returns_401(self, client):
-        resp = client.post("/api/auth/refresh", json={"refresh_token": "bad-token"})
-        assert resp.status_code == 401
-
-
-# ── Auth: logout ─────────────────────────────────────────────────────────────
-
-class TestLogout:
-    def test_logout_revokes_refresh_token(self, client):
-        # Register separate user for this test
-        client.post("/api/auth/register", json={
-            "email": "logout@test.com", "password": "Pass123", "display_name": "Logout",
-        })
-        login = client.post("/api/auth/login", json={
-            "email": "logout@test.com", "password": "Pass123",
-        }).json()
-        # Logout
-        resp = client.post("/api/auth/logout", json={"refresh_token": login["refresh_token"]})
-        assert resp.status_code == 204
-        # Using same refresh_token again should fail
-        resp2 = client.post("/api/auth/refresh", json={"refresh_token": login["refresh_token"]})
-        assert resp2.status_code == 401
-
-    def test_logout_with_bad_token_returns_204(self, client):
-        """Logout is idempotent — bad token still returns 204."""
-        resp = client.post("/api/auth/logout", json={"refresh_token": "nonexistent"})
-        assert resp.status_code == 204
 
 
 # ── Auth: config ──────────────────────────────────────────────────────────────
