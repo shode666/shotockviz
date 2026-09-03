@@ -16,6 +16,14 @@ from api.routes import dashboard, ai_chat, notes, portfolio_performance, admin, 
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 
+# Import the configured Celery app so it becomes Celery's *current app* in this
+# process (Celery() defaults set_as_current=True). Without this, @shared_task
+# (e.g. workers.on_demand_listener.process_fetch_request) binds to Celery's
+# unconfigured default app on first .delay() in a fresh gunicorn worker —
+# broker_url=None -> amqp://localhost -> Errno 111 Connection refused.
+# bd:ops-01
+import workers.celery_app  # noqa: F401
+
 logger = get_logger(__name__)
 
 

@@ -7,6 +7,8 @@ data_status reflects real service health:
   degraded    → one or more dependencies unhealthy (data_status = partial)
   unavailable → critical failure (not returned here; health will 500)
 """
+import asyncio
+import threading
 from datetime import datetime, timezone
 
 import json as _json
@@ -34,6 +36,13 @@ _READY_PROBE_KEYS = [
 ]
 _READY_THRESHOLD = 3  # at least 3 of the probe keys must be cached
 
+# Serializes the sys.stdout/sys.stderr swap below — that swap is a process-global
+# mutation, not thread-local. Now that _check_celery_health() runs via
+# asyncio.to_thread() (bd:ops-01), two overlapping /api/health calls on the same
+# gunicorn worker could interleave the swap/restore and permanently bury the
+# real sys.stdout under a discarded io.StringIO(). [Chris review §2, High]
+_celery_health_lock = threading.Lock()
+
 
 def _check_celery_health() -> str:
     """
@@ -45,28 +54,29 @@ def _check_celery_health() -> str:
     import io
     import sys
 
-    # Suppress stdout/stderr — kombu prints AMQP connection debug info to stdout
-    _old_stdout, _old_stderr = sys.stdout, sys.stderr
-    sys.stdout = sys.stderr = io.StringIO()
-    try:
-        from workers.celery_app import celery_app
-
-        inspect = celery_app.control.inspect(timeout=2.0)
-
-        # Ping is lighter than active() — just checks worker liveness
+    with _celery_health_lock:
+        # Suppress stdout/stderr — kombu prints AMQP connection debug info to stdout
+        _old_stdout, _old_stderr = sys.stdout, sys.stderr
+        sys.stdout = sys.stderr = io.StringIO()
         try:
-            pong = inspect.ping()
-            if pong and isinstance(pong, dict) and len(pong) > 0:
-                return "ok"
+            from workers.celery_app import celery_app
+
+            inspect = celery_app.control.inspect(timeout=2.0)
+
+            # Ping is lighter than active() — just checks worker liveness
+            try:
+                pong = inspect.ping()
+                if pong and isinstance(pong, dict) and len(pong) > 0:
+                    return "ok"
+            except Exception:
+                pass
+
+            return "fail"
+
         except Exception:
-            pass
-
-        return "fail"
-
-    except Exception:
-        return "fail"
-    finally:
-        sys.stdout, sys.stderr = _old_stdout, _old_stderr
+            return "fail"
+        finally:
+            sys.stdout, sys.stderr = _old_stdout, _old_stderr
 
 
 @router.get("/health", response_model=BaseResponse[dict])
@@ -116,7 +126,13 @@ async def health_check(
         degraded = True
 
     # ── Celery ────────────────────────────────────────────────────────────────
-    checks["celery"] = _check_celery_health()
+    # _check_celery_health() is synchronous (kombu/amqp inspect().ping() blocks
+    # up to ~2s waiting for a broker reply) — offload to a thread so this
+    # gunicorn/uvicorn worker's event loop is never frozen while handling
+    # /api/health (hit by Docker healthcheck + Caddy). Measured event-loop
+    # freeze without to_thread: ~2.1s per call (see outputs/ops-01/01-dave-fix.md).
+    # bd:ops-01
+    checks["celery"] = await asyncio.to_thread(_check_celery_health)
 
     as_of = datetime.now(timezone.utc)
 
