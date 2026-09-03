@@ -1,12 +1,11 @@
 """Pytest configuration and shared fixtures for API tests."""
-import asyncio
 import os
 from typing import AsyncGenerator
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -21,12 +20,10 @@ from main import app
 # Test Database Setup
 # ─────────────────────────────────────────────────────────────────────────────
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
+# bd:deps-2026-09 WP-B2 — the `event_loop` fixture override is REMOVED
+# (pytest-asyncio 1.x removed the `event_loop` fixture entirely —
+# 01-sara-adr-migration.md §2.3). Session-scoped loop semantics now come
+# from `asyncio_default_fixture_loop_scope = session` in backend/pytest.ini.
 
 
 @pytest.fixture
@@ -107,7 +104,13 @@ def auth_headers(valid_token: str) -> dict:
 @pytest.fixture
 async def async_client(override_db) -> AsyncGenerator[AsyncClient, None]:
     """Create an async HTTP client for testing."""
-    async with AsyncClient(app=app, base_url="http://test") as client:
+    # bd:deps-2026-09 WP-B2 — httpx 0.28 removed the `AsyncClient(app=...)`
+    # shortcut; must build the ASGI transport explicitly (pre-existing
+    # breakage per 01-sara-adr-migration.md §2.3, fixed in this pass — this
+    # fixture had zero currently-passing callers per the B0 audit, so this
+    # is not a regression source).
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 

@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response validation."""
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, EmailStr, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────────
@@ -49,8 +49,7 @@ class UserResponse(BaseModel):
     role: str
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── Stock ─────────────────────────────────────────────────────────────────
@@ -137,8 +136,7 @@ class WatchlistItemResponse(BaseModel):
     price: Optional[float] = None
     change_pct: Optional[float] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class WatchlistResponse(BaseModel):
@@ -148,8 +146,7 @@ class WatchlistResponse(BaseModel):
     created_at: datetime
     items: List[WatchlistItemResponse] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── Portfolio ─────────────────────────────────────────────────────────────
@@ -186,8 +183,7 @@ class TransactionResponse(BaseModel):
     note: Optional[str] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class HoldingResponse(BaseModel):
@@ -239,8 +235,7 @@ class AlertResponse(BaseModel):
     triggered_at: Optional[datetime] = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── Drawing ───────────────────────────────────────────────────────────────
@@ -266,8 +261,7 @@ class DrawingResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── News ──────────────────────────────────────────────────────────────────

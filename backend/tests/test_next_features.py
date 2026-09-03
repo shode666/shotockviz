@@ -18,6 +18,32 @@ Date: 2026-03-02
 """
 
 import pytest
+
+# bd:deps-2026-09 WP-B0 — quarantined (discovered, not caused, by this WP).
+# This file had a SyntaxError at line 630 (`class TestVolumeSpike Alerts:`)
+# that made pytest fail to COLLECT it at all (00-oliver-discover.md:26) — so
+# none of its 28 tests were ever part of the 107/26/5 baseline. Fixing that
+# one-line typo (mandated by 03-stan-refactor-strategy.md WP-B0) unmasks a
+# SEPARATE pre-existing bug: every test here takes a `client: AsyncClient`
+# fixture that does not exist in conftest.py (only `async_client` does) —
+# confirmed via `pytest --fixtures`, 0/28 tests can even reach setup, all
+# ERROR before running. The file's own docstring also says these are
+# "FAILING tests that define the specification for Phase 2 features... They
+# define the contract that implementation must satisfy" — i.e. intentionally
+# red TDD specs for unimplemented future work, not a regression surface for
+# a dependency migration. Per 02-bella-brd-ac.md §1.2 ("pre-existing test
+# baseline failures... not gated... unless Dave's plan explicitly elects to
+# fix a specific one") this is NOT elected for a fix on this branch —
+# quarantining consistent with test_api_e2e.py's treatment above.
+pytest.skip(
+    "quarantined bd:deps-2026-09 WP-B0 — unmasked by the :630 typo fix; "
+    "every test needs a `client` fixture that doesn't exist (conftest.py "
+    "only defines `async_client`), and the file is documented as "
+    "intentionally-red Phase-2 TDD specs, not current-baseline coverage. "
+    "See outputs/deps-2026-09/03-stan-refactor-strategy.md §6 Q1-adjacent.",
+    allow_module_level=True,
+)
+
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from httpx import AsyncClient
@@ -627,7 +653,7 @@ class TestGoldenDeathCrossAlerts:
 # FEATURE 4: VOLUME SPIKE ALERTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestVolumeSpike Alerts:
+class TestVolumeSpikeAlerts:
     """
     Feature: Volume Spike alert (volume > 2x or 3x average)
     Priority: P0 — Breakout confirmation signal

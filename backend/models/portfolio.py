@@ -1,8 +1,16 @@
 from datetime import datetime, date
 from enum import Enum as PyEnum
+from typing import TYPE_CHECKING
 from sqlalchemy import String, DateTime, Float, Integer, Date, Enum, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
+
+# bd:deps-2026-09 WP-B5 (03-stan-refactor-strategy.md §1.2 F821 finding) —
+# forward-ref string "User" in `Mapped["User"]` below needs a real import
+# path for both ruff (F821) and mypy to resolve it; TYPE_CHECKING avoids a
+# circular import at runtime (models.user doesn't import models.portfolio).
+if TYPE_CHECKING:
+    from models.user import User
 
 
 class TransactionType(str, PyEnum):
@@ -33,4 +41,4 @@ class Transaction(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    user: Mapped["User"] = relationship(back_populates="transactions")  # type: ignore[name-defined]
+    user: Mapped["User"] = relationship(back_populates="transactions")

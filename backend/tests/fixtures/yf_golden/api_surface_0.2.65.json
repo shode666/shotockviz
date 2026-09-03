@@ -1,0 +1,88 @@
+{
+  "fast_info_attrs": [
+    "currency",
+    "day_high",
+    "day_low",
+    "exchange",
+    "fifty_day_average",
+    "get",
+    "items",
+    "keys",
+    "last_price",
+    "last_volume",
+    "market_cap",
+    "open",
+    "previous_close",
+    "quote_type",
+    "regular_market_previous_close",
+    "shares",
+    "ten_day_average_volume",
+    "three_month_average_volume",
+    "timezone",
+    "toJSON",
+    "two_hundred_day_average",
+    "values",
+    "year_change",
+    "year_high",
+    "year_low"
+  ],
+  "fundamentals_earnings_source": "@property\n    def earnings(self) -> dict:\n        warnings.warn(\"'Ticker.earnings' is deprecated as not available via API. Look for \\\"Net Income\\\" in Ticker.income_stmt.\", DeprecationWarning)\n        return None",
+  "getter_signatures": {
+    "get_balance_sheet": "(proxy=<object object at 0x7fe378983d50>, as_dict=False, pretty=False, freq='yearly')",
+    "get_dividends": "(proxy=<object object at 0x7fe378983d50>, period='max') -> pandas.core.series.Series",
+    "get_earnings": "(proxy=<object object at 0x7fe378983d50>, as_dict=False, freq='yearly')",
+    "get_earnings_dates": "(limit=12, proxy=<object object at 0x7fe378983d50>) -> Optional[pandas.core.frame.DataFrame]",
+    "get_splits": "(proxy=<object object at 0x7fe378983d50>, period='max') -> pandas.core.series.Series"
+  },
+  "price_history_signature": "(self, period=None, interval='1d', start=None, end=None, prepost=False, actions=True, auto_adjust=True, back_adjust=False, repair=False, keepna=False, proxy=<object object at 0x7fe378983d50>, rounding=False, timeout=10, raise_errors=False) -> pandas.core.frame.DataFrame",
+  "ticker_members": {
+    "balance_sheet": {
+      "delegates_to": "return self.get_balance_sheet(pretty=True)",
+      "exists": true,
+      "kind": "property"
+    },
+    "dividends": {
+      "delegates_to": "return self.get_dividends()",
+      "exists": true,
+      "kind": "property"
+    },
+    "earnings": {
+      "delegates_to": "return self.get_earnings()",
+      "exists": true,
+      "kind": "property"
+    },
+    "earnings_dates": {
+      "delegates_to": "return self.get_earnings_dates()",
+      "exists": true,
+      "kind": "property"
+    },
+    "fast_info": {
+      "delegates_to": "return self.get_fast_info()",
+      "exists": true,
+      "kind": "property"
+    },
+    "financials": {
+      "delegates_to": "return self.income_stmt",
+      "exists": true,
+      "kind": "property"
+    },
+    "history": {
+      "exists": true,
+      "kind": "method",
+      "signature": "(self, *args, **kwargs) -> pandas.core.frame.DataFrame"
+    },
+    "info": {
+      "delegates_to": "return self.get_info()",
+      "exists": true,
+      "kind": "property"
+    },
+    "splits": {
+      "delegates_to": "return self.get_splits()",
+      "exists": true,
+      "kind": "property"
+    }
+  },
+  "tickers_init_signature": "(self, tickers, session=None)",
+  "tickers_init_source": "def __init__(self, tickers, session=None):\n        tickers = tickers if isinstance(\n            tickers, list) else tickers.replace(',', ' ').split()\n        self.symbols = [ticker.upper() for ticker in tickers]\n        self.tickers = {ticker: Ticker(ticker, session=session) for ticker in self.symbols}\n\n        self._data = YfData(session=session)\n\n        self._message_handler = None\n        self.ws = None\n\n        # self.tickers = _namedtuple(\n        #     \"Tickers\", ticker_objects.keys(), rename=True\n        # )(*ticker_objects.values())",
+  "yfinance_version": "0.2.65"
+}
