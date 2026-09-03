@@ -13,8 +13,8 @@
     "branch": "chore/deps-2026-09"
   },
   "run_stamp": "plugin=shode-house v3.10 model=claude-fable-5-1 started=2026-09-03T06:50:00+07:00 base_sha=73fac00",
-  "current_phase": "2",
-  "iter": 1,
+  "current_phase": "4-triage→pre-merge",
+  "iter": 2,
   "phases": {
     "0-discover": {
       "status": "passed",
@@ -50,7 +50,7 @@
       ]
     },
     "2-implement": {
-      "status": "in_progress",
+      "status": "passed",
       "owners": [
         "dave-backend",
         "dave-frontend",
@@ -60,7 +60,8 @@
         "outputs/deps-2026-09/10-dave-backend-b0-b5.md",
         "outputs/deps-2026-09/11-dave-frontend-f0-f1.md",
         "outputs/deps-2026-09/12-dave-serial-s0-s3.md",
-        "outputs/deps-2026-09/openapi-v1.json"
+        "outputs/deps-2026-09/openapi-v1.json",
+        "outputs/deps-2026-09/16-dave-iter1-fixes.md"
       ],
       "worktrees": {
         "backend": "/home/claude/wt-backend@wip/deps-backend",
@@ -92,7 +93,7 @@
       ]
     },
     "3b-review": {
-      "status": "failed",
+      "status": "passed",
       "owners": [
         "chris",
         "quinn"
@@ -101,15 +102,18 @@
         "outputs/deps-2026-09/14-chris-review.md",
         "outputs/deps-2026-09/15-quinn-review.md"
       ],
-      "iter0_verdict": "Chris FAIL (1C/7H/7M/2L) · Quinn FAIL (1C/2H/4M/1L)"
+      "history": "iter0 FAIL/FAIL → iter1 FAIL/FAIL (CHRIS-16/Q-10 new High) → iter2 PASS/PASS",
+      "final_ac": "30 PASS / 2 FAIL env-unverifiable (M2 Docker build, C2 perf baseline) / 1 N/A"
     },
     "4-triage": {
       "status": "passed",
       "owners": [
         "oliver"
       ],
-      "artifacts": [],
-      "routing": "all findings → Phase 2 iter 1 (Dave-S); CHRIS-08 curl_cffi accepted (upstream, informed user); Q-7/Q-9 → follow-up bd unless trivially fixed; ci.yml steps may be reconciled, triggers untouched"
+      "artifacts": [
+        "outputs/deps-2026-09/state.json"
+      ],
+      "verdict": "clean — pre-loop-exit gate open; pre-merge = R0 user gate"
     },
     "5-deploy": {
       "status": "pending",
@@ -149,18 +153,28 @@
       ],
       "phase": "2 iter1",
       "artifact": "14-chris-review.md + 15-quinn-review.md"
+    },
+    {
+      "at": "2026-09-03T22:19+07:00",
+      "from": "oliver",
+      "to": [
+        "user"
+      ],
+      "phase": "pre-merge R0",
+      "artifact": "git bundle chore/deps-2026-09"
     }
   ],
   "findings": {
-    "critical": 2,
-    "high": 9,
-    "medium": 11,
-    "low": 3,
-    "source": "14-chris-review.md + 15-quinn-review.md (iter 0)"
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "note": "all iter0-2 findings closed; CHRIS-14 (VITE_API_URL compose arg) + dev-compose FORWARDED_ALLOW_IPS = documented R1 follow-ups; CHRIS-17 self-closed"
   },
   "open_questions": [
-    "Sentinel Q1 email allowlist for Google auto-provision → separate bd (residual risk flagged to user)",
-    "Sentinel Q2 WS auth hardening (SEC-3) → separate bd",
-    "Sentinel Q3 → requirements-dev.txt split in WP-B1 (test deps out of prod image)"
+    "R0: merge chore/deps-2026-09 → main (user)",
+    "R0: prod deploy / GHCR push (user)",
+    "unverifiable here: docker build x3, warm-cache perf AC-C1/C2 → run on Mac/CI before merge",
+    "follow-up bds: ux-2026-09 (UX/UI overhaul), e2e-flaky (69 pre-existing E2E fails), ws-auth (SEC-3), google-allowlist, requirements-md-resync, ts-strict-ratchet"
   ]
 }
