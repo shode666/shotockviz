@@ -140,7 +140,11 @@ jobs:
             set -euo pipefail
             cd /opt/shotockviz
             export IMAGE_TAG="$1"
-            docker compose -f docker-compose.ghcr.yml run --rm backend alembic upgrade head
+            # init_db.py handles both fresh DBs (no alembic_version/users table —
+            # bootstraps via create_all since no migration ever CREATEs the base
+            # tables, only alembic upgrade head) and existing DBs (plain
+            # alembic upgrade head). See backend/scripts/init_db.py for root cause.
+            docker compose -f docker-compose.ghcr.yml run --rm backend python scripts/init_db.py
           REMOTE
 
       - name: Health check (90s budget)

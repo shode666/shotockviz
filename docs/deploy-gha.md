@@ -47,8 +47,14 @@
    ```
    This builds+pushes `backend`, `frontend`, `caddy` to
    `ghcr.io/shode666/shotockviz-<service>:<sha>` (+ `:latest`), then SSHes to the droplet,
-   pulls, `up -d --remove-orphans`, runs `alembic upgrade head` (unless disabled), and polls
-   `/api/health` for up to 90s before declaring success.
+   pulls, `up -d --remove-orphans`, runs `python scripts/init_db.py` (unless disabled), and
+   polls `/api/health` for up to 90s before declaring success.
+
+   > **First deploy on a fresh DB** runs `backend/scripts/init_db.py`, not a bare
+   > `alembic upgrade head` — the migration history alone can't create the base schema
+   > (see script docstring for root cause), so it auto-detects a fresh DB and bootstraps
+   > via `create_all` + `alembic stamp head` before falling back to normal `upgrade head`
+   > on every later run.
 
 5. **Verify**:
    ```bash
@@ -71,7 +77,19 @@ The previous image tag is still in GHCR (images aren't deleted on deploy — onl
   `docker-compose.prod.yml` nor this new `docker-compose.ghcr.yml` includes one — it does not
   exist in the compose files actually in the repo. Not added here per Oliver's brief; confirm
   with the team whether AI chat needs it on this droplet before relying on `/api/ai/*`.
-- **Migration failure mid-deploy**: if `alembic upgrade head` fails after `up -d` already
-  swapped containers to the new image, the job fails but containers are left running on the
-  new (possibly schema-incompatible) image. No automatic rollback of the compose state is
+- **Migration failure mid-deploy**: if `init_db.py` fails after `up -d` already swapped
+  containers to the new image, the job fails but containers are left running on the new
+  (possibly schema-incompatible) image. No automatic rollback of the compose state is
   implemented — manual `image_tag=<old-sha>` re-run is the recovery path (see Rollback above).
+  Resolved by this fix: the *specific* fresh-DB failure seen in live run 33715284627
+  (`UndefinedTable: relation "transactions" does not exist"`) — `init_db.py` now detects a
+  fresh DB and bootstraps via `create_all` instead of running a bare `alembic upgrade head`
+  against an empty schema.
+- **`models/note.py` (`StockNote` / `stock_notes` table) is not imported by ANY existing
+  bootstrap path** — not `core/database.py:create_tables()` (dev), not
+  `db/migrations/env.py` (alembic autogenerate target), and there is no migration that
+  creates it either. `init_db.py` now imports it explicitly for the fresh-DB `create_all`
+  path (see script comments), but an **existing** pre-`init_db.py` production DB that
+  predates this fix would still be missing `stock_notes` and would error on
+  `api/routes/notes.py` — pre-existing gap, not introduced by this bd; flagging for the team
+  to decide whether a proper migration is needed for already-deployed databases.
