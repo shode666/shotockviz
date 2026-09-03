@@ -1,5 +1,4 @@
 import { defineConfig } from 'vite'
-import tsconfigPaths from 'vite-tsconfig-paths'
 import { tanstackStart } from '@tanstack/react-start/plugin/vite'
 import viteReact from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -8,6 +7,11 @@ import { nitro } from 'nitro/vite'
 const BACKEND_URL = process.env.VITE_API_URL || 'http://backend:8000'
 
 const config = defineConfig({
+  resolve: {
+    // Vite 8 native tsconfig `paths` resolution — replaces vite-tsconfig-paths
+    // (unmaintained transitive dep tsconfck; removed in WP-F0, 01-sara-adr-migration.md §3.3/CR-2)
+    tsconfigPaths: true,
+  },
   define: {
     // @tanstack/devtools-vite injects a client even when its plugin is not loaded.
     // Without the server running, the WS URL is undefined → ws://localhost/undefined.
@@ -26,7 +30,6 @@ const config = defineConfig({
         '/api': { target: BACKEND_URL, changeOrigin: true },
       },
     }),
-    tsconfigPaths({ projects: ['./tsconfig.json'] }),
     tailwindcss(),
     tanstackStart(),
     viteReact(),
