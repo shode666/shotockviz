@@ -42,10 +42,11 @@ from fastapi.exception_handlers import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.routing import APIRoute
+from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse, StreamingResponse
 
-from schemas.common import BaseResponse, DataStatus
+from schemas.common import BaseResponse, DataStatus, ResponseMeta
 
 
 def _is_enveloped_path(path: str) -> bool:
@@ -162,3 +163,133 @@ def install_error_envelope(app: FastAPI) -> None:
             enveloped_error_body(request, "Validation failed"),
             status_code=422,
         )
+
+
+# ── OpenAPI schema override (CHRIS-06) ───────────────────────────────────────
+
+def _merge_model_schema(components: dict, model: type[BaseModel]) -> dict:
+    """pydantic v2's ``model_json_schema(ref_template=...)`` returns the
+    model's own schema PLUS a ``$defs`` block for anything it references
+    (nested enums here: DataStatus, CachedLayer). Hoist those into
+    ``components["schemas"]`` too (that's where an OpenAPI document's
+    ``$ref``s must resolve) and return the model's own (defs-free) schema
+    dict, ready to store under its own component name."""
+    schema = model.model_json_schema(ref_template="#/components/schemas/{model}")
+    for name, sub_schema in schema.pop("$defs", {}).items():
+        components.setdefault(name, sub_schema)
+    return schema
+
+
+def _envelope_wrap_openapi_schema(schema: dict) -> None:
+    """Mutate a FastAPI-generated OpenAPI document IN PLACE so it
+    documents the ACTUAL runtime response shape instead of each route
+    handler's raw ``response_model``.
+
+    bd:deps-2026-09 iter1 (CHRIS-06) — ``EnvelopingAPIRoute`` (above) wraps
+    2xx bodies at the ASGI response layer, operating on already-serialized
+    JSON bytes, AFTER FastAPI's own ``response_model``-driven serialization
+    has run — so the schema FastAPI derives from each handler's
+    ``response_model`` (e.g. ``list[WatchlistResponse]``) never reflects
+    the ``{data, meta}`` wrapper actually sent over the wire, and every
+    validation-error (422) response still documents FastAPI's stock
+    ``HTTPValidationError`` (``{"detail": [...]}}``) even though
+    ``install_error_envelope``'s handler (above) actually returns
+    ``{"data": null, "meta": {..., "error": {"message": ...}}}`` for that
+    status code on every enveloped path. Rewriting every route handler's
+    ``response_model`` to ``BaseResponse[X]`` was considered (Oliver's
+    brief's first option) but rejected for this atomic fix: that field
+    ALSO drives FastAPI's real runtime response validation/serialization,
+    and every one of the ~40 handlers under `/api/v1`+`/api/ai` currently
+    returns a raw ORM object/dict/list, not a ``BaseResponse`` instance —
+    changing 40 handlers' return contracts is a much larger, higher-
+    blast-radius change than documenting the wrapping this file's
+    ``EnvelopingAPIRoute``/``install_error_envelope`` already correctly do
+    at runtime. Called once from a custom ``app.openapi()`` override
+    (``install_envelope_openapi``, below) — schema, not runtime, so it
+    cannot regress request handling if a bug is found here.
+    """
+    components = schema.setdefault("components", {}).setdefault("schemas", {})
+
+    components["ResponseMeta"] = _merge_model_schema(components, ResponseMeta)
+    components["ErrorDetail"] = {
+        "type": "object",
+        "title": "ErrorDetail",
+        "properties": {"message": {"type": "string"}},
+        "required": ["message"],
+    }
+    # ResponseMeta + an `error` field — the exact shape
+    # `enveloped_error_body()` (above) actually returns. Built as its own
+    # named schema (not `allOf`) so `data: null` + this fully describe the
+    # real body in one flat, easy-to-read object for API consumers.
+    response_meta_with_error = dict(components["ResponseMeta"])
+    response_meta_with_error["title"] = "ResponseMetaWithError"
+    response_meta_with_error["properties"] = {
+        **response_meta_with_error.get("properties", {}),
+        "error": {"$ref": "#/components/schemas/ErrorDetail"},
+    }
+    components["ResponseMetaWithError"] = response_meta_with_error
+    components["ErrorEnvelope"] = {
+        "type": "object",
+        "title": "ErrorEnvelope",
+        "description": (
+            "Actual error body for every /api/v1/* and /api/ai/* 4xx/5xx "
+            "response (schemas/envelope.py install_error_envelope) — "
+            "replaces FastAPI's default HTTPValidationError on 422 too "
+            "(bd:deps-2026-09 iter1 CHRIS-06)."
+        ),
+        "properties": {
+            "data": {"type": "null"},
+            "meta": {"$ref": "#/components/schemas/ResponseMetaWithError"},
+        },
+        "required": ["data", "meta"],
+    }
+
+    for path, methods in schema.get("paths", {}).items():
+        if not _is_enveloped_path(path):
+            continue
+        for method, operation in methods.items():
+            if method not in {"get", "post", "put", "patch", "delete"}:
+                continue
+            for status_code, response in operation.get("responses", {}).items():
+                media = response.get("content", {}).get("application/json")
+                if media is None:
+                    # No JSON body at all (204, or a streaming/SSE route —
+                    # EnvelopingAPIRoute's own runtime check skips those
+                    # identically, see its docstring above).
+                    continue
+                if status_code.startswith("2"):
+                    media["schema"] = {
+                        "type": "object",
+                        "properties": {
+                            "data": media["schema"],
+                            "meta": {"$ref": "#/components/schemas/ResponseMeta"},
+                        },
+                        "required": ["data", "meta"],
+                    }
+                elif status_code.isdigit() and int(status_code) >= 400:
+                    media["schema"] = {"$ref": "#/components/schemas/ErrorEnvelope"}
+                    response["description"] = "Error (enveloped {data:null,meta:{error}})"
+
+
+def install_envelope_openapi(app: FastAPI) -> None:
+    """Override ``app.openapi()`` so the generated document (served at
+    ``/openapi.json`` and rendered at ``/docs``) matches the ACTUAL
+    runtime ``{data, meta}`` envelope + error shape instead of each
+    route's raw ``response_model``. Call once at app construction, after
+    ``install_error_envelope(app)``."""
+    from fastapi.openapi.utils import get_openapi
+
+    def custom_openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        _envelope_wrap_openapi_schema(schema)
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi

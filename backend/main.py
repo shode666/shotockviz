@@ -15,7 +15,7 @@ from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, sys
 from api.routes import dashboard, ai_chat, notes, portfolio_performance, admin, backtesting
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
-from schemas.envelope import install_error_envelope
+from schemas.envelope import install_error_envelope, install_envelope_openapi
 
 # Import the configured Celery app so it becomes Celery's *current app* in this
 # process (Celery() defaults set_as_current=True). Without this, @shared_task
@@ -307,6 +307,14 @@ app.include_router(api_v1)
 # 3 unversioned exceptions — old paths, frozen (AC-B9)
 app.include_router(system.health_router)   # GET /api/health
 app.include_router(ai_chat.router)          # /api/ai/* (SSE stream + JSON, r3-1)
+
+# bd:deps-2026-09 iter1 (CHRIS-06) — override app.openapi() so
+# /openapi.json documents the ACTUAL {data,meta} envelope + real error
+# shape instead of each handler's raw response_model. After all routers
+# so app.routes is complete (schemas/envelope.py install_envelope_openapi
+# lazily rebuilds on first /openapi.json request anyway, but kept here
+# for readability — all route registration finished above this line).
+install_envelope_openapi(app)
 
 
 # ─── WebSocket ──────────────────────────────────────────────────────────────
