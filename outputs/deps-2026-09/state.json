@@ -14,7 +14,7 @@
   },
   "run_stamp": "plugin=shode-house v3.10 model=claude-fable-5-1 started=2026-09-03T06:50:00+07:00 base_sha=73fac00",
   "current_phase": "2",
-  "iter": 0,
+  "iter": 1,
   "phases": {
     "0-discover": {
       "status": "passed",
@@ -56,7 +56,12 @@
         "dave-frontend",
         "dave-serial"
       ],
-      "artifacts": [],
+      "artifacts": [
+        "outputs/deps-2026-09/10-dave-backend-b0-b5.md",
+        "outputs/deps-2026-09/11-dave-frontend-f0-f1.md",
+        "outputs/deps-2026-09/12-dave-serial-s0-s3.md",
+        "outputs/deps-2026-09/openapi-v1.json"
+      ],
       "worktrees": {
         "backend": "/home/claude/wt-backend@wip/deps-backend",
         "frontend": "/home/claude/wt-frontend@wip/deps-frontend",
@@ -78,26 +83,33 @@
       ]
     },
     "3a-ui-check": {
-      "status": "pending",
+      "status": "passed",
       "owners": [
         "uma"
       ],
-      "artifacts": []
+      "artifacts": [
+        "outputs/deps-2026-09/13-uma-ui-check.md"
+      ]
     },
     "3b-review": {
-      "status": "pending",
+      "status": "failed",
       "owners": [
         "chris",
         "quinn"
       ],
-      "artifacts": []
+      "artifacts": [
+        "outputs/deps-2026-09/14-chris-review.md",
+        "outputs/deps-2026-09/15-quinn-review.md"
+      ],
+      "iter0_verdict": "Chris FAIL (1C/7H/7M/2L) · Quinn FAIL (1C/2H/4M/1L)"
     },
     "4-triage": {
-      "status": "pending",
+      "status": "passed",
       "owners": [
         "oliver"
       ],
-      "artifacts": []
+      "artifacts": [],
+      "routing": "all findings → Phase 2 iter 1 (Dave-S); CHRIS-08 curl_cffi accepted (upstream, informed user); Q-7/Q-9 → follow-up bd unless trivially fixed; ci.yml steps may be reconciled, triggers untouched"
     },
     "5-deploy": {
       "status": "pending",
@@ -128,14 +140,23 @@
       ],
       "phase": "2",
       "artifact": "outputs/deps-2026-09/03-stan-refactor-strategy.md § r3-C"
+    },
+    {
+      "at": "2026-09-03T17:18+07:00",
+      "from": "oliver",
+      "to": [
+        "dave-serial"
+      ],
+      "phase": "2 iter1",
+      "artifact": "14-chris-review.md + 15-quinn-review.md"
     }
   ],
   "findings": {
-    "critical": 0,
-    "high": 5,
-    "medium": 3,
-    "low": 4,
-    "source": "05-sentinel-threat-model.md SEC-1..12"
+    "critical": 2,
+    "high": 9,
+    "medium": 11,
+    "low": 3,
+    "source": "14-chris-review.md + 15-quinn-review.md (iter 0)"
   },
   "open_questions": [
     "Sentinel Q1 email allowlist for Google auto-provision → separate bd (residual risk flagged to user)",
