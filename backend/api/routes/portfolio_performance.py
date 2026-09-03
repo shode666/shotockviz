@@ -17,6 +17,15 @@ from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
 # mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+#
+# bd:deps-2026-09 iter1 (CHRIS-10, AC-A2) — `portfolio.py` ALSO declares
+# `APIRouter(prefix="/portfolio", ...)` and is mounted separately in
+# main.py. Intentional: this file is a separable, later addition
+# (equity-curve analytics only — see the module docstring above) kept out
+# of portfolio.py's CRUD router rather than merged in. FastAPI merges
+# same-prefix routers without collision (confirmed: no startup warning,
+# both files' routes coexist under one effective `/api/v1/portfolio/*`
+# surface) — see portfolio.py's matching cross-reference comment.
 router = APIRouter(prefix="/portfolio", tags=["portfolio"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 

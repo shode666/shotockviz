@@ -83,7 +83,17 @@ class EnvelopingAPIRoute(APIRoute):
                 return response
 
             try:
-                body = json.loads(response.body)
+                # bd:deps-2026-09 iter1 (CHRIS-13) — was
+                # `json.loads(response.body)`; Starlette's `Response.body`
+                # type stub is `bytes | memoryview[int]`, but `json.loads`
+                # only accepts `str | bytes | bytearray` — a real mypy
+                # regression (backend/schemas/envelope.py:85, 133-error
+                # checkpoint). In practice this is always `bytes` for the
+                # handlers this wraps (Chris's own review confirms no
+                # runtime behavior change), but `bytes(...)` makes it
+                # type-correct for the memoryview case too, at negligible
+                # cost (a cheap copy of an already-small JSON body).
+                body = json.loads(bytes(response.body))
             except (ValueError, TypeError):
                 return response
 

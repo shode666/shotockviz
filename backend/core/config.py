@@ -2,6 +2,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 from functools import lru_cache
 
+# bd:deps-2026-09 iter1 (CHRIS-09) — module-level, not a class attribute:
+# pydantic v2 turns any leading-underscore class attribute on a
+# BaseModel/BaseSettings subclass into a `ModelPrivateAttr` DESCRIPTOR
+# placeholder (not the plain value) unless explicitly declared via
+# `PrivateAttr()` — `cls._X` inside a `@field_validator` would raise
+# `TypeError: argument of type 'ModelPrivateAttr' is not iterable`.
+_KNOWN_PLACEHOLDER_SECRETS = frozenset({
+    "dev-secret-key-change-in-prod",
+    "change-me-with-openssl-rand-hex-32",
+})
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
@@ -28,7 +39,19 @@ class Settings(BaseSettings):
     def _check_jwt_secret(cls, v: str) -> str:
         import os
         import warnings
-        if v == "dev-secret-key-change-in-prod":
+        # bd:deps-2026-09 iter1 (CHRIS-09) — was a single hardcoded string
+        # compared with `==`; `.env.example:17`'s OWN placeholder
+        # (`change-me-with-openssl-rand-hex-32`) is equally public and
+        # equally "default-looking" but wasn't in the set, so someone who
+        # copies .env.example verbatim into a prod .env without rotating
+        # it booted cleanly with a known-guessable secret — exactly the
+        # SEC-4 scenario this check exists to close, only half-closed.
+        # Both known placeholders now reject identically; kept as an
+        # explicit set (not a generic entropy heuristic) so the failure
+        # message can name exactly which placeholder was found, and to
+        # avoid false-positive-rejecting a real secret that happens to
+        # look low-entropy.
+        if v in _KNOWN_PLACEHOLDER_SECRETS:
             # bd:deps-2026-09 WP-B2 (S-AC-10, 05-sentinel-threat-model.md
             # SEC-4/§3): boot must FAIL if the default secret reaches
             # production, not just warn — a warning is silently swallowed
@@ -37,13 +60,14 @@ class Settings(BaseSettings):
             # raw env var directly rather than depend on another field.
             if os.environ.get("APP_ENV", "development") == "production":
                 raise ValueError(
-                    "JWT_SECRET_KEY is the default dev value in a production "
-                    "environment (APP_ENV=production) — set a strong, unique "
-                    "JWT_SECRET_KEY in .env before boot."
+                    f"JWT_SECRET_KEY is still the default dev value in a "
+                    f"production environment (found: {v!r}, APP_ENV=production) "
+                    "— set a strong, unique JWT_SECRET_KEY in .env before boot."
                 )
             warnings.warn(
-                "JWT_SECRET_KEY is using the default dev value! "
-                "Set a strong, unique JWT_SECRET_KEY in .env for production.",
+                f"JWT_SECRET_KEY is still the default dev value "
+                f"(found: {v!r})! Set a strong, unique JWT_SECRET_KEY in "
+                ".env for production.",
                 stacklevel=2,
             )
         if len(v) < 16:
