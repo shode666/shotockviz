@@ -1,0 +1,36 @@
+{
+  "schema_version": "1.0",
+  "bd_id": "deps-2026-09",
+  "engagement": {
+    "name": "ShotockViz dependency migration (Node 24 / TS 7 / Vite 8 / Python deps) + API improvement",
+    "mode": "hybrid",
+    "started_at": "2026-09-03T06:50:00+07:00",
+    "domain": ["trading-data-platform"],
+    "tracker": "markdown-fallback",
+    "workspace": "mac-device-shell (~/workspace/shotockviz); cloud read-only clone /home/claude/shotockviz-ro @73fac00",
+    "branch": "chore/deps-2026-09"
+  },
+  "run_stamp": "plugin=shode-house v3.10 model=claude-fable-5-1 started=2026-09-03T06:50:00+07:00 base_sha=73fac00",
+  "current_phase": "1a",
+  "iter": 0,
+  "phases": {
+    "0-discover": {"status": "passed", "owners": ["oliver"], "artifacts": ["outputs/deps-2026-09/00-oliver-discover.md"]},
+    "1a-foundation": {"status": "in_progress", "owners": ["bella", "sara", "stan"], "artifacts": ["outputs/deps-2026-09/01-sara-adr-migration.md", "outputs/deps-2026-09/02-bella-brd-ac.md", "outputs/deps-2026-09/03-stan-refactor-strategy.md", "outputs/deps-2026-09/04-oliver-user-decisions.md"], "revision": "r2 (M5: ADR-001 alias rejected by user; auth dead-code removal added)"},
+    "1c-threat": {"status": "pending", "owners": ["sentinel"], "artifacts": []},
+    "2-implement": {"status": "pending", "owners": ["dave"], "artifacts": []},
+    "3a-ui-check": {"status": "pending", "owners": ["uma"], "artifacts": []},
+    "3b-review": {"status": "pending", "owners": ["chris", "quinn"], "artifacts": []},
+    "4-triage": {"status": "pending", "owners": ["oliver"], "artifacts": []},
+    "5-deploy": {"status": "pending", "owners": ["aaron"], "artifacts": []}
+  },
+  "handoff_log": [
+    {"at": "2026-09-03T06:50:00+07:00", "from": "oliver", "to": ["bella", "sara", "stan"], "phase": "1a", "artifact": "outputs/deps-2026-09/00-oliver-discover.md"}
+  ],
+  "findings": {"critical": 0, "high": 0, "medium": 0, "low": 0},
+  "open_questions": [
+    "API versioning strategy (/api/v1 alias vs in-place)",
+    "yfinance 1.x breaking-change map",
+    "pytest-asyncio 1.x conftest rewrite",
+    "TS 7 toolchain compatibility spike"
+  ]
+}
