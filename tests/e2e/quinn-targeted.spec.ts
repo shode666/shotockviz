@@ -86,10 +86,34 @@ test.describe('RightPanel overlay', () => {
     expect(box!.x + box!.width).toBeGreaterThan(1270);
     expect(box!.width).toBeLessThan(300);
 
-    const closeBtn = page.getByRole('button', { name: 'ปิดแผงข้อมูล' });
+    // Scoped to the panel: the outer toggle button's aria-label also flips to
+    // "ปิดแผงข้อมูล" while open (bd:ux-2026-09 Q-UX1 fix-verify — now that the
+    // toggle is actually clickable, the unscoped locator collides with it).
+    const closeBtn = panel.getByRole('button', { name: 'ปิดแผงข้อมูล' });
     await closeBtn.click();
     // Closed panel is `inert` (removed from a11y tree) — check the attribute
     // directly rather than visibility (transform-based, still painted mid-transition).
+    await expect(panel).toHaveJSProperty('inert', true, { timeout: 3_000 });
+  });
+
+  test('desktop (1440px): opens docked right, closes via X button', async ({ page }) => {
+    // bd:ux-2026-09 Quinn Q-UX1 fix-verify — toggle button sat behind the
+    // lightweight-charts price-axis <canvas> (z-index: 2, button had none)
+    // at every width; 1440 is Oliver's 3rd required breakpoint (1280 + 390
+    // already covered above).
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const toggle = page.getByRole('button', { name: 'เปิดแผงข้อมูล' });
+    await toggle.click();
+
+    const panel = page.locator('aside[aria-label="รายละเอียดหุ้น"]');
+    await expect(panel).toBeVisible();
+    const box = await panel.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x + box!.width).toBeGreaterThan(1430);
+    expect(box!.width).toBeLessThan(300);
+
+    const closeBtn = panel.getByRole('button', { name: 'ปิดแผงข้อมูล' });
+    await closeBtn.click();
     await expect(panel).toHaveJSProperty('inert', true, { timeout: 3_000 });
   });
 
@@ -130,7 +154,8 @@ test.describe('RightPanel overlay', () => {
     await page.setViewportSize({ width: 1280, height: 900 });
     const toggle = page.getByRole('button', { name: 'เปิดแผงข้อมูล' });
     await toggle.click();
-    const closeBtn = page.getByRole('button', { name: 'ปิดแผงข้อมูล' });
+    const panel = page.locator('aside[aria-label="รายละเอียดหุ้น"]');
+    const closeBtn = panel.getByRole('button', { name: 'ปิดแผงข้อมูล' });
     await closeBtn.click();
 
     // EXPECTED: focus returns to the toggle button (now re-labeled "เปิดแผงข้อมูล").

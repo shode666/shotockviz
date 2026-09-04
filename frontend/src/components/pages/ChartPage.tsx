@@ -87,11 +87,16 @@ export default function ChartPage() {
 
                     {/* RightPanel toggle — panel is an overlay/bottom-sheet (never docked),
                         so News/Portfolio/Fundamentals/Notes/Info stay reachable without
-                        eating chart width on desktop or half the screen on mobile (Uma #5) */}
+                        eating chart width on desktop or half the screen on mobile (Uma #5).
+                        bd:ux-2026-09 Quinn Q-UX1 — lightweight-charts' price-axis <canvas>
+                        (right edge) sets its own `z-index: 2` [output: elementFromPoint at
+                        the button's coords, tests/e2e/diag.tmp.js] and painted over this
+                        button since it had no z-index (auto=0). z-index: 20 wins regardless
+                        of that library's internal value. */}
                     <button
                         onClick={() => setRightPanelOpen(v => !v)}
                         className="absolute top-3 right-3 panel border rounded-xl p-2 transition-colors hover:bg-[var(--color-hover)]"
-                        style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
+                        style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)', zIndex: 20 }}
                         aria-label={rightPanelOpen ? 'ปิดแผงข้อมูล' : 'เปิดแผงข้อมูล'}
                         aria-expanded={rightPanelOpen}
                     >
