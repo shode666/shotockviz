@@ -137,6 +137,25 @@ services:
     networks:
       - stockviz-net
 
+  telegram-bot:
+    # bd:features-2026-09 slice 3 (Sara ADR-T1) — long-polling bot listener,
+    # not Celery (no task queue involved). Reuses the backend image/context
+    # same as celery-worker above; no DB/Redis dependency needed (bot is
+    # stateless — see backend/workers/telegram_bot.py).
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./backend:/app
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TZ: ${TZ:-Asia/Bangkok}
+      PYTHONPATH: /app
+    command: python -m workers.telegram_bot
+    restart: unless-stopped
+    networks:
+      - stockviz-net
+
   flower:
     image: mher/flower:2.0
     command: celery --broker=redis://redis:6379/0 flower --port=5555 --url_prefix=flower
