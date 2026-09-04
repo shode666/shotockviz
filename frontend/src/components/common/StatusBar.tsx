@@ -16,7 +16,7 @@ export default function StatusBar() {
 
     return (
         <div
-            className="panel border-t flex items-center justify-between px-4 py-1"
+            className="panel border-t hidden md:flex items-center justify-between px-4 py-1"
             style={{ borderTopWidth: 1, borderTopStyle: 'solid' }}
         >
             <div className="flex items-center gap-4">

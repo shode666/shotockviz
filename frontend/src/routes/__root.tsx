@@ -5,6 +5,7 @@ import { GoogleOAuthProvider, useGoogleOneTapLogin } from '@react-oauth/google'
 
 import Navbar from '@/components/common/Navbar'
 import Sidebar from '@/components/common/Sidebar'
+import MobileTabBar from '@/components/common/MobileTabBar'
 import StatusBar from '@/components/common/StatusBar'
 import SearchModal from '@/components/modals/SearchModal'
 import ClientOnly from '@/components/common/ClientOnly'
@@ -108,11 +109,12 @@ function RootComponent() {
       <Navbar />
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
-        <main className="flex-1 flex flex-col overflow-hidden">
+        <main className="flex-1 flex flex-col overflow-hidden pb-14 md:pb-0">
           <Outlet />
         </main>
       </div>
       <StatusBar />
+      <MobileTabBar />
       <SearchModal />
       <Toaster />
     </div>
