@@ -19,6 +19,26 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     const [rsiLast, setRsiLast] = useState<number | null>(null);
     const [macdLast, setMacdLast] = useState<number | null>(null);
 
+    // bd:ux-2026-09 user-reported follow-up #2 — bumped every time the "create
+    // chart" effect below recreates chart+series (e.g. when darkMode flips).
+    // Real, confirmed gap found via effect-execution tracing (console
+    // instrumentation, since headless Playwright couldn't render actual
+    // canvas pixels in this sandbox to prove it visually — see artifact for
+    // that caveat): on first mount, Zustand's `darkMode` default is `true`;
+    // appStore.initTheme() (a useEffect in __root.tsx — a PARENT, whose
+    // mount effects commit AFTER this component's own) then corrects it to
+    // `false` for light-theme users. That flip changes the "create chart"
+    // effect's dep array (`[darkMode, ...]`), tearing down and rebuilding
+    // chart+series. The "update data" effect below only depends on
+    // `[bars, chartType, activeIndicators]` — if `bars` itself hasn't
+    // changed at that exact moment, it does NOT re-run, so the freshly
+    // created series never gets setData(bars) called on it and stays empty.
+    // Including chartGeneration in the update-data effect's deps guarantees
+    // it re-runs whenever chart+series get rebuilt for ANY reason (theme
+    // flip, chart type change, intraday/daily boundary change), independent
+    // of whether `bars` happens to change in that same render.
+    const [chartGeneration, setChartGeneration] = useState(0);
+
     // Fetch chart data using custom hook
     const { bars, isLoading, isTimeout, isFund, refetch } = useChartData({
         timeframe,
@@ -40,6 +60,22 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     // Create chart
     useEffect(() => {
         if (!containerRef.current) return;
+
+        // The chart+series about to be (re)created below are brand new —
+        // any indicator series tracked in indicatorsRef belonged to the
+        // PREVIOUS chart instance and were already disposed by that chart's
+        // own chart.remove() (see cleanup below). Without this reset, the
+        // "update data" effect's `if (!currentInds['RSI 14'])` checks see a
+        // stale-but-truthy reference, skip re-creating the indicator series
+        // on the NEW chart, then unconditionally call
+        // chart.priceScale('rsi').applyOptions(...) — which throws
+        // synchronously ("incorrect ID: rsi") because the new chart never
+        // had a series with priceScaleId:'rsi' added to it, crashing to the
+        // route's CatchBoundary. Confirmed via repro — this exact crash
+        // fired the moment chartGeneration (below) made the update-data
+        // effect re-run after a darkMode-triggered chart recreation
+        // [output: tests/e2e/zz-debug-theme.spec.ts run].
+        indicatorsRef.current = {};
 
         const bgColor = darkMode ? '#0d0f17' : '#f8f9fc';
         const textColor = darkMode ? '#9ca3af' : '#6b7280';
@@ -152,6 +188,10 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             }
         });
         ro.observe(containerRef.current);
+
+        // New chart + series instances exist now — force the "update data"
+        // effect to re-run so it (re)paints the current `bars` onto them.
+        setChartGeneration((g) => g + 1);
 
         return () => {
             ro.disconnect();
@@ -305,7 +345,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         }
 
         chart.timeScale().fitContent();
-    }, [bars, chartType, activeIndicators]);
+    }, [bars, chartType, activeIndicators, chartGeneration]);
 
     const rsiActive = activeIndicators.includes('RSI 14');
     const macdActive = activeIndicators.includes('MACD');
