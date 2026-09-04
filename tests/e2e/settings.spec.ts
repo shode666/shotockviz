@@ -24,19 +24,16 @@ test.describe('Theme Toggle — navbar button', () => {
   });
 
   test('clicking theme toggle switches between dark and light', async ({ page }) => {
+    // bd:ux-2026-09 item 6 fix — the innerHTML scan for 'Sun'/'Moon' never
+    // matched (lucide-react renders <svg>, no such text node exists), so
+    // the loop clicked nothing and the assertion below was comparing the
+    // unchanged theme against itself. Navbar.tsx:157 has a stable
+    // aria-label="สลับธีม" — use it directly.
     const initialTheme = await page.evaluate(() =>
       document.documentElement.getAttribute('data-theme'),
     );
 
-    const navBtns = page.locator('nav button');
-    for (let i = 0; i < await navBtns.count(); i++) {
-      const btn = navBtns.nth(i);
-      const html = await btn.innerHTML();
-      if (html.includes('Sun') || html.includes('Moon') || html.includes('sun') || html.includes('moon')) {
-        await btn.click();
-        break;
-      }
-    }
+    await page.getByRole('button', { name: 'สลับธีม' }).click();
 
     const newTheme = await page.evaluate(() =>
       document.documentElement.getAttribute('data-theme'),
@@ -50,6 +47,14 @@ test.describe('Theme Toggle — navbar button', () => {
   });
 
   test('theme persists after page reload', async ({ page }) => {
+    // bd:ux-2026-09 item 6 fix — the describe's beforeEach registers an
+    // addInitScript that removes localStorage 'theme' on every navigation,
+    // including this test's own page.reload() below, wiping the value this
+    // test sets *before* appStore's initTheme() ever runs on the reloaded
+    // page (__root.tsx:94-97 reads localStorage on mount). Register a second
+    // initScript that re-applies 'theme' after the cleanup one — initScripts
+    // run in registration order, so this one wins on the reload.
+    await page.addInitScript(() => localStorage.setItem('theme', 'light'));
     await page.evaluate(() => {
       localStorage.setItem('theme', 'light');
       document.documentElement.setAttribute('data-theme', 'light');
@@ -81,9 +86,13 @@ test.describe('Settings Page — navigation', () => {
 
   test('settings page has General / Chart / Notification side nav', async ({ page }) => {
     await page.goto('/settings');
-    await expect(page.getByRole('link', { name: /General/ })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Chart/ })).toBeVisible();
-    await expect(page.getByRole('link', { name: /Notification/ })).toBeVisible();
+    // bd:ux-2026-09 item 6 fix — unscoped 'Chart' collides with the top
+    // Navbar's own "Chart" route link (strict-mode violation); scope to the
+    // settings side-nav landmark (SettingsPage.tsx:46, aria-label="หมวดตั้งค่า").
+    const sideNav = page.getByRole('navigation', { name: 'หมวดตั้งค่า' });
+    await expect(sideNav.getByRole('link', { name: /General/ })).toBeVisible();
+    await expect(sideNav.getByRole('link', { name: /Chart/ })).toBeVisible();
+    await expect(sideNav.getByRole('link', { name: /Notification/ })).toBeVisible();
   });
 
   test('settings page has Dark and Light theme cards', async ({ page }) => {
@@ -94,7 +103,10 @@ test.describe('Settings Page — navigation', () => {
 
   test('settings page has Timezone selector', async ({ page }) => {
     await page.goto('/settings');
-    await expect(page.getByText('Timezone')).toBeVisible();
+    // bd:ux-2026-09 item 6 fix — unscoped 'Timezone' matches 3 nodes (the
+    // section title div, the sr-only <label>, and the helper paragraph
+    // substring) — same .first() pattern already used below for Dark/Light.
+    await expect(page.getByText('Timezone', { exact: true }).first()).toBeVisible();
     await expect(page.locator('#settings-tz')).toBeVisible();
   });
 
@@ -132,20 +144,20 @@ test.describe('Navbar User Dropdown', () => {
   });
 
   test('clicking avatar opens dropdown with user info', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
+    const avatarBtn = page.getByRole('button', { name: 'T', exact: true });
     await avatarBtn.click();
     await expect(page.getByText('Test User')).toBeVisible();
     await expect(page.getByText('test@example.com')).toBeVisible();
   });
 
   test('dropdown has Logout button', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
+    const avatarBtn = page.getByRole('button', { name: 'T', exact: true });
     await avatarBtn.click();
     await expect(page.getByRole('button', { name: /Logout/ })).toBeVisible();
   });
 
   test('clicking outside dropdown closes it', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
+    const avatarBtn = page.getByRole('button', { name: 'T', exact: true });
     await avatarBtn.click();
     await expect(page.getByText('Test User')).toBeVisible();
 
@@ -154,7 +166,7 @@ test.describe('Navbar User Dropdown', () => {
   });
 
   test('dropdown uses glassmorphism (glass-dropdown class)', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
+    const avatarBtn = page.getByRole('button', { name: 'T', exact: true });
     await avatarBtn.click();
 
     const dropdown = page.locator('.glass-dropdown');
