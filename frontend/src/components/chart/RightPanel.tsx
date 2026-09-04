@@ -318,7 +318,10 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                                 {rsiPct != null ? (
                                     <>
                                         <div className="relative my-3">
-                                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to right, #34d399, #facc15, #f87171)' }}>
+                                            {/* bd:ux-2026-09 Chris review — hardcoded #f87171 matched
+                                                neither theme's --color-red (#ef4444 light / #f43f5e
+                                                dark, styles.css:43,112); tokens track theme instead. */}
+                                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to right, var(--color-green), var(--color-yellow), var(--color-red))' }}>
                                                 <div
                                                     className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 shadow"
                                                     style={{ left: `${rsiPct}%`, borderColor: 'var(--color-accent)', transform: 'translate(-50%, -50%)' }}
