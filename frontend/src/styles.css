@@ -34,6 +34,9 @@
      --surface-3) — light theme's --color-accent-text is already dark
      enough (matches --color-accent-strong), so this aliases to it. */
   --color-accent-text-strong: #6343e8;
+  /* Same alias rationale as --color-accent-text-strong above — light theme's
+     base accent-text is already dark enough on light surfaces. */
+  --color-accent-text-raised: #6343e8;
   --color-accent-strong: #6343e8;
   --color-accent-hover: #6b4cf0;
   --color-accent-glow: rgba(124, 92, 252, 0.14);
@@ -105,6 +108,14 @@
      other measured pairs). Use for active nav/tab items on surface-3,
      not general accent-colored text (keep --color-accent-text for that). */
   --color-accent-text-strong: #9d85ff;
+  /* bd:ux-2026-09 item 5 (Uma, via Oliver) — #b3a3ff for SettingsPage.tsx's
+     active side-nav item. Cited as 5.43:1; independently re-measured here
+     with the same surface-3-over-bg composite basis as --color-accent-text-strong
+     above and got 6.40:1 instead [output: python3 WCAG relative-luminance
+     script, alpha-blend rgba(255,255,255,0.13) over --color-bg #0a0c14 then
+     contrast vs #b3a3ff] — flagged to Oliver, not silently overridden; either
+     figure clears AA (>=4.5:1) so no accessibility regression either way. */
+  --color-accent-text-raised: #b3a3ff;
   --color-accent-strong: #6343e8;
   --color-accent-glow: rgba(124, 92, 252, 0.16);
 
