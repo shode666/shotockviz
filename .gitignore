@@ -69,6 +69,11 @@ pgdata/
 redisdata/
 backup*.sql
 backend/db/migrations/
+# bd:features-2026-09 — user's manually-exported S/R data file (private trading
+# data, ~1.4MB); backend/scripts/import_sr_levels.py reads it from here. Dir
+# kept via .gitkeep so the expected path exists out of the box.
+backend/data/sr_levels/*
+!backend/data/sr_levels/.gitkeep
 
 # ===== Docker volumes =====
 ollama_data/
