@@ -1,13 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link, useMatches, useNavigate } from '@tanstack/react-router'
 import {
-    Search, Sun, Moon, LogOut, Settings,
+    Search, Sun, Moon, LogOut, Settings, Command,
     TrendingUp, SlidersHorizontal, Briefcase, Bell, Newspaper, LayoutDashboard,
 } from 'lucide-react'
 import useAppStore from '@/store/appStore'
 import useAuthStore from '@/store/authStore'
 import ShotockLogo from './ShotockLogo'
-import SettingsModal from '@/components/modals/SettingsModal'
 import { getSetStatus, getUsStatus, type MarketStatusResult } from '@/utils/marketStatus'
 
 const navItems = [
@@ -46,7 +45,6 @@ export default function Navbar() {
     const navigate = useNavigate()
 
     const [isDropdownOpen, setIsDropdownOpen] = useState(false)
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false)
     const dropdownRef = useRef<HTMLDivElement>(null)
 
     const [setStatus, setSetStatus] = useState<MarketStatusResult>(getSetStatus)
@@ -79,7 +77,34 @@ export default function Navbar() {
 
     return (
         <>
-            <nav className="flex items-center justify-between px-4 py-2 border-b" style={{ background: 'var(--color-panel)', borderColor: 'var(--color-border)' }}>
+            <nav
+                className="hidden md:flex items-center px-4 gap-5 border-b flex-shrink-0"
+                // bd:ux-2026-09 user-reported regression — account-dropdown bled through
+                // by the chart canvas on the Chart page. Root cause verified via
+                // elementFromPoint() at the geometric overlap between the dropdown
+                // (bottom edge ~y139) and TradingChart's <canvas> (top edge ~y127,
+                // fixed regardless of viewport height): `backdropFilter` on THIS <nav>
+                // creates its own stacking context, so the dropdown's `z-50` only wins
+                // comparisons *inside* that context — from the root stacking context,
+                // the whole Navbar paints at the implicit "auto" layer (same class as
+                // z-index:0/static content) while lightweight-charts' canvases (their
+                // own z-index:1/2, same trick as [Q-UX1] commit 80f0d7d) sit in the
+                // *positive* z-index paint layer, which always wins regardless of DOM
+                // order. Bumping the dropdown's own z-index further would not help —
+                // it already wins locally. Elevating the trapping context (this <nav>)
+                // above every z-index used inside chart components (max observed: 20,
+                // ChartPage.tsx RightPanel toggle) is what actually fixes it.
+                style={{
+                    height: 48,
+                    position: 'relative',
+                    zIndex: 30,
+                    background: 'var(--surface-1)',
+                    backdropFilter: 'var(--glass-blur-nav)',
+                    WebkitBackdropFilter: 'var(--glass-blur-nav)',
+                    borderColor: 'var(--color-border)',
+                    boxShadow: 'var(--glass-inset-edge)',
+                }}
+            >
                 <div className="flex items-center gap-6">
                     {/* Logo */}
                     <div className="flex items-center gap-2.5">
@@ -99,32 +124,42 @@ export default function Navbar() {
 
                     {/* Navigation */}
                     <div className="flex items-center gap-1">
-                        {navItems.map(({ to, label, Icon }) => (
-                            <Link
-                                key={to}
-                                to={to}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                                style={{
-                                    background: currentPath === to ? 'var(--color-accent-glow, rgba(124,92,252,0.14))' : 'transparent',
-                                    color: currentPath === to ? 'var(--color-accent)' : 'var(--color-text-sub)',
-                                }}
-                            >
-                                <Icon size={13} />
-                                {label}
-                            </Link>
-                        ))}
+                        {navItems.map(({ to, label, Icon }) => {
+                            const isActive = currentPath === to
+                            return (
+                                <Link
+                                    key={to}
+                                    to={to}
+                                    aria-current={isActive ? 'page' : undefined}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors"
+                                    style={{
+                                        background: isActive ? 'var(--surface-3)' : 'transparent',
+                                        color: isActive ? 'var(--color-text)' : 'var(--color-text-sub)',
+                                        boxShadow: isActive ? 'inset 0 -2px 0 var(--color-accent)' : 'none',
+                                    }}
+                                    onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--surface-2)' }}
+                                    onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
+                                >
+                                    <Icon size={13} />
+                                    {label}
+                                </Link>
+                            )
+                        })}
                     </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="ml-auto flex items-center gap-3">
                     {/* Search */}
                     <button
                         onClick={() => setSearchOpen(true)}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs"
-                        style={{ background: 'var(--color-input-bg)', color: 'var(--color-text-sub)' }}
+                        className="flex items-center gap-2 px-3 rounded-lg text-[11px] border transition-colors"
+                        style={{ height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
                     >
                         <Search size={12} />
-                        ค้นหา PTT, AAPL... ⌘K
+                        <span className="flex items-center gap-0.5">
+                            ค้นหา PTT, AAPL...
+                            <Command size={12} strokeWidth={2} aria-hidden="true" />K
+                        </span>
                     </button>
 
                     {/* Market Status — dynamic */}
@@ -134,15 +169,39 @@ export default function Navbar() {
                     </div>
 
                     {/* Theme Toggle */}
-                    <button onClick={toggleTheme} className="p-1.5 rounded-lg hover:bg-[var(--color-hover)] transition-colors" style={{ color: 'var(--color-text-sub)' }}>
+                    <button
+                        onClick={toggleTheme}
+                        aria-label="สลับธีม"
+                        className="flex items-center justify-center rounded-lg border transition-colors"
+                        style={{ width: 30, height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.color = 'var(--color-text-sub)' }}
+                    >
                         {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
                     </button>
+
+                    {/* Settings */}
+                    <Link
+                        to="/settings"
+                        aria-label="ตั้งค่า"
+                        aria-current={currentPath === '/settings' ? 'page' : undefined}
+                        className="flex items-center justify-center rounded-lg border transition-colors"
+                        style={{
+                            width: 30, height: 30, background: 'var(--surface-1)',
+                            borderColor: currentPath === '/settings' ? 'var(--color-accent)' : 'var(--color-border)',
+                            color: currentPath === '/settings' ? 'var(--color-accent-text)' : 'var(--color-text-sub)',
+                        }}
+                        onMouseEnter={(e) => { if (currentPath !== '/settings') { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' } }}
+                        onMouseLeave={(e) => { if (currentPath !== '/settings') { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.color = 'var(--color-text-sub)' } }}
+                    >
+                        <Settings size={14} />
+                    </Link>
 
                     {/* Auth */}
                     {isLoading ? (
                         /* Spinner while checkAuth retries — prevents "Login" flash */
                         <div
-                            className="w-8 h-8 rounded-full flex items-center justify-center"
+                            className="w-7 h-7 rounded-full flex items-center justify-center"
                             style={{ background: 'var(--color-hover)' }}
                         >
                             <span
@@ -160,8 +219,12 @@ export default function Navbar() {
                         <div className="relative" ref={dropdownRef}>
                             <button
                                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
-                                style={{ background: 'var(--color-accent)' }}
+                                className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
+                                // bd:ux-2026-09 Chris review — the #7c5cfc/#a855f7 gradient measured
+                                // 4.38:1 / 3.96:1 for white text (axe misses gradients). Solid
+                                // --color-accent-strong is the same 6.00:1 token .btn-accent already
+                                // uses for this exact class of failure (styles.css:529-533).
+                                style={{ background: 'var(--color-accent-strong)' }}
                             >
                                 {user?.display_name?.[0]?.toUpperCase() || 'U'}
                             </button>
@@ -175,17 +238,6 @@ export default function Navbar() {
                                         <p className="text-xs truncate" style={{ color: 'var(--color-text-sub)' }}>{user?.email}</p>
                                     </div>
                                     <div className="p-1">
-                                        <button
-                                            onClick={() => {
-                                                setIsSettingsOpen(true)
-                                                setIsDropdownOpen(false)
-                                            }}
-                                            className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-[var(--color-hover)]"
-                                            style={{ color: 'var(--color-text)' }}
-                                        >
-                                            <Settings size={14} />
-                                            Settings
-                                        </button>
                                         <button
                                             onClick={handleLogout}
                                             className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-red-500/10 text-red-500"
@@ -202,7 +254,6 @@ export default function Navbar() {
                     )}
                 </div>
             </nav>
-            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
         </>
     )
 }

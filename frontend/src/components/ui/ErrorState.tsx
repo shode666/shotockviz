@@ -1,9 +1,12 @@
+import { AlertTriangle } from 'lucide-react';
+import type { ReactNode } from 'react';
+
 interface ErrorStateProps {
     title?: string;
     message: string;
     onRetry?: () => void;
     isLoading?: boolean;
-    icon?: string;
+    icon?: ReactNode;
 }
 
 export function ErrorState({
@@ -11,7 +14,7 @@ export function ErrorState({
     message,
     onRetry,
     isLoading = false,
-    icon = '⚠',
+    icon = <AlertTriangle size={24} strokeWidth={2} aria-hidden="true" style={{ color: 'var(--color-yellow)' }} />,
 }: ErrorStateProps) {
     return (
         <div
@@ -22,7 +25,7 @@ export function ErrorState({
                 className="max-w-md mx-auto panel border rounded-2xl p-8 text-center"
                 style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
             >
-                <div className="text-4xl mb-4">{icon}</div>
+                <div className="flex justify-center mb-4">{icon}</div>
                 <h3 className="text-sm font-semibold mb-2">{title}</h3>
                 <p className="text-xs mb-6" style={{ color: 'var(--color-text-sub)' }}>
                     {message}

@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Timer, Landmark, BarChart3 } from 'lucide-react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
 import useAppStore from '@/store/appStore';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP } from '@/utils/indicators';
@@ -11,6 +12,32 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     const volumeRef = useRef(null);
     const indicatorsRef = useRef({}); // Store references to indicator series
     const { selectedStock, darkMode } = useAppStore();
+
+    // Last computed value for the RSI/MACD strip labels (bd:ux-2026-09 g2 —
+    // Uma #4: strips need a label + divider like page-chart.html, not just
+    // the bare price-scale band).
+    const [rsiLast, setRsiLast] = useState<number | null>(null);
+    const [macdLast, setMacdLast] = useState<number | null>(null);
+
+    // bd:ux-2026-09 user-reported follow-up #2 — bumped every time the "create
+    // chart" effect below recreates chart+series (e.g. when darkMode flips).
+    // Real, confirmed gap found via effect-execution tracing (console
+    // instrumentation, since headless Playwright couldn't render actual
+    // canvas pixels in this sandbox to prove it visually — see artifact for
+    // that caveat): on first mount, Zustand's `darkMode` default is `true`;
+    // appStore.initTheme() (a useEffect in __root.tsx — a PARENT, whose
+    // mount effects commit AFTER this component's own) then corrects it to
+    // `false` for light-theme users. That flip changes the "create chart"
+    // effect's dep array (`[darkMode, ...]`), tearing down and rebuilding
+    // chart+series. The "update data" effect below only depends on
+    // `[bars, chartType, activeIndicators]` — if `bars` itself hasn't
+    // changed at that exact moment, it does NOT re-run, so the freshly
+    // created series never gets setData(bars) called on it and stays empty.
+    // Including chartGeneration in the update-data effect's deps guarantees
+    // it re-runs whenever chart+series get rebuilt for ANY reason (theme
+    // flip, chart type change, intraday/daily boundary change), independent
+    // of whether `bars` happens to change in that same render.
+    const [chartGeneration, setChartGeneration] = useState(0);
 
     // Fetch chart data using custom hook
     const { bars, isLoading, isTimeout, isFund, refetch } = useChartData({
@@ -33,6 +60,22 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     // Create chart
     useEffect(() => {
         if (!containerRef.current) return;
+
+        // The chart+series about to be (re)created below are brand new —
+        // any indicator series tracked in indicatorsRef belonged to the
+        // PREVIOUS chart instance and were already disposed by that chart's
+        // own chart.remove() (see cleanup below). Without this reset, the
+        // "update data" effect's `if (!currentInds['RSI 14'])` checks see a
+        // stale-but-truthy reference, skip re-creating the indicator series
+        // on the NEW chart, then unconditionally call
+        // chart.priceScale('rsi').applyOptions(...) — which throws
+        // synchronously ("incorrect ID: rsi") because the new chart never
+        // had a series with priceScaleId:'rsi' added to it, crashing to the
+        // route's CatchBoundary. Confirmed via repro — this exact crash
+        // fired the moment chartGeneration (below) made the update-data
+        // effect re-run after a darkMode-triggered chart recreation
+        // [output: tests/e2e/zz-debug-theme.spec.ts run].
+        indicatorsRef.current = {};
 
         const bgColor = darkMode ? '#0d0f17' : '#f8f9fc';
         const textColor = darkMode ? '#9ca3af' : '#6b7280';
@@ -146,6 +189,10 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         });
         ro.observe(containerRef.current);
 
+        // New chart + series instances exist now — force the "update data"
+        // effect to re-run so it (re)paints the current `bars` onto them.
+        setChartGeneration((g) => g + 1);
+
         return () => {
             ro.disconnect();
             chart.remove();
@@ -160,6 +207,8 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         if (bars.length === 0) {
             seriesRef.current.setData([]);
             volumeRef.current.setData([]);
+            setRsiLast(null);
+            setMacdLast(null);
             // Also remove all indicator series
             const chart = chartRef.current;
             const currentInds = indicatorsRef.current;
@@ -230,17 +279,24 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 currentInds['EMA 50'].setData(calculateEMA(bars, 50));
             }
 
-            // Apply RSI 14
+            // Apply RSI 14 — own band at the bottom of the plot ("strip" under the
+            // candles per mock). When MACD is also active they split that bottom
+            // region into two stacked strips instead of overlapping (bd:ux-2026-09 g2).
+            const macdAlsoActive = activeIndicators.includes('MACD');
             if (activeIndicators.includes('RSI 14')) {
                 if (!currentInds['RSI 14']) {
                     currentInds['RSI 14'] = chart.addSeries(LineSeries, {
                         color: '#a855f7', lineWidth: 2, crosshairMarkerVisible: false, priceScaleId: 'rsi'
                     });
-                    chart.priceScale('rsi').applyOptions({
-                        scaleMargins: { top: 0.8, bottom: 0 },
-                    });
                 }
-                currentInds['RSI 14'].setData(calculateRSI(bars, 14));
+                chart.priceScale('rsi').applyOptions({
+                    scaleMargins: macdAlsoActive ? { top: 0.62, bottom: 0.19 } : { top: 0.8, bottom: 0 },
+                });
+                const rsiData = calculateRSI(bars, 14);
+                currentInds['RSI 14'].setData(rsiData);
+                setRsiLast(rsiData.at(-1)?.value ?? null);
+            } else {
+                setRsiLast(null);
             }
 
             // Apply VWAP (intraday only: 1m, 5m, 15m, 1h, 4h)
@@ -254,22 +310,25 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 currentInds['VWAP'].setData(calculateVWAP(bars));
             }
 
-            // Apply MACD
+            // Apply MACD — own band, stacked below RSI's strip when both active.
             if (activeIndicators.includes('MACD')) {
                 if (!currentInds['MACD']) {
                     const macdLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
                     const signalLine = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
                     const hist = chart.addSeries(HistogramSeries, { priceScaleId: 'macd' });
 
-                    chart.priceScale('macd').applyOptions({
-                        scaleMargins: { top: 0.8, bottom: 0 },
-                    });
                     currentInds['MACD'] = [macdLine, signalLine, hist];
                 }
+                chart.priceScale('macd').applyOptions({
+                    scaleMargins: activeIndicators.includes('RSI 14') ? { top: 0.86, bottom: 0 } : { top: 0.8, bottom: 0 },
+                });
                 const macdData = calculateMACD(bars);
                 currentInds['MACD'][0].setData(macdData.macdLine);
                 currentInds['MACD'][1].setData(macdData.signalLine);
                 currentInds['MACD'][2].setData(macdData.histogram);
+                setMacdLast(macdData.histogram.at(-1)?.value ?? null);
+            } else {
+                setMacdLast(null);
             }
 
             // Apply Bollinger Bands
@@ -286,11 +345,47 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         }
 
         chart.timeScale().fitContent();
-    }, [bars, chartType, activeIndicators]);
+    }, [bars, chartType, activeIndicators, chartGeneration]);
+
+    const rsiActive = activeIndicators.includes('RSI 14');
+    const macdActive = activeIndicators.includes('MACD');
+    const rsiStripTop = macdActive ? '62%' : '80%';
+    const macdStripTop = rsiActive ? '86%' : '80%';
 
     return (
         <div className="w-full h-full relative">
             <div ref={containerRef} className="w-full h-full" />
+
+            {/* RSI/MACD strip label + top border — the series themselves render as
+                bottom price-scale bands (see the "Update data" effect above); this
+                overlay adds the mock's page-chart.html .strip divider + slabel so
+                the bands read as distinct labelled strips (bd:ux-2026-09 g2, Uma #4) */}
+            {rsiActive && (
+                <div
+                    className="absolute left-0 right-0 pointer-events-none"
+                    style={{ top: rsiStripTop, borderTop: '1px solid var(--color-border)' }}
+                >
+                    <span
+                        className="font-mono text-[10px] font-semibold absolute left-3"
+                        style={{ top: 4, color: 'var(--color-text-sub)' }}
+                    >
+                        RSI (14){rsiLast != null && <> · <span style={{ color: 'var(--color-accent-text)' }}>{rsiLast.toFixed(1)}</span></>}
+                    </span>
+                </div>
+            )}
+            {macdActive && (
+                <div
+                    className="absolute left-0 right-0 pointer-events-none"
+                    style={{ top: macdStripTop, borderTop: '1px solid var(--color-border)' }}
+                >
+                    <span
+                        className="font-mono text-[10px] font-semibold absolute left-3"
+                        style={{ top: 4, color: 'var(--color-text-sub)' }}
+                    >
+                        MACD (12,26,9){macdLast != null && <> · <span style={{ color: macdLast >= 0 ? 'var(--color-green)' : 'var(--color-red)' }}>{macdLast >= 0 ? '+' : ''}{macdLast.toFixed(2)}</span></>}
+                    </span>
+                </div>
+            )}
 
             {/* Loading overlay — semi-opaque so user knows something is happening */}
             {isLoading && (
@@ -324,7 +419,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             {isTimeout && !isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'var(--color-bg)', opacity: 0.92 }}>
                     <div className="text-center">
-                        <div className="text-2xl mb-2">⏱</div>
+                        <Timer size={24} strokeWidth={2} className="mb-2 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-3" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
                         <button onClick={refetch} className="btn-accent text-xs px-3 py-1.5">Retry</button>
@@ -344,7 +439,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     >
                         {isFund ? (
                             <>
-                                <span className="text-4xl block mb-3">🏦</span>
+                                <Landmark size={24} strokeWidth={2} className="block mx-auto mb-3" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                                 <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
                                     กองทุนรวม — ไม่มีข้อมูลกราฟ
                                 </div>
@@ -356,7 +451,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                             </>
                         ) : (
                             <>
-                                <span className="text-4xl block mb-3">📊</span>
+                                <BarChart3 size={24} strokeWidth={2} className="block mx-auto mb-3" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                                 <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
                                     No data available
                                 </div>

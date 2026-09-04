@@ -24,7 +24,7 @@ export default function DrawingToolbar() {
                     key={key}
                     onClick={() => setSelected(selected === key ? null : key)}
                     title={label}
-                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg transition-all cursor-pointer"
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap transition-all cursor-pointer"
                     style={
                         selected === key
                             ? {
@@ -44,7 +44,7 @@ export default function DrawingToolbar() {
             <div className="ml-auto flex gap-2">
                 <button
                     title="Clear drawings"
-                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg cursor-pointer"
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer"
                     style={{ color: 'var(--color-text-sub)' }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
@@ -54,7 +54,7 @@ export default function DrawingToolbar() {
                 </button>
                 <button
                     title="Save drawings"
-                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg cursor-pointer"
+                    className="flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer"
                     style={{ color: 'var(--color-text-sub)' }}
                     onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}

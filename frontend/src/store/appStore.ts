@@ -25,6 +25,7 @@ interface AppState {
     theme: string;
     darkMode: boolean;
     toggleTheme: () => void;
+    setTheme: (theme: string) => void;
     initTheme: () => void;
     screen: string;
     setScreen: (screen: string) => void;
@@ -52,6 +53,22 @@ const useAppStore = create<AppState>()((set) => ({
                 localStorage.setItem('theme', next);
             }
             return { theme: next, darkMode: next === 'dark' };
+        }),
+
+    // bd:ux-2026-09 user-reported regression investigation — SettingsPage's
+    // Dark/Light theme cards both called toggleTheme() regardless of which
+    // card was clicked (SettingsPage.tsx:77), so clicking the theme you were
+    // ALREADY on silently flipped you to the other one instead of staying
+    // put. setTheme() sets explicitly instead of blindly flipping — cards
+    // pick a theme, they don't toggle one. toggleTheme() stays as-is for the
+    // Navbar sun/moon icon, where flip-current IS the correct semantic.
+    setTheme: (theme) =>
+        set(() => {
+            if (isBrowser) {
+                document.documentElement.setAttribute('data-theme', theme);
+                localStorage.setItem('theme', theme);
+            }
+            return { theme, darkMode: theme === 'dark' };
         }),
 
     /**

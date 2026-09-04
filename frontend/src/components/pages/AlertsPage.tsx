@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Bell, BellPlus, X, Search, Loader2 } from 'lucide-react';
+import { Bell, BellPlus, X, Search, Loader2, CheckCircle2, Timer } from 'lucide-react';
 import alertService from '@/services/alertService';
 import stockService from '@/services/stockService';
 import useAuthStore from '@/store/authStore';
@@ -8,11 +8,24 @@ import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/ut
 const ALERT_TYPES = ['Price Above', 'Price Below', 'RSI Below', 'RSI Above', 'Golden Cross', 'Death Cross', 'Volume Spike'];
 const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
 
+// label has no glyph prefix — the status dot (rendered separately, see the
+// `<div className="w-2 h-2 rounded-full" ...>` toggle button) already carries
+// that signal; only "triggered" gets an extra lucide CheckCircle2 (bd:ux-2026-09
+// icon rule — no emoji/unicode glyph as icon).
+// Triggered uses --color-support (chart-level yellow) per 03-design-notes.md
+// §Alerts "state ที่ 3 'แจ้งแล้ว' สี support-yellow" — distinct from --color-yellow.
 const STATUS_STYLE = {
-    active: { dot: 'var(--color-green)', label: '● Active', color: 'var(--color-green)' },
-    triggered: { dot: 'var(--color-yellow)', label: '✅ Triggered', color: 'var(--color-yellow)' },
-    inactive: { dot: 'var(--color-text-sub)', label: '○ Inactive', color: 'var(--color-text-sub)' },
+    active: { dot: 'var(--color-up)', label: 'ทำงานอยู่', color: 'var(--color-up)', Icon: null },
+    triggered: { dot: 'var(--color-support)', label: 'แจ้งแล้ว', color: 'var(--color-support)', Icon: CheckCircle2 },
+    inactive: { dot: 'var(--color-text-sub)', label: 'หยุดชั่วคราว', color: 'var(--color-text-sub)', Icon: null },
 };
+
+function formatTriggeredTime(iso?: string | null): string {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false });
+}
 
 const EMPTY_FORM = { symbol: '', alert_type: 'Price Above', condition: 'above', value: '', channel: 'in_app' };
 
@@ -174,7 +187,7 @@ export default function AlertsPage() {
                     </div>
                 ) : timedOut ? (
                     <div className="panel border rounded-2xl p-8 text-center animate-fade-in" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
-                        <div className="text-3xl mb-3">⏱</div>
+                        <Timer size={24} strokeWidth={2} className="mb-3 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-4" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
                         <button onClick={loadAlerts} className="btn-accent">Retry</button>
@@ -197,12 +210,12 @@ export default function AlertsPage() {
                             const isPrice = a.alert_type?.includes('PRICE') || a.alert_type?.includes('Price');
                             return (
                                 <div key={a.id} className="panel border rounded-2xl px-4 py-3 flex items-center gap-4" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
-                                    <button onClick={() => handleToggle(a.id)} className="flex-shrink-0">
-                                        <div className={`w-2 h-2 rounded-full ${a.is_active ? 'animate-pulse-dot' : ''}`} style={{ background: s.dot }} />
+                                    <button onClick={() => handleToggle(a.id)} className="flex-shrink-0" aria-label={s.label}>
+                                        <div className={`w-2 h-2 rounded-full ${statusKey === 'active' ? 'animate-pulse-dot' : ''}`} style={{ background: s.dot }} aria-hidden="true" />
                                     </button>
                                     <div className="flex-1 min-w-0">
                                         <div className="flex items-center gap-2">
-                                            <span className="text-sm font-bold" style={{ color: 'var(--color-accent)' }}>{displaySymbol(a.symbol)}</span>
+                                            <span className="text-sm font-bold" style={{ color: 'var(--color-accent-text)' }}>{displaySymbol(a.symbol)}</span>
                                             <span className="badge text-[9px]" style={{ background: alertMktColors.bg, color: alertMktColors.text }}>{alertParsed.market}</span>
                                             <span className="badge badge-violet">{a.alert_type}</span>
                                         </div>
@@ -212,11 +225,15 @@ export default function AlertsPage() {
                                         </div>
                                     </div>
                                     <div className="text-right flex-shrink-0">
-                                        <div className="text-[11px] mb-0.5" style={{ color: s.color }}>{s.label}</div>
+                                        <div className="text-[11px] mb-0.5 flex items-center justify-end gap-1 font-semibold" style={{ color: s.color }}>
+                                            {s.Icon && <s.Icon size={11} strokeWidth={2} aria-hidden="true" />}
+                                            {s.label}
+                                            {statusKey === 'triggered' && a.triggered_at && ` ${formatTriggeredTime(a.triggered_at)}`}
+                                        </div>
                                     </div>
-                                    <button onClick={() => handleDelete(a.id)} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
-                                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
-                                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}><X size={12} /></button>
+                                    <button onClick={() => handleDelete(a.id)} aria-label={`ลบ alert ${displaySymbol(a.symbol)}`} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-down-muted)'; e.currentTarget.style.color = 'var(--color-down)' }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-sub)' }}><X size={12} /></button>
                                 </div>
                             );
                         })}
@@ -332,7 +349,7 @@ export default function AlertsPage() {
                             {/* Value with currency prefix for price alerts */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>
-                                    ค่าเงื่อนไข {isPriceAlert && selectedMarket && <span className="text-[9px] ml-1" style={{ color: 'var(--color-accent)' }}>({currency.code})</span>}
+                                    ค่าเงื่อนไข {isPriceAlert && selectedMarket && <span className="text-[9px] ml-1" style={{ color: 'var(--color-accent-text)' }}>({currency.code})</span>}
                                 </div>
                                 {isPriceAlert && selectedMarket ? (
                                     <div className="input-field flex items-center gap-2 p-0 overflow-hidden">

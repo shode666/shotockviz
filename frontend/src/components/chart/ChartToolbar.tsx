@@ -28,7 +28,7 @@ export default function ChartToolbar({
             <div className="flex items-center gap-2 mr-2">
                 <span className="font-bold text-sm">{parseSymbol(selectedStock.sym).display}</span>
                 {(() => { const p = parseSymbol(selectedStock.sym); const c = MARKET_COLORS[p.market]; return c ? (
-                    <span className="badge text-[9px]" style={{ background: c.bg, color: c.text }}>{p.market}</span>
+                    <span className="badge text-[11px]" style={{ background: c.bg, color: c.text }}>{p.market}</span>
                 ) : null; })()}
                 <span
                     className="text-sm font-bold"
@@ -58,9 +58,9 @@ export default function ChartToolbar({
                         <button
                             key={tf}
                             onClick={() => onTFChange(tf)}
-                            className="text-xs px-2 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1"
+                            className="text-xs px-2 py-1 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1"
                             style={isActive
-                                ? { background: 'var(--color-accent)', color: '#fff', border: '1px solid var(--color-accent)' }
+                                ? { background: 'var(--color-accent-strong)', color: '#fff', border: '1px solid var(--color-accent-strong)' }
                                 : { color: 'var(--color-text-sub)', border: '1px solid transparent', background: 'transparent' }
                             }
                             onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-hover)'; }}
@@ -97,17 +97,26 @@ export default function ChartToolbar({
 
             <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />
 
-            {/* Indicators */}
+            {/* Indicators — pill shows the short name only (e.g. "MA"); the
+                period stays in the value/title/aria-label ("MA 20") since
+                TradingChart.tsx keys activeIndicators.includes() off the
+                full string (bd:ux-2026-09 user-fix — pills wrapped to 2
+                lines / "MA 20" etc; rounded-lg not rounded-full so a 2-char
+                label like "BB" doesn't render as a circle). */}
             <div className="flex gap-1">
                 {indicators.map((ind) => {
                     const isActive = activeIndicators.includes(ind);
+                    const displayLabel = ind.replace(/\s+\d+$/, '');
                     return (
                         <button
                             key={ind}
                             onClick={() => onIndicatorToggle?.(ind)}
-                            className={`text-xs px-2 py-0.5 rounded-full cursor-pointer transition-colors ${isActive ? 'bg-violet-500 text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+                            title={ind}
+                            aria-label={ind}
+                            aria-pressed={isActive}
+                            className={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer transition-colors ${isActive ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
                         >
-                            {ind}
+                            {displayLabel}
                         </button>
                     );
                 })}

@@ -64,7 +64,7 @@ export function HoldingsTable({ holdings, hasPendingPrices }: HoldingsTableProps
                                 onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
                                 onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                             >
-                                <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent)' }}>
+                                <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent-text)' }}>
                                     {displaySymbol(h.symbol)}
                                     <span
                                         className="ml-1.5 text-[9px] px-1 py-0.5 rounded font-normal"

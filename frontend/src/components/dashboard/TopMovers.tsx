@@ -98,7 +98,7 @@ export function TopMovers({ movers, onSymbolClick }: TopMoversProps) {
 
     return (
         <div
-            className="md:col-span-3 xl:col-span-4 panel rounded-xl border p-4 flex flex-col gap-2"
+            className="md:col-span-3 xl:col-span-2 panel rounded-xl border p-4 flex flex-col gap-2"
             style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
         >
             <span
@@ -112,7 +112,10 @@ export function TopMovers({ movers, onSymbolClick }: TopMoversProps) {
                     ไม่มีข้อมูล
                 </p>
             ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-0.5">
+                // Single column per mock (page-dashboard.html .mover rows) — the card
+                // is now only 2 of 4 bento columns wide, so a multi-col grid here
+                // truncated symbols like KBANK/AAPL down to one letter (Uma g2 #3)
+                <div className="grid grid-cols-1 gap-0.5">
                     {sortedMovers.map((m: any) => (
                         <MoverRow
                             key={m.symbol}

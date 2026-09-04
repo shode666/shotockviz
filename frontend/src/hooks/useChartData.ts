@@ -39,9 +39,24 @@ function normalizeBarTime(bar: any, isDaily: boolean): any {
 /** Sort bars ascending by time — safety net for mismatched API ordering.
  *  Daily bars: string sort on "yyyy-mm-dd".
  *  Intraday bars: numeric sort on unix timestamp.
+ *
+ * bd:ux-2026-09 user-reported regression follow-up — sorting alone is not
+ * enough: lightweight-charts' setSeriesData() throws a SYNCHRONOUS, UNCAUGHT
+ * "data must be asc ordered by time" assertion not just on out-of-order bars
+ * but on ANY two consecutive bars sharing the same `time` (a stable sort
+ * leaves duplicates adjacent but does not remove them). Confirmed via
+ * Playwright repro [output: scratchpad/diag-bug2-followup.mjs] — a duplicate
+ * timestamp in `bars` crashes <TradingChart> to its route CatchBoundary,
+ * unmounting the chart AND everything sharing that boundary; happens
+ * identically in dark and light theme (not theme-specific — the "light
+ * theme only" user report was this same crash coinciding with a fresh/cold
+ * cache read that happened to have a dupe). De-dupe (last write wins, same
+ * semantics as the backend's own `ON CONFLICT ... DO UPDATE` upsert,
+ * on_demand_listener.py:259-263) after sorting, before this ever reaches
+ * lightweight-charts.
  */
 function sortBarsAsc(bars: any[], isDaily: boolean) {
-    return [...bars].map(b => normalizeBarTime(b, isDaily)).sort((a, b) => {
+    const sorted = [...bars].map(b => normalizeBarTime(b, isDaily)).sort((a, b) => {
         if (isDaily) {
             const ta = String(a.time);
             const tb = String(b.time);
@@ -49,6 +64,16 @@ function sortBarsAsc(bars: any[], isDaily: boolean) {
         }
         return (a.time as number) - (b.time as number);
     });
+
+    const deduped: any[] = [];
+    for (const bar of sorted) {
+        if (deduped.length > 0 && String(deduped[deduped.length - 1].time) === String(bar.time)) {
+            deduped[deduped.length - 1] = bar; // last write wins
+        } else {
+            deduped.push(bar);
+        }
+    }
+    return deduped;
 }
 
 // Minimal fallback shown ONLY on network error (not on empty API response)

@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2, ArrowRight } from 'lucide-react';
 import dashboardService from '@/services/dashboardService';
 import portfolioService from '@/services/portfolioService';
 import useAppStore from '@/store/appStore';
@@ -128,10 +128,11 @@ export default function DashboardPage() {
                     <button
                         onClick={load}
                         disabled={loading}
+                        aria-label="รีเฟรชข้อมูล"
                         className="p-1.5 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
                         style={{ color: 'var(--color-text-sub)' }}
                     >
-                        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
                     </button>
                 </div>
 
@@ -150,9 +151,9 @@ export default function DashboardPage() {
                                 <Briefcase size={11} /> Portfolio
                             </span>
                             <button onClick={() => navigate({ to: '/portfolio' })}
-                                className="text-[10px] font-medium transition-colors hover:opacity-70"
-                                style={{ color: 'var(--color-accent)' }}>
-                                ดูทั้งหมด →
+                                className="text-[10px] font-medium transition-colors hover:opacity-70 flex items-center gap-0.5"
+                                style={{ color: 'var(--color-accent-text)' }}>
+                                ดูทั้งหมด <ArrowRight size={12} strokeWidth={2} aria-hidden="true" />
                             </button>
                         </div>
 
@@ -199,7 +200,7 @@ export default function DashboardPage() {
                                             <div key={h.symbol} className="flex items-center justify-between gap-2">
                                                 <button onClick={() => goToChart(h.symbol)}
                                                     className="font-bold text-[11px] hover:opacity-70 transition-opacity truncate"
-                                                    style={{ color: 'var(--color-accent)' }}>
+                                                    style={{ color: 'var(--color-accent-text)' }}>
                                                     {displaySymbol(h.symbol)}
                                                 </button>
                                                 <span className="text-[10px] font-semibold tabular-nums shrink-0"

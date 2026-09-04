@@ -98,6 +98,16 @@ export const MOCK_SEARCH_RESULTS = [
  * Call in beforeEach — no real network traffic.
  */
 export async function mockStockAPIs(page: Page): Promise<void> {
+  // bd:ux-2026-09 (Quinn, test-only) — this sandbox transparently
+  // intercepts ALL outbound :443 traffic by SNI regardless of destination
+  // IP (confirmed: even --host-resolver-rules pointing these hosts at
+  // 127.0.0.1 still hangs ~6-8s per request via the agent proxy). Abort
+  // at the Playwright network-interception layer instead (CDP, before any
+  // socket opens) so Google Fonts preconnect/stylesheet + GSI script
+  // requests fail in ~10ms instead of paying a multi-second tax on every
+  // single test.
+  await page.route(/fonts\.(googleapis|gstatic)\.com|accounts\.google\.com/, (route) => route.abort());
+
   // Quote — 200 with price data
   await page.route('**/api/v1/stocks/*/quote', (route) =>
     route.fulfill({
