@@ -103,8 +103,9 @@ export default function ScreenerPage() {
                     <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                         {Object.entries(filters).map(([key, val]) => (
                             <div key={key}>
-                                <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>{key}</div>
+                                <label htmlFor={`f-${key}`} className="text-[10px] uppercase tracking-wider mb-1.5 block" style={{ color: 'var(--color-text-sub)' }}>{key}</label>
                                 <select
+                                    id={`f-${key}`}
                                     className="input-field text-[11px] py-1.5 glass-select"
                                     value={val}
                                     onChange={(e) => setFilters((f) => ({ ...f, [key]: e.target.value }))}
@@ -131,6 +132,7 @@ export default function ScreenerPage() {
                         </span>
                         <button className="btn-outline py-1 flex items-center gap-1.5"><Download size={12} /> Export CSV</button>
                     </div>
+                    <div className="overflow-x-auto">
                     <table className="w-full">
                         <thead>
                             <tr className="text-[10px] border-b" style={{ color: 'var(--color-text-sub)', borderColor: 'var(--color-border)' }}>
@@ -182,7 +184,7 @@ export default function ScreenerPage() {
                                             onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
                                             onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                                         >
-                                            <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent)' }}>{r.sym}</td>
+                                            <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent-text)' }}>{r.sym}</td>
                                             <td className="px-4 py-3" style={{ color: 'var(--color-text-sub)' }}>{r.name}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums">{r.price}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums" style={{ color: r.up ? 'var(--color-green)' : 'var(--color-red)' }}>{r.chg}</td>
@@ -200,6 +202,7 @@ export default function ScreenerPage() {
                             )}
                         </tbody>
                     </table>
+                    </div>
                 </div>
             </div>
         </div>
