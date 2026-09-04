@@ -13,16 +13,19 @@ function AlertNearTarget({ symbol, target, current, diffPct, condition }: AlertN
     return (
         <div
             className="flex items-center gap-2 px-3 py-2 rounded-xl border"
-            style={{ borderColor: '#f59e0b44', background: 'rgba(245,158,11,0.06)' }}
+            style={{
+                borderColor: 'color-mix(in srgb, var(--color-yellow) 27%, transparent)',
+                background: 'color-mix(in srgb, var(--color-yellow) 6%, transparent)',
+            }}
         >
-            <Bell size={11} className="flex-shrink-0" style={{ color: '#f59e0b' }} />
+            <Bell size={11} className="flex-shrink-0" style={{ color: 'var(--color-yellow)' }} />
             <div className="flex-1 min-w-0">
                 <span className="font-bold text-xs">{displaySymbol(symbol)}</span>
                 <span className="text-[10px] ml-1.5" style={{ color: 'var(--color-text-sub)' }}>
                     {condition} {target.toFixed(2)} · ปัจจุบัน {current.toFixed(2)}
                 </span>
             </div>
-            <span className="text-[10px] font-bold shrink-0" style={{ color: '#f59e0b' }}>
+            <span className="text-[10px] font-bold shrink-0" style={{ color: 'var(--color-yellow)' }}>
                 ±{diffPct.toFixed(1)}%
             </span>
         </div>
@@ -65,7 +68,7 @@ export function AlertsNearTarget({
                 <button
                     onClick={onNavigateToAlerts}
                     className="text-[10px] font-medium transition-colors hover:opacity-70 flex items-center gap-0.5"
-                    style={{ color: 'var(--color-accent)' }}
+                    style={{ color: 'var(--color-accent-text)' }}
                 >
                     จัดการ <ArrowRight size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
@@ -88,7 +91,7 @@ export function AlertsNearTarget({
                     <div className="flex-1 min-w-0">
                         {alertsNear.length > 0 ? (
                             <div className="space-y-1.5">
-                                <p className="text-[10px] font-semibold mb-1 flex items-center gap-1" style={{ color: '#f59e0b' }}>
+                                <p className="text-[10px] font-semibold mb-1 flex items-center gap-1" style={{ color: 'var(--color-yellow)' }}>
                                     <Zap size={11} strokeWidth={2} aria-hidden="true" /> ใกล้ถึง target:
                                 </p>
                                 {alertsNear.map((a: any, i: number) => (

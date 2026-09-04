@@ -152,7 +152,7 @@ export default function DashboardPage() {
                             </span>
                             <button onClick={() => navigate({ to: '/portfolio' })}
                                 className="text-[10px] font-medium transition-colors hover:opacity-70 flex items-center gap-0.5"
-                                style={{ color: 'var(--color-accent)' }}>
+                                style={{ color: 'var(--color-accent-text)' }}>
                                 ดูทั้งหมด <ArrowRight size={12} strokeWidth={2} aria-hidden="true" />
                             </button>
                         </div>
@@ -200,7 +200,7 @@ export default function DashboardPage() {
                                             <div key={h.symbol} className="flex items-center justify-between gap-2">
                                                 <button onClick={() => goToChart(h.symbol)}
                                                     className="font-bold text-[11px] hover:opacity-70 transition-opacity truncate"
-                                                    style={{ color: 'var(--color-accent)' }}>
+                                                    style={{ color: 'var(--color-accent-text)' }}>
                                                     {displaySymbol(h.symbol)}
                                                 </button>
                                                 <span className="text-[10px] font-semibold tabular-nums shrink-0"

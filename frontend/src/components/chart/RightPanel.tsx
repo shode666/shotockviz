@@ -216,7 +216,12 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                     ${isOpen ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full'}`}
                 style={{ borderColor: 'var(--color-border)' }}
                 aria-label="รายละเอียดหุ้น"
-                aria-hidden={!isOpen}
+                // bd:ux-2026-09 g2 (Uma #1) — `inert` (not aria-hidden) while
+                // closed: aria-hidden with focusable descendants (buttons,
+                // textarea, links) is an axe `aria-hidden-focus` violation.
+                // `inert` removes the whole subtree from focus + the a11y tree,
+                // and React 19 renders it as a native boolean attribute.
+                inert={!isOpen}
             >
                 {/* Panel header */}
                 <div className="flex items-center justify-between px-3 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>

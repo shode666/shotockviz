@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Timer, Landmark, BarChart3 } from 'lucide-react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
 import useAppStore from '@/store/appStore';
@@ -12,6 +12,12 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     const volumeRef = useRef(null);
     const indicatorsRef = useRef({}); // Store references to indicator series
     const { selectedStock, darkMode } = useAppStore();
+
+    // Last computed value for the RSI/MACD strip labels (bd:ux-2026-09 g2 —
+    // Uma #4: strips need a label + divider like page-chart.html, not just
+    // the bare price-scale band).
+    const [rsiLast, setRsiLast] = useState<number | null>(null);
+    const [macdLast, setMacdLast] = useState<number | null>(null);
 
     // Fetch chart data using custom hook
     const { bars, isLoading, isTimeout, isFund, refetch } = useChartData({
@@ -161,6 +167,8 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         if (bars.length === 0) {
             seriesRef.current.setData([]);
             volumeRef.current.setData([]);
+            setRsiLast(null);
+            setMacdLast(null);
             // Also remove all indicator series
             const chart = chartRef.current;
             const currentInds = indicatorsRef.current;
@@ -244,7 +252,11 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 chart.priceScale('rsi').applyOptions({
                     scaleMargins: macdAlsoActive ? { top: 0.62, bottom: 0.19 } : { top: 0.8, bottom: 0 },
                 });
-                currentInds['RSI 14'].setData(calculateRSI(bars, 14));
+                const rsiData = calculateRSI(bars, 14);
+                currentInds['RSI 14'].setData(rsiData);
+                setRsiLast(rsiData.at(-1)?.value ?? null);
+            } else {
+                setRsiLast(null);
             }
 
             // Apply VWAP (intraday only: 1m, 5m, 15m, 1h, 4h)
@@ -274,6 +286,9 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 currentInds['MACD'][0].setData(macdData.macdLine);
                 currentInds['MACD'][1].setData(macdData.signalLine);
                 currentInds['MACD'][2].setData(macdData.histogram);
+                setMacdLast(macdData.histogram.at(-1)?.value ?? null);
+            } else {
+                setMacdLast(null);
             }
 
             // Apply Bollinger Bands
@@ -292,9 +307,45 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         chart.timeScale().fitContent();
     }, [bars, chartType, activeIndicators]);
 
+    const rsiActive = activeIndicators.includes('RSI 14');
+    const macdActive = activeIndicators.includes('MACD');
+    const rsiStripTop = macdActive ? '62%' : '80%';
+    const macdStripTop = rsiActive ? '86%' : '80%';
+
     return (
         <div className="w-full h-full relative">
             <div ref={containerRef} className="w-full h-full" />
+
+            {/* RSI/MACD strip label + top border — the series themselves render as
+                bottom price-scale bands (see the "Update data" effect above); this
+                overlay adds the mock's page-chart.html .strip divider + slabel so
+                the bands read as distinct labelled strips (bd:ux-2026-09 g2, Uma #4) */}
+            {rsiActive && (
+                <div
+                    className="absolute left-0 right-0 pointer-events-none"
+                    style={{ top: rsiStripTop, borderTop: '1px solid var(--color-border)' }}
+                >
+                    <span
+                        className="font-mono text-[10px] font-semibold absolute left-3"
+                        style={{ top: 4, color: 'var(--color-text-sub)' }}
+                    >
+                        RSI (14){rsiLast != null && <> · <span style={{ color: 'var(--color-accent-text)' }}>{rsiLast.toFixed(1)}</span></>}
+                    </span>
+                </div>
+            )}
+            {macdActive && (
+                <div
+                    className="absolute left-0 right-0 pointer-events-none"
+                    style={{ top: macdStripTop, borderTop: '1px solid var(--color-border)' }}
+                >
+                    <span
+                        className="font-mono text-[10px] font-semibold absolute left-3"
+                        style={{ top: 4, color: 'var(--color-text-sub)' }}
+                    >
+                        MACD (12,26,9){macdLast != null && <> · <span style={{ color: macdLast >= 0 ? 'var(--color-green)' : 'var(--color-red)' }}>{macdLast >= 0 ? '+' : ''}{macdLast.toFixed(2)}</span></>}
+                    </span>
+                </div>
+            )}
 
             {/* Loading overlay — semi-opaque so user knows something is happening */}
             {isLoading && (

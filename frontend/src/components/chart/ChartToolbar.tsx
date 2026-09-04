@@ -60,7 +60,7 @@ export default function ChartToolbar({
                             onClick={() => onTFChange(tf)}
                             className="text-xs px-2 py-1 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1"
                             style={isActive
-                                ? { background: 'var(--color-accent)', color: '#fff', border: '1px solid var(--color-accent)' }
+                                ? { background: 'var(--color-accent-strong)', color: '#fff', border: '1px solid var(--color-accent-strong)' }
                                 : { color: 'var(--color-text-sub)', border: '1px solid transparent', background: 'transparent' }
                             }
                             onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-hover)'; }}
@@ -105,7 +105,7 @@ export default function ChartToolbar({
                         <button
                             key={ind}
                             onClick={() => onIndicatorToggle?.(ind)}
-                            className={`text-xs px-2 py-0.5 rounded-full cursor-pointer transition-colors ${isActive ? 'bg-violet-500 text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+                            className={`text-xs px-2 py-0.5 rounded-full cursor-pointer transition-colors ${isActive ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
                         >
                             {ind}
                         </button>
