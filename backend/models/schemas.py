@@ -241,6 +241,24 @@ class DrawingResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ─── SR Level ──────────────────────────────────────────────────────────────
+# bd:features-2026-09 slice 2 — GET-only response schema for sr_levels
+# (models/sr_level.py). All 3 sources (manual_import/auto_pivot/user_created)
+# are returned, not just manual_import — future-proofs the endpoint for
+# slice-3 auto-pivot/user-drawn rows without another schema/endpoint change.
+
+class SRLevelResponse(BaseModel):
+    id: int
+    symbol: str
+    price: float
+    level_type: str
+    tag: Optional[str] = None
+    color: Optional[str] = None
+    source: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ─── News ──────────────────────────────────────────────────────────────────
 
 class NewsItem(BaseModel):

@@ -23,6 +23,8 @@ const stockService = {
     getFundamentals: (symbol: string) => api.get(`/stocks/${symbol}/fundamentals`),
     getNews: (symbol: string) => api.get(`/stocks/${symbol}/news`),
     screener: (params: Record<string, unknown>) => api.get('/screener', { params }),
+    /** bd:features-2026-09 slice 2 — support/resistance price levels for a symbol */
+    getSrLevels: (symbol: string) => api.get(`/sr-levels/${symbol}`),
 };
 
 export { stockService };

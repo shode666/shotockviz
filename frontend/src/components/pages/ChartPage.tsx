@@ -35,6 +35,9 @@ export default function ChartPage() {
     // RSI 14 + MACD default-on: replaces the old BottomPanel tabs as the
     // "under the chart" indicator strips (bd:ux-2026-09 g2, per 04-decisions.md)
     const [activeIndicators, setActiveIndicators] = useState<string[]>(['RSI 14', 'MACD']);
+    // S/R levels hidden by default on open (bd:features-2026-09 slice 2,
+    // user-confirmed product decision — in-memory toggle only, no persistence).
+    const [showSrLevels, setShowSrLevels] = useState(false);
     const [crosshair, setCrosshair] = useState<CrosshairData | null>(null);
     const [isChartLoading, setIsChartLoading] = useState(false);
     const [rightPanelOpen, setRightPanelOpen] = useState(false);
@@ -65,6 +68,8 @@ export default function ChartPage() {
                         );
                     }}
                     isLoading={isChartLoading}
+                    showSrLevels={showSrLevels}
+                    onToggleSrLevels={() => setShowSrLevels((v) => !v)}
                 />
                 <DrawingToolbar />
 
@@ -76,6 +81,7 @@ export default function ChartPage() {
                         activeIndicators={activeIndicators}
                         onCrosshairMove={setCrosshair}
                         onLoadingChange={setIsChartLoading}
+                        showSrLevels={showSrLevels}
                     />
 
                     {/* Crosshair OHLCV overlay */}

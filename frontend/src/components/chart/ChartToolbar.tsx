@@ -1,4 +1,4 @@
-import { CandlestickChart, TrendingUp, AreaChart, Loader2 } from 'lucide-react';
+import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3 } from 'lucide-react';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
@@ -18,6 +18,8 @@ export default function ChartToolbar({
     activeIndicators = [],
     onIndicatorToggle,
     isLoading = false,
+    showSrLevels = false,
+    onToggleSrLevels,
 }) {
     return (
         <div
@@ -121,6 +123,22 @@ export default function ChartToolbar({
                     );
                 })}
             </div>
+
+            <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />
+
+            {/* S/R levels toggle — hidden by default (bd:features-2026-09 slice 2,
+                user-confirmed product decision). Follows the same pill-button
+                pattern as the indicator toggles above. */}
+            <button
+                onClick={() => onToggleSrLevels?.()}
+                title="Toggle support/resistance levels"
+                aria-label="Toggle support/resistance levels"
+                aria-pressed={showSrLevels}
+                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer transition-colors ${showSrLevels ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+            >
+                <Rows3 size={12} />
+                S/R
+            </button>
         </div>
     );
 }

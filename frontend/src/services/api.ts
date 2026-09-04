@@ -35,7 +35,7 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 // Global error handling and toast notifications
 // Data endpoints (quotes, history) are silent on failure — chart/panel handles fallback UI
 // /search is silent — the sidebar search box shows empty results on failure, no toast needed
-const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready'];
+const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready', '/sr-levels'];
 const isSilentPath = (url = ''): boolean => SILENT_PATHS.some((p) => url.includes(p));
 
 // bd:deps-2026-09 S2 (ADR-002, AC-B4-r3) — single central unwrap point.

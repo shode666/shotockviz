@@ -4,20 +4,30 @@ import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries
 import useAppStore from '@/store/appStore';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP } from '@/utils/indicators';
 import { useChartData } from '@/hooks/useChartData';
+import { useSrLevels } from '@/hooks/useSrLevels';
+import { syncSrPriceLines } from '@/utils/syncSrPriceLines';
 
-export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null }) {
+export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null, showSrLevels = false }) {
     const containerRef = useRef(null);
     const chartRef = useRef(null);
     const seriesRef = useRef(null);
     const volumeRef = useRef(null);
     const indicatorsRef = useRef({}); // Store references to indicator series
+    const srPriceLinesRef = useRef([]); // Store references to S/R IPriceLine objects (bd:features-2026-09 slice 2)
     const { selectedStock, darkMode } = useAppStore();
+    const { srLevels } = useSrLevels();
 
     // Last computed value for the RSI/MACD strip labels (bd:ux-2026-09 g2 —
     // Uma #4: strips need a label + divider like page-chart.html, not just
     // the bare price-scale band).
     const [rsiLast, setRsiLast] = useState<number | null>(null);
     const [macdLast, setMacdLast] = useState<number | null>(null);
+
+    // Test-only instrumentation for the S/R price lines — see the S/R sync
+    // effect below + syncSrPriceLines.ts (bd:features-2026-09 iter3, Quinn
+    // Finding Q1: createPriceLine() draws only to <canvas>, no DOM node to
+    // assert against without this).
+    const [srLineCount, setSrLineCount] = useState(0);
 
     // bd:ux-2026-09 user-reported follow-up #2 — bumped every time the "create
     // chart" effect below recreates chart+series (e.g. when darkMode flips).
@@ -347,6 +357,32 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         chart.timeScale().fitContent();
     }, [bars, chartType, activeIndicators, chartGeneration]);
 
+    // Support/Resistance price lines — bd:features-2026-09 slice 2.
+    // Hidden by default (showSrLevels starts false, toggled from ChartToolbar).
+    // Re-run whenever the level list changes, the toggle flips, or the chart+
+    // series get recreated (chartGeneration — see the "create chart" effect's
+    // comment on why chartGeneration exists).
+    //
+    // The actual clear/redraw logic lives in the pure, unit-tested
+    // syncSrPriceLines() (utils/syncSrPriceLines.ts, bd:features-2026-09
+    // iter3 — Chris Finding 3) so the create/cleanup lifecycle itself is
+    // regression-tested against a fake series, not just hand-verified here.
+    useEffect(() => {
+        const series = seriesRef.current;
+        if (!series) return;
+
+        const nextLines = syncSrPriceLines(series, srPriceLinesRef.current, srLevels, showSrLevels);
+        srPriceLinesRef.current = nextLines;
+
+        // Test-only instrumentation (Quinn Finding Q1, 03-quinn-review.md —
+        // createPriceLine() draws only to <canvas>, no DOM node, so there was
+        // no way for a DOM-based test to observe "N lines drawn"/"0 after
+        // toggle-off". This state + the hidden data-testid span below is the
+        // minimal hook: re-render on every sync so an e2e test can read the
+        // current count via the DOM once Docker/a real browser is available.
+        setSrLineCount(nextLines.length);
+    }, [srLevels, showSrLevels, chartGeneration]);
+
     const rsiActive = activeIndicators.includes('RSI 14');
     const macdActive = activeIndicators.includes('MACD');
     const rsiStripTop = macdActive ? '62%' : '80%';
@@ -355,6 +391,19 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     return (
         <div className="w-full h-full relative">
             <div ref={containerRef} className="w-full h-full" />
+
+            {/* Test-only instrumentation — createPriceLine() draws only to the
+                <canvas> above with no DOM node of its own, so this hidden span
+                is the one DOM-observable signal an e2e test can assert against
+                for "N S/R lines are currently drawn" (bd:features-2026-09
+                iter3, Quinn Finding Q1). Not part of the visible UI. */}
+            <span
+                data-testid="sr-lines-count"
+                aria-hidden="true"
+                style={{ display: 'none' }}
+            >
+                {srLineCount}
+            </span>
 
             {/* RSI/MACD strip label + top border — the series themselves render as
                 bottom price-scale bands (see the "Update data" effect above); this
