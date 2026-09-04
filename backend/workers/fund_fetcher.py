@@ -18,6 +18,14 @@ import json
 import time
 from datetime import datetime, timezone, timedelta
 
+# bd:features-2026-09 iter5 — Chris review M2 (10-chris-crypto-autopivot-review.md):
+# pulled out as a named constant (not just an inline string) so tests can
+# execute the EXACT query production runs against a seeded DB, rather than
+# asserting on substrings of the source text.
+FUND_SYMBOLS_QUERY = (
+    "SELECT symbol, name FROM stocks WHERE is_active = true AND market = 'FUND' ORDER BY symbol"
+)
+
 from celery import shared_task
 from core.logger import get_logger
 from core import cache_keys
@@ -357,9 +365,7 @@ def fetch_thai_fund_navs(self):
 
         # Query all FUND market symbols
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT symbol, name FROM stocks WHERE is_active = true AND market = 'FUND' ORDER BY symbol"
-            )).fetchall()
+            rows = conn.execute(text(FUND_SYMBOLS_QUERY)).fetchall()
 
         if not rows:
             logger.info("No fund symbols to fetch NAVs for")

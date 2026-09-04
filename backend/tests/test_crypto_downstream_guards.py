@@ -2,30 +2,69 @@
 symbols, test-proven per Tara's DoD ("must have a test that proves it, not
 'should work'"):
 
-  - fund_fetcher's Thai NAV path must never pick up market='CRYPTO' rows
-    (it queries `market = 'FUND'` exactly — CRYPTO can never match that,
-    verified here by reading the actual SQL text so a future edit that
-    widens the filter gets caught).
+  - fund_fetcher's Thai NAV path must never pick up market='CRYPTO' rows.
   - fundamentals_fetcher must skip CRYPTO (no PE/PB/EPS for BTC) the same
     way it already skips FUND.
-"""
-import inspect
 
+bd:features-2026-09 iter5 — Chris review M2
+(10-chris-crypto-autopivot-review.md): the original version of this file
+asserted on `inspect.getsource(...)` substrings — proving the SQL *string*
+contains certain tokens, not that a `market='CRYPTO'` row is actually
+excluded from a real query result. Rewritten to seed an in-memory SQLite
+`stocks` table (same pattern as test_sr_auto_pivot.py's sync_sqlite_engine
+fixture / test_import_sr_levels.py) and execute the ACTUAL query constants
+(`fund_fetcher.FUND_SYMBOLS_QUERY`, `fundamentals_fetcher.FUNDAMENTALS_SYMBOLS_QUERY`
+— pulled out of the task functions as named constants specifically so tests
+can run the real query, not a copy of it) against seeded CRYPTO/US/FUND rows.
+"""
+from sqlalchemy import create_engine, text
+
+from core.database import Base
+from models.stock import Stock, MarketType
 from workers import fund_fetcher, fundamentals_fetcher
 
 
+def _seeded_engine():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO stocks (symbol, name, market, is_active) VALUES "
+            "(:symbol, :name, :market, true)"
+        ), [
+            {"symbol": "BTC-USD", "name": "Bitcoin", "market": "CRYPTO"},
+            {"symbol": "ETH-USD", "name": "Ethereum", "market": "CRYPTO"},
+            {"symbol": "AAPL", "name": "Apple", "market": "US"},
+            {"symbol": "K-CHINA", "name": "K China Fund", "market": "FUND"},
+        ])
+    return engine
+
+
 class TestFundFetcherNeverMatchesCrypto:
-    def test_fund_fetcher_query_is_exact_fund_match(self):
-        src = inspect.getsource(fund_fetcher.fetch_thai_fund_navs)
-        assert "market = 'FUND'" in src, (
-            "fund_fetcher must query market = 'FUND' (exact match) so a "
-            "market='CRYPTO' row can never be picked up by the Thai NAV path"
-        )
-        assert "CRYPTO" not in src
+    def test_crypto_rows_absent_from_fund_query_result(self):
+        """Behavioral: run the ACTUAL fund_fetcher query against seeded
+        CRYPTO + US + FUND rows — CRYPTO must never appear, FUND must."""
+        engine = _seeded_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(text(fund_fetcher.FUND_SYMBOLS_QUERY)).fetchall()
+
+        symbols = {r[0] for r in rows}
+        assert symbols == {"K-CHINA"}
+        assert "BTC-USD" not in symbols
+        assert "ETH-USD" not in symbols
 
 
 class TestFundamentalsFetcherSkipsCrypto:
-    def test_fundamentals_query_excludes_crypto(self):
-        src = inspect.getsource(fundamentals_fetcher.prefetch_fundamentals)
-        assert "CRYPTO" in src, "fundamentals_fetcher must exclude market='CRYPTO' rows"
-        assert "NOT IN ('FUND', 'CRYPTO')" in src or "NOT IN ('CRYPTO', 'FUND')" in src
+    def test_crypto_rows_absent_from_fundamentals_query_result(self):
+        """Behavioral: run the ACTUAL fundamentals_fetcher query against
+        seeded CRYPTO + US + FUND rows — CRYPTO and FUND must both be
+        excluded, US must be included."""
+        engine = _seeded_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(text(fundamentals_fetcher.FUNDAMENTALS_SYMBOLS_QUERY)).fetchall()
+
+        symbols = {r[0] for r in rows}
+        assert symbols == {"AAPL"}
+        assert "BTC-USD" not in symbols
+        assert "ETH-USD" not in symbols
+        assert "K-CHINA" not in symbols

@@ -282,12 +282,106 @@ class TestG1GuardManualWins:
         assert result["symbols_skipped"] == 0 or result["rows_written"] == 0
 
 
+class TestG2G3Guards:
+    """bd:features-2026-09 iter5 — Chris review M1
+    (10-chris-crypto-autopivot-review.md): G2/G3 previously had zero test
+    coverage (mutation-confirmed: deleting either guard's `if`/`return None`
+    left all 25 pre-existing tests green). Both tests below are proven
+    load-bearing the same way G1/DELETE-scope were: temporarily delete the
+    guard, watch the test fail, restore, confirm green."""
+
+    def test_insufficient_bars_skips_symbol(self, sync_sqlite_engine):
+        """G2 — fewer than MIN_BARS (60) daily bars -> skip, no rows written."""
+        engine = sync_sqlite_engine
+        _insert_bars(engine, "AAPL", n=59)  # MIN_BARS - 1
+
+        result = compute_auto_pivots()
+
+        assert result["symbols_skipped"] == 1
+        assert result["rows_written"] == 0
+
+    def test_exactly_min_bars_does_not_trigger_g2(self, sync_sqlite_engine):
+        """Boundary check: exactly MIN_BARS bars must NOT be skipped by G2
+        (only < MIN_BARS should trigger it) — flat bars produce 0 fractals
+        so rows_written is legitimately 0 here, but symbols_skipped must
+        also be 0 (this symbol was evaluated, not guard-skipped)."""
+        engine = sync_sqlite_engine
+        _insert_bars(engine, "AAPL", n=60)  # exactly MIN_BARS
+
+        result = compute_auto_pivots()
+
+        assert result["symbols_skipped"] == 0
+
+    # NOTE: no test_null_close_skips_symbol here. `ohlcv_bars.close` is
+    # `Column(Float, nullable=False)` (models/ohlcv.py:33) — a NULL close
+    # cannot exist in a real table under this schema (DB-level NOT NULL,
+    # not just an ORM-side check), so a test that tries to insert one would
+    # either be rejected by the DB (proving nothing about the guard) or
+    # require bypassing the schema entirely (a fake scenario — anti-puppet).
+    # The `close is None` half of G3's condition is defensive-only against
+    # non-ORM data paths this codebase doesn't have; the `close <= 0` half
+    # below IS constructible against the real schema and is what's tested.
+
+    def test_zero_close_skips_symbol(self, sync_sqlite_engine):
+        """G3 — last bar's close is 0 (not just negative) -> skip."""
+        engine = sync_sqlite_engine
+        Session = sessionmaker(bind=engine)
+        from models.ohlcv import OHLCVBar
+
+        with Session() as session:
+            for i in range(61):
+                is_last = i == 60
+                session.add(OHLCVBar(
+                    symbol="AAPL", timeframe="1D", time_unix=i,
+                    time_str=f"2026-01-{(i % 28) + 1:02d}",
+                    open=100.0, high=101.0, low=99.0,
+                    close=0.0 if is_last else 100.0,
+                    volume=1000,
+                ))
+            session.commit()
+
+        result = compute_auto_pivots()
+
+        assert result["symbols_skipped"] == 1
+        assert result["rows_written"] == 0
+
+    def test_negative_close_skips_symbol(self, sync_sqlite_engine):
+        """G3 — last bar's close is negative -> skip."""
+        engine = sync_sqlite_engine
+        Session = sessionmaker(bind=engine)
+        from models.ohlcv import OHLCVBar
+
+        with Session() as session:
+            for i in range(61):
+                is_last = i == 60
+                session.add(OHLCVBar(
+                    symbol="AAPL", timeframe="1D", time_unix=i,
+                    time_str=f"2026-01-{(i % 28) + 1:02d}",
+                    open=100.0, high=101.0, low=99.0,
+                    close=-5.0 if is_last else 100.0,
+                    volume=1000,
+                ))
+            session.commit()
+
+        result = compute_auto_pivots()
+
+        assert result["symbols_skipped"] == 1
+        assert result["rows_written"] == 0
+
+
 class TestDeleteScopedToAutoPivotOnly:
-    def test_delete_never_touches_manual_import_or_user_created(self, sync_sqlite_engine):
-        """R0-adjacent guard test: seed manual_import + user_created + a
-        stale auto_pivot row for a DIFFERENT symbol that has enough bars to
-        actually get recomputed, then assert the manual/user rows for the
-        guarded symbol survive untouched."""
+    def test_g1_skip_leaves_all_existing_rows_of_every_source_untouched(self, sync_sqlite_engine):
+        """bd:features-2026-09 iter5 — Chris review M3
+        (10-chris-crypto-autopivot-review.md): this test was previously
+        misnamed `test_delete_never_touches_manual_import_or_user_created`,
+        implying it proves the DELETE WHERE-scope guard. It does NOT — for
+        this AAPL fixture, manual_import exists, so G1 fires and the whole
+        symbol is skipped BEFORE the DELETE statement ever executes. All
+        this proves is "G1 skip means zero writes happen at all" (a
+        weaker, still-true property). The DELETE WHERE-scope guard itself
+        is proven by test_rerun_is_idempotent_only_auto_pivot_rows_replaced
+        below (NVDA fixture, no manual_import, DELETE DOES execute) — see
+        that test's docstring."""
         engine = sync_sqlite_engine
         _insert_bars(engine, "AAPL", n=61)
 
@@ -314,7 +408,10 @@ class TestDeleteScopedToAutoPivotOnly:
         assert by_source["user_created"] == 250.0
 
     def test_rerun_is_idempotent_only_auto_pivot_rows_replaced(self, sync_sqlite_engine, monkeypatch):
-        """No manual_import row this time — auto_pivot IS computed and
+        """**This is the test that proves the DELETE WHERE-scope R0 guard**
+        — not the sibling test above (which only proves G1-skip-means-no-writes,
+        per its own docstring, Chris review M3). No manual_import row this
+        time — auto_pivot IS computed and
         replaced on rerun, without disturbing a user_created row for the
         same symbol."""
         engine = sync_sqlite_engine

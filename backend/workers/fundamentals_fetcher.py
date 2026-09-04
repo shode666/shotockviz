@@ -10,6 +10,14 @@ from core import cache_keys
 
 logger = get_logger(__name__)
 
+# bd:features-2026-09 iter5 — Chris review M2 (10-chris-crypto-autopivot-review.md):
+# named constant so tests can execute the EXACT query production runs
+# against a seeded DB, rather than asserting on substrings of the source text.
+FUNDAMENTALS_SYMBOLS_QUERY = (
+    "SELECT symbol FROM stocks WHERE is_active = true "
+    "AND market NOT IN ('FUND', 'CRYPTO') ORDER BY symbol"
+)
+
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def prefetch_fundamentals(self):
@@ -38,10 +46,7 @@ def prefetch_fundamentals(self):
 
         # Query all active non-FUND, non-CRYPTO symbols
         with engine.connect() as conn:
-            rows = conn.execute(text(
-                "SELECT symbol FROM stocks WHERE is_active = true "
-                "AND market NOT IN ('FUND', 'CRYPTO') ORDER BY symbol"
-            )).fetchall()
+            rows = conn.execute(text(FUNDAMENTALS_SYMBOLS_QUERY)).fetchall()
 
         if not rows:
             logger.info("No symbols to fetch fundamentals for")
