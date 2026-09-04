@@ -45,12 +45,23 @@ export default function LoginPage() {
 
     return (
         <div className="flex-1 flex items-center justify-center p-8" style={{ background: 'var(--color-bg)' }}>
-            <div className="glass-panel rounded-3xl w-full max-w-sm animate-slide-up overflow-hidden">
+            {/* bd:ux-2026-09 — single glass tier (was glass-panel's stacked 28-40px
+                blur); reuses --glass-blur-panel + --glass-shadow-modal tokens. */}
+            <div
+                className="rounded-3xl w-full max-w-sm animate-slide-up overflow-hidden"
+                style={{
+                    background: 'var(--surface-1)',
+                    backdropFilter: 'var(--glass-blur-panel)',
+                    WebkitBackdropFilter: 'var(--glass-blur-panel)',
+                    border: '1px solid var(--color-border)',
+                    boxShadow: 'var(--glass-shadow-modal), var(--glass-inset-edge)',
+                }}
+            >
 
                 {/* ── Gradient header ───────────────────────────────────── */}
                 <div
                     className="px-10 pt-12 pb-10 text-center"
-                    style={{ background: 'linear-gradient(135deg, rgba(124,92,252,0.10), rgba(168,85,247,0.06))' }}
+                    style={{ background: 'linear-gradient(135deg, rgba(124,92,252,0.12), rgba(168,85,247,0.05))' }}
                 >
                     <div className="flex items-center gap-4 justify-center mb-6">
                         <ShotockLogo className="w-[60px] h-[60px] rounded-[18px] shadow-[0_8px_24px_rgba(168,85,247,0.3)]" />
@@ -146,18 +157,24 @@ export default function LoginPage() {
                                     กำลังเข้าสู่ระบบ...
                                 </div>
                             ) : (
-                                <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-                                    <GoogleLogin
-                                        onSuccess={handleGoogleSuccess}
-                                        onError={() => setError('Google login failed — check popup blocker and try again')}
-                                        theme="filled_black"
-                                        size="large"
-                                        width={300}
-                                        text="signin_with"
-                                        shape="pill"
-                                        useOneTap={false}
-                                    />
-                                </GoogleOAuthProvider>
+                                // min-height 44 — WCAG 2.5.8 target size; the Google
+                                // Identity Services button itself only offers fixed
+                                // small/medium/large (40px max) render sizes, so this
+                                // wrapper is the practical ceiling we control.
+                                <div className="flex items-center justify-center" style={{ minHeight: 44 }}>
+                                    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+                                        <GoogleLogin
+                                            onSuccess={handleGoogleSuccess}
+                                            onError={() => setError('Google login failed — check popup blocker and try again')}
+                                            theme="filled_black"
+                                            size="large"
+                                            width={300}
+                                            text="signin_with"
+                                            shape="pill"
+                                            useOneTap={false}
+                                        />
+                                    </GoogleOAuthProvider>
+                                </div>
                             )}
                         </ClientOnly>
                     </div>
