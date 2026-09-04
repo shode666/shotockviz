@@ -55,28 +55,13 @@ LEAK_MARKERS = ("Traceback", "Exception", "  File \"", "/home/", "/backend/", "S
 def _iter_api_routes(app):
     """Yield (path, methods) for every HTTP route under /api on the live app.
 
-    bd:deps-2026-09 iter1 (Dave-discovered, not in Chris's/Quinn's original
-    reports) — starlette 1.6.0 / fastapi 0.141.1 changed `include_router()`
-    to build a lazy `fastapi.routing._IncludedRouter` wrapper instead of
-    eagerly flattening child routes onto `app.routes` at call time (matching
-    is now done dynamically via `_IncludedRouter.effective_candidates()`).
-    Confirmed via direct introspection: `app.routes` has only 4 top-level
-    entries for the ENTIRE 13-router /api/v1 aggregate + health_router +
-    ai_chat.router combined, all as opaque `_IncludedRouter` objects with
-    `path=None`/`methods=None` (and no usable public flat `.routes` either —
-    `.original_router.routes` just recurses into the same problem one level
-    down, since api_v1 itself nests 13 more `include_router()` calls).
-    Walking `app.routes` for HTTP route introspection no longer works on
-    this fastapi version — this is why /api/health "went missing" and every
-    `/api/v1/*` route silently vanished from every test in this file at
-    once. `app.openapi()["paths"]` is the version-stable replacement: it's
-    the SAME flattened path/method map FastAPI's own schema generation
-    resolves through `_IncludedRouter.effective_candidates()` internally
-    (CHRIS-06 depends on this exact call already, for openapi-v1.json).
-    WebSocket routes have no OpenAPI entry and still live directly on
-    `app.routes` unwrapped — confirmed `APIWebSocketRoute` objects are NOT
-    touched by `include_router()`, only routers passed to it are — so
-    `/api/ws/prices` below still finds it via the old path.
+    bd:deps-2026-09 iter1 — `app.routes` no longer flattens child routes on
+    this fastapi version (`include_router()` builds a lazy wrapper instead),
+    so walking it directly misses everything under /api/v1. `app.openapi()
+    ["paths"]` is the version-stable replacement (same flattened map
+    FastAPI's own schema generation resolves internally). WebSocket routes
+    have no OpenAPI entry and still live directly on `app.routes`
+    unwrapped, so `/api/ws/prices` below still finds it via the old path.
     """
     for path, methods_map in app.openapi()["paths"].items():
         if not path.startswith("/api"):
@@ -153,6 +138,15 @@ class TestEnvelopeShapePublic:
         assert "meta" in body, f"{path}: missing 'meta' key, got keys={list(body.keys())}"
         assert "request_id" in body["meta"], f"{path}: meta missing request_id"
 
+    def test_stocks_quotes_payload_lands_under_data(self, client):
+        """Merged from test_pr4_envelope.py — a real payload, not just the
+        empty/short responses PUBLIC_GET_ENDPOINTS above exercises."""
+        resp = client.get("/api/v1/stocks/quotes?symbols=AAPL")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body.keys()) == {"data", "meta"}
+        assert "AAPL" in body["data"]
+
 
 class TestEnvelopeShapeAuthed:
     @pytest.mark.parametrize("path", AUTHED_GET_ENDPOINTS)
@@ -170,6 +164,9 @@ class TestErrorEnvelope:
     def test_401_no_token(self, client):
         resp = client.get("/api/v1/watchlists")
         assert resp.status_code == 401
+        # AC-B6-r3: 401 still carries the WWW-Authenticate challenge header
+        # (merged from test_pr4_envelope.py, was its own test)
+        assert resp.headers.get("www-authenticate") == "Bearer"
         body = resp.json()
         assert body["data"] is None
         assert "error" in body["meta"] and "message" in body["meta"]["error"]
@@ -208,21 +205,10 @@ class TestErrorEnvelope:
     @pytest.mark.parametrize(
         "path,method",
         [
-            # bd:deps-2026-09 iter1 (Dave-discovered, not in Chris's/Quinn's
-            # original reports) — was ("/api/v1/watchlists", "get"). With a
-            # VALID authed user, GET /api/v1/watchlists legitimately returns
-            # 200 {data:[],meta:...} (empty list for a fresh test user) —
-            # not an error at all, so it can't belong in an "error body"
-            # leak-marker check. It only ever produced >=400 here because
-            # `auth_headers`/`client` bound to two DIFFERENT sqlite engines
-            # pre-fix (missing StaticPool, CHRIS-04/Q-5): the minted JWT's
-            # user row lived in a database `get_current_user`'s lookup could
-            # never see, so every request 401'd regardless of token
-            # validity — a false pass riding on the exact bug CHRIS-04/Q-5
-            # fixed. Reproduced in isolation post-fix: `assert 200 >= 400`.
-            # Replaced with the already-proven-erroring admin/403 case
-            # doubled up via POST (no body -> 422) to keep 3 genuinely
-            # erroring authed scenarios covering 3 different 4xx classes.
+            # bd:deps-2026-09 iter1 — 3 genuinely-erroring authed scenarios
+            # (POST /watchlists with no body -> 422, 403, 404) covering 3
+            # different 4xx classes; NOT a GET on /watchlists (that 200s
+            # for a valid authed user — see CHRIS-04/Q-5, git history).
             ("/api/v1/watchlists", "post"),
             ("/api/v1/admin/retention-policy", "get"),
             ("/api/v1/this-does-not-exist", "get"),
@@ -261,6 +247,24 @@ class TestHealthEndpointContract:
     def test_health_needs_no_auth(self, client):
         resp = client.get("/api/health")
         assert resp.status_code == 200
+
+    def test_health_is_not_double_wrapped(self, client):
+        """system.py hand-wraps /api/health itself (BaseResponse) and does
+        NOT get route_class=EnvelopingAPIRoute — a double-wrap would
+        produce body['data']['data']. (merged from test_pr4_envelope.py)"""
+        body = client.get("/api/health").json()
+        assert not isinstance(body["data"], dict) or "meta" not in body["data"]
+
+    def test_health_wrong_method_is_not_v1_enveloped(self, client):
+        """r3-1/r3-2: /api/health is one of the 3 deliberate unversioned
+        exceptions — install_error_envelope must NOT touch it, so a 405
+        here keeps FastAPI's default {"detail": ...} shape, not {data,meta}.
+        (merged from test_pr4_envelope.py)"""
+        resp = client.post("/api/health")
+        assert resp.status_code == 405
+        body = resp.json()
+        assert "detail" in body
+        assert "data" not in body and "meta" not in body
 
 
 # ── Frozen-path guard: old unversioned REST paths must be gone (no alias,
