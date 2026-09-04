@@ -89,11 +89,6 @@ export const MOCK_SEARCH_RESULTS = [
   { symbol: 'NVDA', name: 'NVIDIA Corporation', name_th: null, market: 'US' },
 ];
 
-export const MOCK_AI_MODELS = {
-  models: ['llama3.2:latest'],
-  available: true,
-};
-
 // ---------------------------------------------------------------------------
 // Route interceptors
 // ---------------------------------------------------------------------------
@@ -173,15 +168,6 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   // Watchlist — 401 for unauthenticated guests
   await page.route('**/api/v1/watchlists**', (route) =>
     route.fulfill({ status: 401, body: JSON.stringify({ detail: 'Not authenticated' }) }),
-  );
-
-  // AI models — fast endpoint (3s backend timeout)
-  await page.route('**/api/ai/models', (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(MOCK_AI_MODELS),
-    }),
   );
 
   // System ready
@@ -280,29 +266,5 @@ export async function mockWatchlistAPIs(
       return route.fulfill({ status: 204, body: '' });
     }
     return route.continue();
-  });
-}
-
-/**
- * Mock AI chat SSE stream endpoint.
- * Returns a single SSE body (non-streaming HTTP fulfilled as chunked text).
- */
-export async function mockAIChat(
-  page: Page,
-  response = 'วิเคราะห์หุ้นนี้: ราคาอยู่ในระดับปกติ แนวโน้มดี',
-): Promise<void> {
-  await page.route('**/api/ai/chat', (route) => {
-    const body = [
-      `data: ${JSON.stringify({ content: '', done: false })}\n\n`,
-      `data: ${JSON.stringify({ content: response.slice(0, 15), done: false })}\n\n`,
-      `data: ${JSON.stringify({ content: response.slice(15), done: false })}\n\n`,
-      `data: ${JSON.stringify({ content: '', done: true })}\n\n`,
-    ].join('');
-    return route.fulfill({
-      status: 200,
-      contentType: 'text/event-stream',
-      headers: { 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' },
-      body,
-    });
   });
 }

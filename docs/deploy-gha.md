@@ -110,10 +110,6 @@ The previous image tag is still in GHCR (images aren't deleted on deploy — onl
 
 ## Open questions
 
-- **Ollama**: `PRODUCTION_DEPLOY.md` documents an `ollama` service, but neither
-  `docker-compose.prod.yml` nor this new `docker-compose.ghcr.yml` includes one — it does not
-  exist in the compose files actually in the repo. Not added here per Oliver's brief; confirm
-  with the team whether AI chat needs it on this droplet before relying on `/api/ai/*`.
 - **Migration failure mid-deploy**: if `init_db.py` fails after `up -d` already swapped
   containers to the new image, the job fails but containers are left running on the new
   (possibly schema-incompatible) image. No automatic rollback of the compose state is

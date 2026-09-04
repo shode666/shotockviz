@@ -5,15 +5,12 @@ Single wrap point on the backend, mirroring the single unwrap point
 ADR-002 mandates on the frontend (`api.ts`'s axios interceptor).
 
   - ``EnvelopingAPIRoute``: wraps 2xx JSON bodies in ``{data, meta}``.
-    Applied via ``route_class=`` on the 12 routers under `/api/v1` plus
-    `ai_chat.router` (its JSON endpoints envelope too per r3-1 even
-    though the path stays unversioned; its SSE `/chat` stream passes
-    through untouched).
+    Applied via ``route_class=`` on the 12 routers under `/api/v1`.
   - ``install_error_envelope(app)``: global exception handlers that
-    envelope errors on `/api/v1/*` and `/api/ai/*` only. The 3 other
-    unversioned exceptions (`/api/health`, `/api/ws/prices`, ai_chat's
-    own SSE error frames) never hit these handlers. S-AC-5: error bodies
-    never carry an exception class name, traceback, SQL fragment, or path.
+    envelope errors on `/api/v1/*` only. The 2 unversioned exceptions
+    (`/api/health`, `/api/ws/prices`) never hit these handlers. S-AC-5:
+    error bodies never carry an exception class name, traceback, SQL
+    fragment, or path.
 
 Unhandled 500s (bugs, not `raise HTTPException(...)`) deliberately keep
 FastAPI's default handling — no regression vs. pre-migration (`main.py`
@@ -39,10 +36,9 @@ from schemas.common import BaseResponse, DataStatus
 
 
 def _is_enveloped_path(path: str) -> bool:
-    """v1 (12 modules) + ai_chat's JSON sub-routes. NOT the 3 unversioned
-    exceptions (`/api/health`, `/api/ws/prices`; ai_chat's SSE frames
-    never reach this function — they never raise HTTPException)."""
-    return path.startswith("/api/v1/") or path.startswith("/api/ai/")
+    """v1 (12 modules) only. NOT the 2 unversioned exceptions
+    (`/api/health`, `/api/ws/prices`)."""
+    return path.startswith("/api/v1/")
 
 
 class EnvelopingAPIRoute(APIRoute):

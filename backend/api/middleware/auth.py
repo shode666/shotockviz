@@ -63,7 +63,7 @@ async def get_optional_user(
         return None
 
 
-# Alias used by dashboard / ai_chat routes
+# Alias used by dashboard routes
 get_current_user_optional = get_optional_user
 
 

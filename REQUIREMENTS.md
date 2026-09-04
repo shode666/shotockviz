@@ -11,7 +11,7 @@
 
 ### 1.1 Product Vision
 
-ShotockViz คือ self-hosted web application สำหรับติดตามและวิเคราะห์หุ้นจาก 10 ตลาดทั่วโลก (Thai SET/MAI, US NYSE/NASDAQ, Japan, Hong Kong, China, UK, Germany, France, Netherlands, Korea) พร้อมเครื่องมือ technical analysis, portfolio tracking, alerts, AI chat, และ real-time price updates โดยไม่มีค่าใช้จ่ายรายเดือน — ทุกอย่าง run บน Docker ของผู้ใช้เอง
+ShotockViz คือ self-hosted web application สำหรับติดตามและวิเคราะห์หุ้นจาก 10 ตลาดทั่วโลก (Thai SET/MAI, US NYSE/NASDAQ, Japan, Hong Kong, China, UK, Germany, France, Netherlands, Korea) พร้อมเครื่องมือ technical analysis, portfolio tracking, alerts, และ real-time price updates โดยไม่มีค่าใช้จ่ายรายเดือน — ทุกอย่าง run บน Docker ของผู้ใช้เอง
 
 ### 1.2 Target Users
 
@@ -36,7 +36,6 @@ ShotockViz คือ self-hosted web application สำหรับติดต�
 | Task Queue | Celery 5.6 + Beat (10 scheduled workers) | BSD |
 | Alerts | Telegram Bot API + In-App | Free |
 | Stock Data | yfinance + pythainav (Thai fund NAV) + Finnhub (free tier) | Free |
-| AI | Ollama (local LLM — llama3.2) | MIT |
 | DevOps | Docker + Docker Compose | Apache 2.0 |
 | Reverse Proxy | Caddy 2 (auto TLS via Let's Encrypt) | Apache 2.0 |
 
@@ -70,7 +69,6 @@ All open source and free. No paid dependencies.
 | Portfolio | ❌ | ✅ |
 | Alerts | ❌ | ✅ |
 | Screener | ❌ | ✅ |
-| AI Chat | ❌ | ✅ |
 
 ---
 
@@ -279,20 +277,9 @@ Drawing features:
 - **Finnhub News API**: ข่าวหุ้น US (free tier)
 - Filter by: market, symbol, watchlist
 
-#### FR-NEWS-002: AI Sentiment (Requires Ollama)
-- วิเคราะห์ sentiment: Positive / Negative / Neutral
+#### FR-NEWS-002: Sentiment Badge
+- วิเคราะห์ sentiment: Positive / Negative / Neutral (keyword-derived จาก title)
 - แสดง sentiment badge ข้างข่าว
-- ใช้ Ollama (llama3.2) — 100% local, no cloud
-
----
-
-### 2.10 AI Chat
-
-#### FR-AI-001: Chat Interface
-- SSE-streamed chat กับ local LLM (Ollama)
-- Context-aware stock analysis
-- Keepalive heartbeat ทุก 15 วินาที
-- No cloud dependency — ทุกอย่างรันบนเครื่อง user
 
 ---
 
@@ -416,7 +403,6 @@ Implementation: Celery beat runs `run_housekeeping` ทุกวัน 03:00 ICT
 - Redis: Cache + Celery broker + WebSocket pub/sub
 - Celery Worker: 10 scheduled tasks
 - Celery Beat: Task scheduler
-- Ollama: Local LLM (llama3.2)
 - Caddy: Reverse proxy + auto self-signed TLS
 ```
 
@@ -430,7 +416,6 @@ Implementation: Celery beat runs `run_housekeeping` ทุกวัน 03:00 ICT
 - Redis: Persistent volume
 - Caddy: Reverse proxy + auto Let's Encrypt TLS
 - Celery Worker + Beat
-- Ollama: Local LLM
 ```
 
 ### 5.3 Environment Variables
@@ -445,7 +430,6 @@ GOOGLE_CLIENT_ID=<your-google-client-id>.apps.googleusercontent.com
 # Optional — enhances features
 FINNHUB_API_KEY=<free-tier-key>
 TELEGRAM_BOT_TOKEN=<from-botfather>
-OLLAMA_URL=http://ollama:11434
 TZ=Asia/Bangkok
 ```
 
@@ -511,11 +495,6 @@ GET    /api/drawings/{symbol}?tf={timeframe}
 POST   /api/drawings/{symbol}
 PUT    /api/drawings/{id}
 DELETE /api/drawings/{id}
-```
-
-### 6.8 AI Chat
-```
-POST   /api/ai/chat               → SSE-streamed response
 ```
 
 ### 6.9 Dashboard
@@ -608,10 +587,9 @@ notes (id, user_id, symbol, content, created_at, updated_at)
 - Round-robin price fetcher
 - Portfolio tracking + analytics
 - Alert system + Telegram notification
-- News feed (RSS + Finnhub + AI sentiment)
+- News feed (RSS + Finnhub + sentiment badges)
 - Stock screener
 - Fundamental data panel
-- AI Chat (Ollama)
 - Symbol autocomplete with market badges + currency
 
 ### Phase 3 — Polish (In Progress)

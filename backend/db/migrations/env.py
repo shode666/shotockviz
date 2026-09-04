@@ -23,7 +23,6 @@ import models.symbol_mapping    # noqa: F401  — V2: symbol provider mapping
 import models.corporate_action  # noqa: F401  — V2: dividend/split events
 import models.financial_history # noqa: F401  — V2: 10-year financial scorecard
 import models.earnings_event    # noqa: F401  — V2: EPS surprise tracker
-import models.document_embedding # noqa: F401  — V2: RAG vector embeddings
 
 # ── Alembic Config ────────────────────────────────────────────────────────────
 config = context.config

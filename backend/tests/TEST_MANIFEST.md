@@ -182,7 +182,6 @@
 ✅ Stock events (dividends, earnings)
 ✅ Stock news (RSS feed)
 ✅ WebSocket real-time prices
-✅ AI chat (with Ollama)
 
 ## Fixtures Provided
 
@@ -241,7 +240,7 @@ docker-compose -f docker-compose.dev.yml exec backend \
 | Authentication types | Bearer JWT |
 | Market types | US, Thailand |
 | Database transactions | Isolated per test |
-| External mocks | Yahoo Finance, Google News, Ollama, Redis |
+| External mocks | Yahoo Finance, Google News, Redis |
 | Fixture reusability | 18 fixtures |
 | Async test coverage | 100% |
 
@@ -253,7 +252,6 @@ docker-compose -f docker-compose.dev.yml exec backend \
 - [ ] Rate limiting verification (requires Redis)
 - [ ] Concurrent request handling
 - [ ] Large batch operations (1000+ symbols)
-- [ ] AI chat streaming verification (SSE format)
 
 ### Recommended Additions
 - [ ] Load testing (stress test concurrent users)

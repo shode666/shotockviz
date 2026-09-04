@@ -45,7 +45,6 @@ TOKEN, SYM = sys.argv[1], sys.argv[2]
 endpoints = [
     f"/api/system/ready",
     f"/api/auth/me",
-    f"/api/ai/models",
     f"/api/stocks/{SYM}/quote",
     f"/api/stocks/{SYM}/history?tf=1D",
     f"/api/stocks/{SYM}/fundamentals",

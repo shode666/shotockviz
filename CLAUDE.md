@@ -26,7 +26,6 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
 | Database | PostgreSQL 16 + TimescaleDB (time-series) |
 | Cache | Redis 7 (caching + Celery broker + WebSocket pub/sub) |
 | Background | Celery 5.6 + Beat (price, names, fundamentals, fund NAV, history prefetch, alerts) |
-| AI | Ollama (llama3.2) — local LLM, no cloud |
 | Data | Yahoo Finance + pythainav (Thai fund NAV) + Stooq (US fallback) |
 | Proxy | Caddy 2 (reverse proxy + auto TLS) |
 
@@ -77,7 +76,6 @@ Client → [ShoDe Town Caddy :443] (shared-proxy network)
   ├─ town.shode.dev  → ShoDe Town
   └─ stock.shode.dev → ShotockViz
       ├─ /api/ws/*    → stockviz-backend:8000 (WebSocket)
-      ├─ /api/ai/*    → stockviz-backend:8000 (SSE + JSON, unversioned)
       ├─ /api/health  → stockviz-backend:8000 (unversioned, infra healthcheck)
       ├─ /api/v1/*    → stockviz-backend:8000 (REST, {data,meta} envelope)
       └─ /*           → stockviz-frontend:3000 (Nitro SSR)
@@ -85,10 +83,10 @@ Client → [ShoDe Town Caddy :443] (shared-proxy network)
 
 > bd:deps-2026-09 S2 (ADR-001 r3) — REST moved under `/api/v1` with a
 > `{data, meta}` response envelope (ADR-002) on all 13 route modules.
-> `/api/ws/prices`, `/api/ai/*`, and `/api/health` are the 3 deliberate
-> unversioned exceptions (WS protocol, Caddy SSE-flush matcher, infra
-> healthcheck contract). No legacy `/api` alias — frontend and backend
-> flipped together in one commit.
+> `/api/ws/prices` and `/api/health` are the 2 deliberate
+> unversioned exceptions (WS protocol, infra healthcheck contract).
+> No legacy `/api` alias — frontend and backend flipped together in
+> one commit.
 
 **Prod `.env`:** `/root/shotockviz/.env` — must have `GOOGLE_CLIENT_ID`, `VITE_GOOGLE_CLIENT_ID`, `JWT_SECRET_KEY`, `DATABASE_URL` (asyncpg), etc. See `docs/deploy.md` for full list.
 
@@ -101,7 +99,7 @@ Client → [ShoDe Town Caddy :443] (shared-proxy network)
 ```
 ShotockViz/
 ├── backend/
-│   ├── api/routes/          # 13 endpoint modules (auth, stocks, watchlist, portfolio, alerts, screener, ai_chat, etc.)
+│   ├── api/routes/          # 13 endpoint modules (auth, stocks, watchlist, portfolio, alerts, screener, etc.)
 │   ├── models/              # SQLAlchemy ORM (User, Stock, StockPrice1m, Transaction, Alert, Drawing, Note, StockEvent)
 │   ├── services/            # stock_service.py (47KB), cache_service.py
 │   ├── workers/             # Celery: price_fetcher, name_fetcher, fundamentals_fetcher, fund_fetcher, history_prefetcher, on_demand_listener, alert_checker, housekeeping
@@ -111,7 +109,7 @@ ShotockViz/
 │   ├── src/routes/          # 8 pages (__root.tsx, chart, dashboard, portfolio, alerts, screener, news, login)
 │   ├── src/components/      # 33 React components (chart/, common/, modals/, pages/)
 │   ├── src/store/           # Zustand: appStore.js, authStore.js
-│   ├── src/services/        # api.js, aiService.js
+│   ├── src/services/        # api.js
 │   └── src/styles/          # Tailwind + glassmorphism CSS
 ├── docker-compose.dev.yml   # 8-service dev stack
 ├── caddy/                   # Caddyfile.dev, Caddyfile.prod
@@ -166,7 +164,6 @@ ShotockViz/
 ## Key Architecture Decisions
 
 - **CQRS (Command Query Responsibility Segregation)** — API endpoints are pure-read (Redis/PostgreSQL only). Celery workers are the sole data ingesters (Yahoo Finance, pythainav, Stooq). On cache miss, API triggers Celery task via `request_data_fetch()` → worker fetches → caches → publishes WS `data_ready` → frontend re-fetches automatically.
-- **SSE for AI Chat** — `ai_chat.py` streams via Server-Sent Events with `asyncio.wait_for` keepalive heartbeat every 15s
 - **2-layer read cache (API side)** — Redis L1 (sub-ms) → PostgreSQL L2 (10-50ms). API never touches external services.
 - **Celery write side** — 8 workers: `price_fetcher` (quotes), `name_fetcher` (company names), `fundamentals_fetcher` (PE/PB/EPS), `fund_fetcher` (Thai NAV via pythainav), `history_prefetcher` (OHLCV warm cache), `on_demand_listener` (API cache-miss handler), `alert_checker`, `housekeeping`
 - **TimescaleDB hypertable** — `StockPrice1m` + `ohlcv_bars` for efficient time-series queries with auto-compression
@@ -194,7 +191,6 @@ See `.env.example` for full list. Key vars:
 - `JWT_SECRET_KEY` — Token signing
 - `FINNHUB_API_KEY` — Free tier for enhanced data
 - `TELEGRAM_BOT_TOKEN` — Alert notifications
-- `OLLAMA_URL` — Local LLM endpoint (default: `http://ollama:11434`)
 - `GOOGLE_CLIENT_ID` — OAuth login
 
 ## Stakeholder Context
@@ -206,8 +202,7 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 - **CQRS refactor (2026-03-03)** — API endpoints no longer call external APIs. All data from cache/DB. Celery workers are sole data ingesters. 5 new workers created.
 - **Fast-response pattern (2026-03-02)** — All API endpoints respond < 5s. Background fetch + WS `data_ready` notification.
 - **Cache key mismatch** — Fixed: all endpoints now use `cache_keys.*()` functions (was using hardcoded f-strings).
-- **AI chat freeze** — Fixed: immediate SSE flush + keepalive heartbeat + frontend error propagation
-- **Memory leaks** — Fixed in source: setInterval leaks in Sidebar, Dashboard, TradingChart, AIChatPanel
+- **Memory leaks** — Fixed in source: setInterval leaks in Sidebar, Dashboard, TradingChart
 - **Race condition** — Fixed: AbortController in RightPanel for stale XHR after symbol change
 - **PTT.BK empty data** — Fixed: explicit `data_received` flag in retry loop
 - **Alert field crash** — Fixed: `a.target_price` → `a.value` in dashboard.py

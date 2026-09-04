@@ -29,17 +29,6 @@ localhost {
 		}
 	}
 
-	# AI chat — SSE streaming (flush immediately, never buffer)
-	@ai path /api/ai/*
-	reverse_proxy @ai backend:8000 {
-		flush_interval -1
-		transport http {
-			read_timeout 3m
-			write_timeout 3m
-			dial_timeout 5s
-		}
-	}
-
 	# REST API — explicit timeouts for long-running Thai stock history requests (up to 30s)
 	reverse_proxy /api/* backend:8000 {
 		header_up X-Real-IP {remote_host}

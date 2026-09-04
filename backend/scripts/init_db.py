@@ -84,22 +84,22 @@ def create_all_tables() -> None:
     # create_tables()" instruction — evidence found two independent gaps in
     # the two EXISTING import lists in this repo:
     #   - core/database.py:44 create_tables() imports 7 modules — MISSING the
-    #     5 V2 models (symbol_mapping, corporate_action, financial_history,
-    #     earnings_event, document_embedding) that db/migrations/env.py:16-26
+    #     4 V2 models (symbol_mapping, corporate_action, financial_history,
+    #     earnings_event) that db/migrations/env.py:16-26
     #     already imports for autogenerate.
-    #   - db/migrations/env.py:16-26 imports 11 modules — MISSING `ohlcv`
+    #   - db/migrations/env.py:16-26 imports 10 modules — MISSING `ohlcv`
     #     (only ever imported by create_tables()) AND `note`
     #     (models/note.py:StockNote / stock_notes table, used by
     #     api/routes/notes.py:9, imported by NEITHER existing bootstrap path —
     #     a pre-existing gap, not introduced here; see artifact Open Questions).
-    # `import models` pulls in models/__init__.py's 11-module aggregate;
+    # `import models` pulls in models/__init__.py's 10-module aggregate;
     # ohlcv + note are added explicitly since neither list carries them.
     # create_all() is additive + checkfirst by default, so widening this list
     # cannot drop or alter any table that already exists.
     from core.database import Base
     import models              # noqa: F401 — User, Stock, Watchlist, Transaction, Alert, Drawing,
                                 #              SymbolMapping, CorporateAction, FinancialHistory,
-                                #              EarningsEvent, DocumentEmbedding (models/__init__.py:1-11)
+                                #              EarningsEvent (models/__init__.py:1-10)
     import models.ohlcv        # noqa: F401 — OHLCVBar (ohlcv_bars already exists via step 1; checkfirst skips it)
     import models.note         # noqa: F401 — StockNote (stock_notes) — not covered by any prior bootstrap path
 

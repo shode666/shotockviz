@@ -108,9 +108,6 @@ class Settings(BaseSettings):
     # Timezone
     tz: str = "Asia/Bangkok"
 
-    # Optional AI
-    ollama_url: str = ""
-
     # Google OAuth
     google_client_id: str = ""
 

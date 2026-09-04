@@ -45,7 +45,7 @@ import models  # noqa: E402,F401 — side effect: registers all tables on Base.m
 # Exact unversioned-exception path set per ADR-001 r3 / CLAUDE.md architecture
 # diagram. Anything else under /api/* MUST start with /api/v1.
 UNVERSIONED_EXACT_PATHS = {"/api/health"}
-UNVERSIONED_PREFIXES = ("/api/ai/", "/api/ws/")
+UNVERSIONED_PREFIXES = ("/api/ws/",)
 
 # Substrings that must never appear in an error envelope body (S-AC-5:
 # no exception class / traceback / SQL fragment / filesystem path leak).
@@ -85,23 +85,20 @@ class TestPrefixWhitelist:
                 continue
             violations.append(path)
         assert violations == [], (
-            f"routes outside /api/v1 and outside the 3 named exceptions "
-            f"(/api/health, /api/ai/*, /api/ws/*): {violations}"
+            f"routes outside /api/v1 and outside the 2 named exceptions "
+            f"(/api/health, /api/ws/*): {violations}"
         )
 
     def test_named_exceptions_actually_exist_and_are_reachable(self, client):
-        """The 3 documented exceptions must be real, not just 'nothing violates
+        """The 2 documented exceptions must be real, not just 'nothing violates
         the rule because nothing matches the exact path' (vacuous-pass guard)."""
         from main import app
 
-        seen_prefixes = {"/api/ai/": False, "/api/health": False}
+        seen_prefixes = {"/api/health": False}
         for path, _methods in _iter_api_routes(app):
             if path == "/api/health":
                 seen_prefixes["/api/health"] = True
-            if path.startswith("/api/ai/"):
-                seen_prefixes["/api/ai/"] = True
         assert seen_prefixes["/api/health"], "/api/health route missing entirely"
-        assert seen_prefixes["/api/ai/"], "no /api/ai/* routes found"
         # /api/ws/prices is a WebSocketRoute (no `methods` attr) — checked
         # separately since _iter_api_routes skips it by design.
         ws_paths = [r.path for r in app.routes if getattr(r, "path", "") == "/api/ws/prices"]

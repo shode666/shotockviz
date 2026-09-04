@@ -7,7 +7,6 @@ import Navbar from '@/components/common/Navbar'
 import Sidebar from '@/components/common/Sidebar'
 import StatusBar from '@/components/common/StatusBar'
 import SearchModal from '@/components/modals/SearchModal'
-import AIChatPanel from '@/components/common/AIChatPanel'
 import ClientOnly from '@/components/common/ClientOnly'
 import useAppStore from '@/store/appStore'
 import useAuthStore from '@/store/authStore'
@@ -115,7 +114,6 @@ function RootComponent() {
       </div>
       <StatusBar />
       <SearchModal />
-      <AIChatPanel />
       <Toaster />
     </div>
   )

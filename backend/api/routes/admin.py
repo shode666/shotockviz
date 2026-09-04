@@ -66,8 +66,7 @@ async def get_retention_policy(
         result = await db.execute(text("""
             SELECT
                 COALESCE(pg_total_relation_size('stock_prices_1m') / 1024.0 / 1024.0, 0) +
-                COALESCE(pg_total_relation_size('ohlcv_bars') / 1024.0 / 1024.0, 0) +
-                COALESCE(pg_total_relation_size('document_embeddings') / 1024.0 / 1024.0, 0)
+                COALESCE(pg_total_relation_size('ohlcv_bars') / 1024.0 / 1024.0, 0)
             AS total_mb
         """))
         row = result.fetchone()

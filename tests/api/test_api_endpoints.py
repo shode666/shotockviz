@@ -3,7 +3,7 @@ Comprehensive API endpoint tests — covers every route with happy path,
 auth enforcement, input validation, and error cases.
 
 Tests run against an in-memory SQLite DB via TestClient (ASGI).
-External services (Redis, Yahoo Finance, Ollama) are mocked.
+External services (Redis, Yahoo Finance) are mocked.
 
 Endpoints covered:
   ✓ POST /api/v1/auth/google  (removal-only coverage — no live Google token
@@ -17,8 +17,6 @@ Endpoints covered:
   ✓ GET  /api/v1/stocks/{symbol}/history
   ✓ GET  /api/v1/stocks/{symbol}/fundamentals
   ✓ GET  /api/v1/stocks/{symbol}/news
-  ✓ GET  /api/ai/models  (fast, 3s timeout)
-  ✓ POST /api/ai/chat  (non-streaming)
   ✓ GET  /api/v1/watchlists
   ✓ POST /api/v1/watchlists
   ✓ POST /api/v1/watchlists/{id}/stocks
@@ -342,132 +340,6 @@ class TestStockNews:
             client.get("/api/v1/stocks/PTT.BK/news")
         assert captured_url, "feedparser.parse was not called"
         assert ".BK" not in captured_url[0], f"URL should strip .BK: {captured_url[0]}"
-
-
-# ── AI: models ───────────────────────────────────────────────────────────────
-
-class TestAIModels:
-    def test_models_returns_available_false_when_ollama_not_configured(self, client):
-        with patch("core.config.settings") as mock_settings:
-            mock_settings.ollama_url = None
-            resp = client.get("/api/ai/models")
-        # Either 200 with available=False or error — must not be 500
-        assert resp.status_code in {200, 503}
-
-    def test_models_returns_list_when_available(self, client):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"models": [{"name": "llama3.2:latest"}]}
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(return_value=mock_resp)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.get("/api/ai/models")
-        assert resp.status_code == 200
-        body = resp.json()["data"]
-        assert "models" in body
-        assert "available" in body
-
-    def test_models_connection_error_returns_unavailable(self, client):
-        """Ollama not running → returns {available: false}, not 500."""
-        import httpx as _httpx
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.get("/api/ai/models")
-        assert resp.status_code == 200
-        assert resp.json()["data"]["available"] is False
-
-
-# ── AI: chat ─────────────────────────────────────────────────────────────────
-
-class TestAIChat:
-    def test_chat_503_when_ollama_not_configured(self, client):
-        with patch("core.config.settings") as s:
-            s.ollama_url = None
-            resp = client.post("/api/ai/chat", json={
-                "messages": [{"role": "user", "content": "hello"}],
-                "stream": False,
-            })
-        assert resp.status_code == 503
-
-    def test_chat_non_streaming_returns_content(self, client):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "message": {"content": "วิเคราะห์แล้ว ราคาดี"},
-            "done": True,
-        }
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.post = AsyncMock(return_value=mock_resp)
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.post("/api/ai/chat", json={
-                "messages": [{"role": "user", "content": "วิเคราะห์ PTT.BK ให้หน่อย"}],
-                "stream": False,
-            })
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "content" in body
-        assert "วิเคราะห์แล้ว" in body["content"]
-
-    def test_chat_streaming_returns_stream_response(self, client):
-        """Streaming path must return text/event-stream."""
-        import httpx as _httpx
-
-        async def fake_stream(*args, **kwargs):
-            class FakeStream:
-                status_code = 200
-                async def aiter_lines(self):
-                    import json
-                    yield json.dumps({"message": {"content": "hello"}, "done": True})
-                async def __aenter__(self): return self
-                async def __aexit__(self, *a): pass
-            return FakeStream()
-
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.stream = fake_stream
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.post("/api/ai/chat", json={
-                "messages": [{"role": "user", "content": "test"}],
-                "stream": True,
-            })
-        assert resp.status_code == 200
-        assert "text/event-stream" in resp.headers.get("content-type", "")
-
-    def test_chat_ollama_timeout_returns_504(self, client):
-        """Non-streaming: Ollama timeout → 504 (not 500)."""
-        import httpx as _httpx
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.post = AsyncMock(side_effect=_httpx.TimeoutException("timeout"))
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.post("/api/ai/chat", json={
-                "messages": [{"role": "user", "content": "test"}],
-                "stream": False,
-            })
-        assert resp.status_code == 504
-
-    def test_chat_ollama_connect_error_returns_503(self, client):
-        """Non-streaming: ConnectError → 503."""
-        import httpx as _httpx
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=None)
-        mock_client.post = AsyncMock(side_effect=_httpx.ConnectError("refused"))
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            resp = client.post("/api/ai/chat", json={
-                "messages": [{"role": "user", "content": "test"}],
-                "stream": False,
-            })
-        assert resp.status_code == 503
 
 
 # ── Watchlist ────────────────────────────────────────────────────────────────

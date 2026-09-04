@@ -86,19 +86,6 @@ def run_housekeeping(self):
                     deleted_total += deleted
                     logger.info("Housekeeping 1d", deleted=deleted, max_age_days=max_age_days)
 
-            # Also clean up old document embeddings (> 90 days)
-            try:
-                result = conn.execute(text("""
-                    DELETE FROM document_embeddings
-                    WHERE created_at < NOW() - INTERVAL '90 days'
-                """))
-                embed_deleted = result.rowcount
-                deleted_total += embed_deleted
-                if embed_deleted > 0:
-                    logger.info("Housekeeping embeddings", deleted=embed_deleted)
-            except Exception:
-                pass  # Table may not exist yet
-
         logger.info("Housekeeping complete", deleted_total=deleted_total)
         return {"deleted_total": deleted_total}
 

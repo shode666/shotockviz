@@ -19,18 +19,18 @@ frontend/src/
 ├── routes/          # TanStack Start pages: __root.tsx, index.tsx, dashboard.tsx, alerts.tsx, portfolio.tsx, screener.tsx, news.tsx, login.tsx
 ├── components/
 │   ├── chart/       # TradingChart.tsx, ChartToolbar.tsx, DrawingToolbar.tsx, RightPanel.tsx, BottomPanel.tsx
-│   ├── common/      # Navbar.tsx, Sidebar.tsx, StatusBar.tsx, AIChatPanel.tsx
+│   ├── common/      # Navbar.tsx, Sidebar.tsx, StatusBar.tsx
 │   ├── pages/       # DashboardPage.tsx, ChartPage.tsx, AlertsPage.tsx, PortfolioPage.tsx, ScreenerPage.tsx, NewsPage.tsx
 │   └── modals/      # SearchModal.tsx, SettingsModal.tsx
 ├── store/           # Zustand: appStore.js (selectedStock, indicators), authStore.js (user, token)
-├── services/        # API calls: api.js (axios base), stockService.js, watchlistService.js, portfolioService.js, alertService.js, aiService.js, notesService.js, dashboardService.js
+├── services/        # API calls: api.js (axios base), stockService.js, watchlistService.js, portfolioService.js, alertService.js, notesService.js, dashboardService.js
 ├── hooks/           # useAuth.js, useWebSocket.ts, useBackendReady.ts
 ├── utils/           # formatters.js, indicators.js, marketStatus.ts
 └── styles/          # Tailwind + glassmorphism CSS
 
 backend/
 ├── main.py                  # FastAPI app, WebSocket manager, CORS, Redis broadcaster
-├── api/routes/              # 13 modules: auth, stocks, watchlist, portfolio, portfolio_performance, alerts, screener, dashboard, ai_chat, drawings, notes, system
+├── api/routes/              # 13 modules: auth, stocks, watchlist, portfolio, portfolio_performance, alerts, screener, dashboard, drawings, notes, system
 ├── models/                  # SQLAlchemy ORM: user, stock, ohlcv, watchlist, portfolio, alert, drawing, note, schemas
 ├── services/                # stock_service.py (224-line facade), cache_orchestrator.py, db_helpers.py, providers/, generators/
 ├── workers/                 # Celery: 11 workers (price_fetcher, name_fetcher, fundamentals_fetcher, fund_fetcher, history_prefetcher, on_demand_listener, alert_checker, news_fetcher, symbol_registrar, index_populator, housekeeping)
@@ -56,7 +56,7 @@ backend/
 - [x] Fix interval memory leak in `Sidebar.tsx` — unstable deps on `setInterval` causing unbounded timer accumulation
 - [x] Fix interval memory leak in `DashboardPage.tsx` — same pattern with `load` + `dataVersion` deps
 - [x] Fix `setTimeout` not cleared in `TradingChart.tsx` on unmount during retry
-- [x] Fix `setTimeout` not cleaned up in `AIChatPanel.tsx` Ollama polling
+- [x] Fix `setTimeout` not cleaned up in AI chat panel's model-availability polling (component removed entirely, bd:deps-2026-09)
 - [x] Fix `RightPanel.tsx` race condition — add `AbortController` on symbol change
 - [x] Fix `RightPanel.tsx` 52W High/Low always "—" — `high_52week`/`low_52week` → `week_52_high`/`week_52_low` (field name mismatch with backend Pydantic schema)
 - [x] Fix `RightPanel.tsx` quote never loading — removed dead 202-retry loop; `stockService.getQuote` now properly catches 404 (axios throws before the old `if (res.status === 404)` check was reached)
@@ -100,7 +100,7 @@ backend/
 - [x] **Refactor 3 backend route files to use guard clauses + extracted helpers (SOLID principles)**
   - [x] **dashboard.py (317 lines)** — Extracted 5 helpers: `_fetch_indices_cached()`, `_build_portfolio_summary()`, `_find_alerts_near_target()`, `_get_user_watchlist()`, `_get_top_movers()`
   - [x] **screener.py (345 lines)** — Extracted 2 helpers: `_fetch_symbol_bars()`, `_evaluate_symbol()` + added `_compute_sma()` utility
-  - [x] **ai_chat.py (408 lines)** — Extracted 4 helpers: `_fetch_quote_context()`, `_fetch_fundamentals_context()`, `_fetch_portfolio_context()`, `_fetch_watchlist_context()`
+  - [x] **AI chat route (408 lines)** — Extracted 4 helpers: `_fetch_quote_context()`, `_fetch_fundamentals_context()`, `_fetch_portfolio_context()`, `_fetch_watchlist_context()` (route removed entirely, bd:deps-2026-09)
   - All files < 500 lines, all compiled successfully
   - All helpers have type hints + docstrings with Args/Returns
   - Main endpoints now act as clean orchestrators
@@ -345,7 +345,7 @@ backend/
 - [x] Migration `20260304_0004` — `financial_history` + `earnings_events` tables
 
 ## Phase 2.4 — AI/Observability
-- [x] pgvector Integration (RAG) — custom PostgreSQL image (TimescaleDB + pgvector), `DocumentEmbedding` model, `embedding_service.py`, `embedding_worker.py`, RAG context injection in `ai_chat.py`, migration `20260304_0005`
+- [x] ~~pgvector Integration (RAG)~~ — custom PostgreSQL image (TimescaleDB + pgvector), vector-search model/service/worker, RAG context injection in the AI chat route, migration `20260304_0005` (feature removed entirely, bd:deps-2026-09; vector-search table left orphaned, drop manually)
 - [x] Data Retention UI — `api/routes/admin.py` with GET/PUT/POST retention-policy endpoints, `housekeeping.py` reads policy from Redis config
 
 ## Phase 2.5 — Professional Tools
@@ -681,19 +681,6 @@ backend/
     - [ ] Cache news per symbol in Redis (TTL: 15 min)
   - **Acceptance:** Click "US" tab → only US market news shown, search "NVDA" → NVDA news only
   - **Effort:** 2 hours
-- [ ] AI sentiment badge (Positive/Neutral/Negative via Ollama)
-  - **Why:** อ่านข่าวเยอะไม่ไหว — ให้ AI สรุป sentiment แทน
-  - **Steps:**
-    - [ ] On news fetch: send title + snippet to Ollama with prompt "Classify sentiment: Positive/Neutral/Negative"
-    - [ ] Cache sentiment result in Redis per article URL
-    - [ ] Display colored badge: 🟢 Positive, ⚪ Neutral, 🔴 Negative
-    - [ ] Batch process in Celery to avoid blocking UI
-  - **Acceptance:** Each news article has sentiment badge, ≥80% accuracy on manual review
-  - **Trader scenario:** scan ข่าวเร็ว ๆ — เห็น 🔴 ติดกัน 3 อัน → ระวัง sentiment ตลาดลบ
-  - **Effort:** 4 hours
-  - 📁 **Files:** `backend/api/routes/ai_chat.py` (ดู Ollama call pattern), `backend/workers/` (new Celery task), `backend/core/config.py` (OLLAMA_URL)
-  - 🔗 **Reference:** ดู `ai_chat.py` สำหรับ Ollama HTTP call pattern — ใช้ `httpx.AsyncClient` POST to `{OLLAMA_URL}/api/generate`
-  - ⚠️ **Pitfalls:** Ollama response time ช้า (2-10s per article) — ต้อง batch ใน Celery ไม่ใช่ sync, cache result per article URL ใน Redis
 - [ ] Click article → open in new tab
   - **Steps:** `<a href={url} target="_blank" rel="noopener noreferrer">` on article card
   - **Effort:** 15 min
@@ -706,47 +693,10 @@ backend/
   - **Trader scenario:** เปิด news tab "My Watchlist" → เห็นข่าว NVDA earnings beat ก่อนคนอื่น (ใน watchlist ของเรา)
   - **Effort:** 2 hours
 
-## AI Chat Panel
-- [ ] Stock context injection: current symbol + price in system prompt
-  - **Steps:**
-    - [ ] Inject `{symbol: "NVDA", price: 186.50, change: +2.3%, PE: 35, RSI: 62}` into system prompt
-    - [ ] Update context when user switches symbol
-    - [ ] Backend `ai_chat.py` prepends context to user message before sending to Ollama
-  - **Acceptance:** Ask "should I buy?" → AI responds referencing NVDA's current price and RSI
-  - **Trader scenario:** เปิด NVDA chart → ถาม AI "RSI สูงไปไหม" → AI ตอบโดยอ้างอิง RSI จริง ไม่ใช่ hallucinate
-  - **Effort:** 2 hours
-  - 📁 **Files:** `backend/api/routes/ai_chat.py` (inject context into system prompt), `frontend/src/components/common/AIChatPanel.tsx` (send current symbol), `frontend/src/store/appStore.js` (selectedStock state)
-  - 🔗 **Reference:** `ai_chat.py` มี SSE streaming อยู่แล้ว — แค่เพิ่ม context object ใน system prompt, ดู existing `aiService.js` สำหรับ frontend call pattern
-- [ ] "Analyze this chart" button → pass OHLCV data to AI
-  - **Steps:**
-    - [ ] Button in AI chat panel: "📊 Analyze Chart"
-    - [ ] Sends last 30 candles OHLCV as structured data to AI
-    - [ ] Prompt: "Analyze this price action. Identify trend, support/resistance, and potential entry/exit."
-    - [ ] Stream response via SSE as usual
-  - **Acceptance:** Click "Analyze Chart" → AI identifies trend direction, key levels, pattern if present
-  - **Effort:** 3 hours
-- [ ] Chat history: persist per session (localStorage)
-  - **Steps:**
-    - [ ] Store messages array in `localStorage` key `ai_chat_history_{symbol}`
-    - [ ] Load on mount, save on each new message
-    - [ ] "Clear Chat" button to reset
-    - [ ] Max 50 messages per symbol (FIFO eviction)
-  - **Acceptance:** Close tab → reopen → previous chat messages still visible
-  - **Effort:** 1 hour
-- [ ] Suggested questions: auto-populated from current symbol context
-  - **Steps:**
-    - [ ] Show 3-4 pill buttons below chat input: "PE ratio?", "Support levels?", "Compare to sector?"
-    - [ ] Questions dynamically generated based on symbol type (SET vs US) and available data
-    - [ ] Click pill → auto-fills chat input and sends
-  - **Acceptance:** NVDA shows "What's NVDA's PE?", PTT.BK shows "XD date เมื่อไหร่?"
-  - **Effort:** 2 hours
-- [ ] Model selector: show available Ollama models
-  - **Steps:**
-    - [ ] Call `GET /api/ai/models` (proxy to Ollama `/api/tags`)
-    - [ ] Dropdown in chat panel header showing available models
-    - [ ] Default: llama3.2, allow switching to other installed models
-  - **Acceptance:** Dropdown shows installed Ollama models, switching model changes AI behavior
-  - **Effort:** 1 hour
+## ~~AI Chat Panel~~ — REMOVED (bd:deps-2026-09)
+> Feature removed entirely — local LLM runtime was already dropped
+> from prod, code + dev-compose service were dead weight. Backlog
+> items below no longer apply.
 
 ## Stock Notes
 - [x] Notes panel in BottomPanel tab
@@ -842,13 +792,7 @@ backend/
   - **Effort:** 4 hours
 
 ## AI Features
-- [ ] Sentiment analysis on news articles (Ollama local)
-  - **Steps:**
-    - [ ] Celery task: process new articles batch → classify via Ollama
-    - [ ] Store result in `news_sentiment` table: article_url, sentiment, confidence, processed_at
-    - [ ] Aggregate: daily sentiment score per symbol (avg of article sentiments)
-  - **Acceptance:** ≥80% accuracy on manually verified sample of 20 articles
-  - **Effort:** 4 hours
+- [ ] ~~Sentiment analysis on news articles (local LLM)~~ — BLOCKED: local LLM runtime removed entirely (bd:deps-2026-09). Current sentiment badge is keyword-derived (`NewsPage.tsx`'s `sentimentFromTitle()`), not AI-based.
 - [ ] Chart pattern auto-detection (Head & Shoulders, Cup & Handle)
   - **Why:** ตา trader จับ pattern ได้ แต่ไม่ได้จ้องจอตลอด — ให้ AI หาแทน
   - **Steps:**
@@ -870,13 +814,7 @@ backend/
   - **Effort:** 6 hours
   - 📁 **Files:** สร้าง `backend/services/sr_detector.py` (new) หรือ เพิ่มใน `pattern_detector.py`, `frontend/src/components/chart/TradingChart.tsx` (draw horizontal lines)
   - 📐 **Pattern:** Algorithm: scan OHLCV → find price levels where high/low touched ≥3 times within 0.5% band → sort by touch count → return top 4-5 levels
-- [ ] Portfolio review: AI commentary on holdings
-  - **Steps:**
-    - [ ] "Review Portfolio" button → sends all holdings + current metrics to Ollama
-    - [ ] Prompt: analyze concentration risk, sector exposure, P&L outliers, suggestions
-    - [ ] Stream response in AI chat panel
-  - **Acceptance:** AI identifies "portfolio heavy in tech (65%), KBANK is only Thai stock, consider diversifying"
-  - **Effort:** 3 hours
+- [ ] ~~Portfolio review: AI commentary on holdings~~ — BLOCKED: local LLM runtime + chat panel removed entirely (bd:deps-2026-09).
 - [ ] Risk scoring per stock (volatility + beta)
   - **Steps:**
     - [ ] Calculate: 30-day historical volatility, beta vs market (SET50 for .BK, SPY for US)

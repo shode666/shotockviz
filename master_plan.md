@@ -15,7 +15,6 @@ ShotockViz is a **self-hosted, privacy-first stock analysis platform** tailored 
 - **Self-hosted first** — your data stays on your machine
 - **Thai market first** — full .BK/.MAI support with Thai names
 - **Speed** — sub-100ms chart loads via 4-layer cache
-- **Intelligence** — local AI (Ollama) for sentiment & analysis, no cloud required
 - **Production quality** — not a toy; built for daily professional use
 
 ---
@@ -45,7 +44,6 @@ ShotockViz is a **self-hosted, privacy-first stock analysis platform** tailored 
 | Fundamentals 404: v11→v10→v8 chart API fallback chain | 🟢 Fixed (backend) | P0 |
 | `avg_volume` field added to StockFundamentals schema | 🟢 Fixed (backend) | P1 |
 | TradingChart retry (3× / 4s) on empty bars | 🟡 Fixed in src, not compiled | P1 |
-| AIChatPanel timeout cleanup on unmount | 🟡 Fixed in src, not compiled | P1 |
 | RightPanel AbortController race condition fix | 🟡 Fixed in src, not compiled | P1 |
 | useBackendReady hook + dataVersion polling | 🟡 Fixed in src, not compiled | P1 |
 | Company names in sidebar (batch /api/stocks/names) | 🟡 Fixed in src, not compiled | P1 |
@@ -108,7 +106,6 @@ ShotockViz is a **self-hosted, privacy-first stock analysis platform** tailored 
 
 | Feature | Status | Priority |
 |---------|--------|----------|
-| AI Sentiment on news articles (Ollama) | 🔴 TODO | P2 |
 | AI chart pattern recognition (support/resistance auto-detect) | 🔴 TODO | P3 |
 | AI portfolio suggestions ("rebalance recommendation") | 🔴 TODO | P3 |
 | Backtesting: run strategy on historical data | 🔴 TODO | P3 |
@@ -207,7 +204,6 @@ dataVersion bump triggers:
 - **Yahoo Finance**: Rate limited (~100 req/min), crumb auth required, .BK unreliable
 - **Stooq**: US stocks only, daily/weekly/monthly only, reliable
 - **Finnhub**: Free tier = 60 calls/min, US stocks + fundamentals
-- **Ollama**: Local inference, no network required, model must be pulled first
 - **TimescaleDB**: ~10GB/year storage for 500 symbols at 1m resolution
 
 ---

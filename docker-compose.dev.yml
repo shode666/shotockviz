@@ -50,7 +50,6 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       APP_ENV: development
       DEBUG: "True"
       TZ: ${TZ:-Asia/Bangkok}
@@ -65,8 +64,6 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -96,7 +93,6 @@ services:
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-secret-key-change-in-prod}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       SEC_FUND_FACTSHEET_KEY: ${SEC_FUND_FACTSHEET_KEY:-}
       SEC_FUND_DAILY_INFO_KEY: ${SEC_FUND_DAILY_INFO_KEY:-}
       APP_ENV: development
@@ -124,7 +120,6 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://stockviz:password@db:5432/stockviz_db}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
-      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       SEC_FUND_FACTSHEET_KEY: ${SEC_FUND_FACTSHEET_KEY:-}
       SEC_FUND_DAILY_INFO_KEY: ${SEC_FUND_DAILY_INFO_KEY:-}
       APP_ENV: development
@@ -183,42 +178,6 @@ services:
     networks:
       - stockviz-net
 
-  ollama:
-    image: ollama/ollama:latest
-    volumes:
-      - ollamadata:/root/.ollama
-    environment:
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2}
-    # Uncomment if you have an NVIDIA GPU:
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: all
-    #           capabilities: [gpu]
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        ollama serve &
-        echo "Waiting for Ollama to be ready..."
-        until ollama list > /dev/null 2>&1; do sleep 1; done
-        echo "Pulling model: $${OLLAMA_MODEL}..."
-        ollama pull $${OLLAMA_MODEL}
-        echo "Pulling embedding model: nomic-embed-text..."
-        ollama pull nomic-embed-text
-        echo "All models ready. Ollama is running."
-        wait
-    healthcheck:
-      test: ["CMD", "ollama", "list"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 30s
-    restart: unless-stopped
-    networks:
-      - stockviz-net
-
   caddy:
     image: caddy:2-alpine
     ports:
@@ -244,6 +203,5 @@ networks:
 volumes:
   pgdata:
   redisdata:
-  ollamadata:
   caddy_data:
   caddy_config:

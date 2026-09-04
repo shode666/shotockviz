@@ -12,7 +12,7 @@ from core.database import create_tables
 from core.logger import setup_logging, get_logger
 from core.redis import init_redis, close_redis
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
-from api.routes import dashboard, ai_chat, notes, portfolio_performance, admin, backtesting
+from api.routes import dashboard, notes, portfolio_performance, admin, backtesting
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 from schemas.envelope import install_error_envelope
@@ -276,17 +276,15 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(RequestIDMiddleware)
 
 # bd:deps-2026-09 S2 (ADR-001 r3, ADR-002) — envelope error handlers, scoped
-# to /api/v1/* and /api/ai/* paths only (schemas/envelope.py).
+# to /api/v1/* paths only (schemas/envelope.py).
 install_error_envelope(app)
 
 # ─── Routers ────────────────────────────────────────────────────────────────
 # bd:deps-2026-09 S2 (ADR-001 r3) — 12 modules move under one /api/v1
-# aggregate (envelope + version together, AC-B1-r3). 3 exceptions stay at
+# aggregate (envelope + version together, AC-B1-r3). 2 exceptions stay at
 # their old, unversioned paths (AC-B9): GET /api/health (health_router,
-# below — infra contract, compose healthchecks), WS /api/ws/prices
-# (unchanged, further down this file), and /api/ai/* (ai_chat.router,
-# below — Caddy's SSE-flush matcher targets this exact path, r3-1; its
-# JSON sub-routes still adopt the envelope via route_class, r3-1).
+# below — infra contract, compose healthchecks) and WS /api/ws/prices
+# (unchanged, further down this file).
 
 api_v1 = APIRouter(prefix="/api/v1")
 api_v1.include_router(auth.router)
@@ -304,9 +302,8 @@ api_v1.include_router(backtesting.router)               # strategy backtesting
 api_v1.include_router(system.router)                     # /system/ready, /system/celery-stats, /market/fgi
 app.include_router(api_v1)
 
-# 3 unversioned exceptions — old paths, frozen (AC-B9)
+# 2 unversioned exceptions — old paths, frozen (AC-B9)
 app.include_router(system.health_router)   # GET /api/health
-app.include_router(ai_chat.router)          # /api/ai/* (SSE stream + JSON, r3-1)
 
 # ─── WebSocket ──────────────────────────────────────────────────────────────
 

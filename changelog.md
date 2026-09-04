@@ -8,6 +8,71 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### bd:deps-2026-09 — remove AI chat / Ollama feature entirely (2026-09-04)
+
+User decision (Phase 2, scope add): the AI chat feature was removed
+entirely — its local LLM runtime was already dropped from prod, so the
+backend route, embedding worker/service/model, frontend panel, Caddy
+SSE matcher, and dev-compose LLM service were all dead weight. Single
+commit, no new abstractions. Inventory + proof:
+`grep -rni 'ollama\|ai_chat\|aiService\|AIChatPanel\|embedding\|/api/ai'`
+across `*.py`/`*.ts`/`*.tsx`/`*.yml`/`*.md`/`Caddyfile*` → 0 hits outside
+`outputs/` and this changelog entry.
+
+- **Removed files**: `backend/api/routes/ai_chat.py`,
+  `backend/services/embedding_service.py`,
+  `backend/models/document_embedding.py`,
+  `backend/workers/embedding_worker.py`,
+  `frontend/src/components/common/AIChatPanel.tsx`,
+  `frontend/src/services/aiService.ts`, `tests/e2e/ai-chat.spec.ts`.
+- **`backend/main.py`** — dropped the `ai_chat` import/router mount; the
+  unversioned-exception set shrinks from 3 to 2 (`/api/health`,
+  `/api/ws/prices`).
+- **`backend/schemas/envelope.py`** — `_is_enveloped_path()` now scopes
+  to `/api/v1/*` only (was `/api/v1/*` OR the AI route's unversioned
+  prefix).
+- **`backend/models/__init__.py`**, **`backend/db/migrations/env.py`**
+  — dropped the vector-embeddings model import. **No DB migration
+  written** — the existing `document_embeddings` table is left
+  orphaned; drop it manually if reclaiming disk space.
+- **`backend/workers/celery_app.py`** — dropped the embedding worker
+  from `include=[...]` and its beat-schedule entry.
+- **`backend/workers/housekeeping.py`**, **`backend/api/routes/admin.py`**
+  — dropped the now-dead `document_embeddings` cleanup query / disk-usage
+  accounting line.
+- **`backend/core/config.py`** — dropped `ollama_url` setting.
+- **`frontend/src/routes/__root.tsx`** — dropped the `AIChatPanel` import
+  + render, no dangling state.
+- **`docker-compose.dev.yml`** — dropped the `ollama` service, the
+  `ollamadata` volume, its `depends_on` edge, and `OLLAMA_URL`/
+  `OLLAMA_MODEL` env lines across all 3 services that had them.
+- **`caddy/Caddyfile`**, **`caddy/Caddyfile.dev`** — dropped the AI-chat
+  SSE-flush `@ai` matcher block.
+- **`.env.example`** — dropped the `OLLAMA_URL` line.
+- **`tests/api/test_api_endpoints.py`** — dropped `TestAIModels` +
+  `TestAIChat`. **`tests/api/test_contract_v1.py`** — unversioned-prefix
+  exception set now `{"/api/health"}` + `("/api/ws/",)` only.
+  **`tests/e2e/helpers/mocks.ts`** — dropped `MOCK_AI_MODELS`, the
+  `/api/ai/models` route stub, and `mockAIChat()`.
+- **Docs**: `CLAUDE.md`, `README.md`, `REQUIREMENTS.md`,
+  `INSTRUCTIONS.md`, `master_plan.md`, `V2_DEV_SPEC.md`,
+  `V2_Features.md`, `V2_QA_PLAN.md`, `PRODUCTION_DEPLOY.md`,
+  `tasklist.md`, `docs/deploy.md`, `docs/deploy-gha.md`,
+  `docs/engagements/deps-2026-09.md`,
+  `.claude/skills/bench-api/SKILL.md` — every AI-chat/Ollama reference
+  removed or struck through with a removal note; historical spec
+  sections kept for record with `~~strikethrough~~ — REMOVED` headers
+  rather than deleted outright.
+- **Verify**: `backend && pytest tests -q` → 114 passed, 2 skipped, 38
+  deselected (0 fail). `PYTHONPATH=backend pytest tests/api -q` → 23
+  failed / 197 passed (pre-existing DB-less failures; the drop from the
+  prior 26-failed baseline is exactly the 8 removed AI test methods, no
+  new failures). `frontend && npm run build` → green. `npm run
+  typecheck` → 1 whitelisted error (`router.tsx:5`, unchanged). `python
+  -c "import yaml; yaml.safe_load(open('docker-compose.dev.yml'))"` →
+  OK, 8 services (was 9). `backend && python -c "import main"` → clean,
+  import graph intact.
+
 ### bd:deps-2026-09 iter1 — Phase 3b FAIL fix pack (2026-09-03)
 
 Chris (code review) and Quinn (integration/E2E/contract review) both

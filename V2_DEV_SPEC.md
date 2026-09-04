@@ -344,69 +344,12 @@ GET /api/stocks/{symbol}/earnings?limit=8
 
 ## Phase 2.4 — AI/Observability (สัปดาห์ 5-7)
 
-### Feature 8: pgvector Integration (RAG)
+### Feature 8: ~~pgvector Integration (RAG)~~ — REMOVED
 
-**Priority:** MEDIUM (prerequisite สำหรับ intelligent AI chat)
-
-#### Docker Changes
-
-**`docker-compose.dev.yml`** — เปลี่ยน postgres image:
-```yaml
-db:
-  image: pgvector/pgvector:pg16  # เปลี่ยนจาก timescale/timescaledb-ha:pg16
-  # หรือ custom Dockerfile ที่ install ทั้ง timescaledb + pgvector
-```
-
-> ⚠️ **Critical:** timescaledb + pgvector ต้องใช้ custom image ที่ compile ทั้งสอง extension ด้วยกัน
-> ดู: `ankane/pgvector` + `timescale/timescaledb` สำหรับ combined image
-
-#### Database Migration
-
-```sql
-CREATE EXTENSION IF NOT EXISTS vector;
-
-CREATE TABLE IF NOT EXISTS document_embeddings (
-    id          BIGSERIAL PRIMARY KEY,
-    symbol      VARCHAR(20),              -- NULL = general news
-    content     TEXT NOT NULL,
-    embedding   vector(768),              -- nomic-embed-text dimension
-    source      VARCHAR(50),              -- 'news', 'financials', 'earnings'
-    source_url  TEXT,
-    created_at  TIMESTAMPTZ DEFAULT NOW()
-);
-CREATE INDEX ON document_embeddings USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);
-```
-
-#### New Files
-
-**`backend/services/embedding_service.py`** (new)
-```python
-# generate_embedding(text: str) → list[float]
-# Calls Ollama embed API: POST /api/embed (nomic-embed-text model)
-# search_similar(query: str, symbol: str, k: int) → list[Document]
-```
-
-**`backend/workers/embedding_worker.py`** (new Celery worker)
-- Triggered after news fetch
-- Embeds news articles + earnings reports
-- Schedule: triggered by `news_fetcher` completion
-
-#### Modify AI Chat
-
-**`backend/api/routes/ai_chat.py`**
-- ก่อน stream ไปยัง Ollama → เรียก `embedding_service.search_similar(user_query, symbol)`
-- Inject relevant context ใน system prompt:
-  ```
-  Relevant context: {top_3_similar_docs}
-  ```
-
-#### Ollama Setup
-
-เพิ่ม model pull ใน docker startup:
-```bash
-ollama pull nomic-embed-text  # สำหรับ embedding
-ollama pull llama3.2           # ยังใช้อยู่สำหรับ chat
-```
+> bd:deps-2026-09 (2026-09) — the AI chat feature this was a
+> prerequisite for was removed entirely (local LLM runtime already
+> dropped from prod). Spec kept struck through for history only; do
+> not implement.
 
 ---
 
@@ -562,7 +505,7 @@ Phase 2.3:
   3. financial_history
   4. earnings_events
 Phase 2.4:
-  5. document_embeddings (requires pgvector extension)
+  5. ~~vector-search table (requires pgvector extension)~~ — REMOVED, see Feature 8
   6. (retention policy ใช้ Redis config แทน DB)
 Phase 2.5:
   (ไม่มี DB changes — backtest เป็น stateless computation)
@@ -595,7 +538,6 @@ Phase 2.5:
 | `fetch_corporate_actions` | Daily 02:00 ICT | 2.2 | Dividend/split data |
 | `fetch_financials_history` | Daily 01:00 ICT | 2.3 | 10-year financials |
 | `fetch_earnings_events` | Daily 06:00 ICT | 2.3 | EPS actual/estimate |
-| `embed_documents` | On-demand (post-news) | 2.4 | pgvector embeddings |
 
 **Register ทุกตัวใน:** `backend/workers/celery_app.py` beat schedule
 
@@ -654,17 +596,15 @@ Phase 2.5:
               │  + /rs  + /financials  + /earnings      │
               │  + /admin/retention-policy              │
               │  + /backtest/run                        │
-              │  + RAG context injection (ai_chat)      │
               └────────────┬────────────────────────────┘
                            │
         ┌──────────────────┼────────────────────────┐
         │                  │                        │
   ┌─────▼──────┐    ┌──────▼──────┐    ┌──────────▼──────────┐
   │   REDIS    │    │  POSTGRES   │    │     CELERY (V2)      │
-  │  (unchanged)│    │  + pgvector │    │  + corporate_actions │
+  │  (unchanged)│    │  (unchanged)│    │  + corporate_actions │
   │            │    │  + new tables│    │  + financials_history│
   └────────────┘    └─────────────┘    │  + earnings_events   │
-                                        │  + embed_documents   │
                                         └──────────────────────┘
                                                +
                                         ┌──────────────┐
@@ -695,9 +635,7 @@ Week 3-5: Phase 2.3
   Day 13-15: Earnings Surprise table + worker + chart markers
 
 Week 5-7: Phase 2.4
-  Day 1-3: pgvector Docker setup + DB migration
-  Day 4-6: Embedding service + worker
-  Day 7-9: RAG context injection in ai_chat
+  (Feature 8 — RAG — removed, see above)
   Day 10-12: Data Retention UI + API
 
 Week 7-8: Phase 2.5
