@@ -203,7 +203,11 @@ export default function Navbar() {
                             <button
                                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
                                 className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
-                                style={{ background: 'linear-gradient(135deg, #7c5cfc, #a855f7)' }}
+                                // bd:ux-2026-09 Chris review — the #7c5cfc/#a855f7 gradient measured
+                                // 4.38:1 / 3.96:1 for white text (axe misses gradients). Solid
+                                // --color-accent-strong is the same 6.00:1 token .btn-accent already
+                                // uses for this exact class of failure (styles.css:529-533).
+                                style={{ background: 'var(--color-accent-strong)' }}
                             >
                                 {user?.display_name?.[0]?.toUpperCase() || 'U'}
                             </button>
