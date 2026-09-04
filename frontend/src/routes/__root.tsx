@@ -50,7 +50,7 @@ export const Route = createRootRoute({
       { name: 'viewport', content: 'width=device-width, initial-scale=1' },
       { title: 'ShotockViz — Stock Analysis Platform' },
       { name: 'description', content: 'Self-hosted stock analysis platform for Thai and US markets' },
-      { name: 'theme-color', content: '#0b0d14' }
+      { name: 'theme-color', content: '#0a0c14' }
     ],
     links: [
       { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' },
@@ -58,7 +58,7 @@ export const Route = createRootRoute({
       { rel: 'stylesheet', href: appCss },
       { rel: 'preconnect', href: 'https://fonts.googleapis.com' },
       { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
-      { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800&display=swap' },
+      { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap' },
     ],
   }),
   shellComponent: RootDocument,

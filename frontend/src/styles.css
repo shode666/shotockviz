@@ -3,21 +3,30 @@
 @variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 /* ─── Theme Variables ─────────────────────────────────────────────────────── */
+/* bd:ux-2026-09 — dark theme values + new tokens ported from
+   outputs/ux-2026-09/02-tokens.css (Direction B "Glass Refined"); light theme
+   below is untouched pre-existing palette (no approved light mock yet). */
 :root {
-  --font-sans: "Poppins", system-ui, -apple-system, sans-serif;
+  --font-sans: "Plus Jakarta Sans", "Noto Sans Thai", system-ui, -apple-system, sans-serif;
 
   /* Light theme */
   --color-bg: #f5f6fa;
   --color-panel: #ffffff;
   --color-panel-2: #f8f9fc;
   --color-border: #e8eaef;
+  --color-border-strong: #d8dbe4;
   --color-text: #2d3142;
   --color-text-sub: #8b91a7;
   --color-hover: #f0f1f5;
   --color-input-bg: #f0f2f7;
+  --surface-1: rgba(0, 0, 0, 0.03);
+  --surface-2: rgba(0, 0, 0, 0.05);
+  --surface-3: rgba(0, 0, 0, 0.08);
 
   /* Accent — vibrant violet */
   --color-accent: #7c5cfc;
+  --color-accent-text: #6343e8;
+  --color-accent-strong: #6343e8;
   --color-accent-hover: #6b4cf0;
   --color-accent-glow: rgba(124, 92, 252, 0.14);
 
@@ -28,6 +37,12 @@
   --color-blue: #3b82f6;
   --color-cyan: #06b6d4;
   --color-pink: #ec4899;
+  --color-up: var(--color-green);
+  --color-down: var(--color-red);
+  --color-up-muted: rgba(16, 185, 129, 0.12);
+  --color-down-muted: rgba(239, 68, 68, 0.12);
+  --color-support: #ca8a04;
+  --color-resistance: #7c3aed;
 
   /* Radii */
   --radius-sm: 6px;
@@ -35,24 +50,63 @@
   --radius-lg: 14px;
   --radius-xl: 18px;
   --radius-full: 9999px;
+
+  /* Spacing — 8-pt grid (bd:ux-2026-09) */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 24px; --space-6: 32px; --space-7: 40px; --space-8: 48px;
+  --row-h: 34px;
+
+  /* Typography scale (bd:ux-2026-09) */
+  --text-xs: 10px; --text-sm: 11px; --text-base: 12.5px; --text-md: 14px;
+  --text-lg: 16px; --text-xl: 20px; --text-price: 25px;
+  --leading-body: 1.5; --leading-heading: 1.2;
+
+  /* Glass blur tiers — reused from styles/glass.css (2 tiers only) */
+  --glass-shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.12);
+  --glass-shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(124, 92, 252, 0.10);
+  --glass-inset-edge: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+
+  /* Focus ring (keyboard) */
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
 }
 
 [data-theme="dark"] {
-  --color-bg: #0b0d14;
-  --color-panel: #0f1119;
-  --color-panel-2: #141722;
-  --color-border: #1a1e2e;
-  --color-text: #e8eaef;
-  --color-text-sub: #6b7280;
-  --color-hover: #171b28;
-  --color-input-bg: #141722;
+  --color-bg: #0a0c14;
+  --bg-glow:
+    radial-gradient(1100px 600px at 85% -10%, rgba(124, 92, 252, 0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 110%, rgba(124, 92, 252, 0.06), transparent 55%);
+  --color-panel: #12141d;
+  --color-panel-2: #171a26;
+  --color-border: rgba(255, 255, 255, 0.10);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-text: #f1f5f9;
+  --color-text-sub: #94a3b8;
+  --color-hover: var(--surface-2);
+  --color-input-bg: rgba(255, 255, 255, 0.05);
+  --surface-1: rgba(255, 255, 255, 0.055);
+  --surface-2: rgba(255, 255, 255, 0.09);
+  --surface-3: rgba(255, 255, 255, 0.13);
 
-  --color-green: #34d399;
-  --color-red: #fb7185;
+  --color-accent-text: #8f75ff;
+  --color-accent-strong: #6343e8;
+  --color-accent-glow: rgba(124, 92, 252, 0.16);
+
+  --color-green: #10b981;
+  --color-red: #f43f5e;
   --color-yellow: #fbbf24;
   --color-blue: #60a5fa;
   --color-cyan: #22d3ee;
   --color-pink: #f472b6;
+  --color-up: var(--color-green);
+  --color-down: var(--color-red);
+  --color-up-muted: rgba(16, 185, 129, 0.14);
+  --color-down-muted: rgba(244, 63, 94, 0.14);
+  --color-support: #fde047;
+  --color-resistance: #a78bfa;
+
+  --glass-shadow-panel: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --glass-shadow-modal: 0 24px 64px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(124, 92, 252, 0.14);
+  --glass-inset-edge: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 
   /* Logo "ho" glow in dark mode */
   --ho-glow: 0 0 8px rgba(196, 181, 253, 0.55);
@@ -67,14 +121,25 @@ body {
 
 body {
   font-family: var(--font-sans);
-  font-size: 12px;
+  font-size: var(--text-base);
   font-weight: 400;
   background: var(--color-bg);
   color: var(--color-text);
   letter-spacing: 0.01em;
+  line-height: var(--leading-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background 0.25s ease, color 0.25s ease;
+  transition: background-color 0.25s ease, color 0.25s ease;
+}
+
+/* Dark theme adds the radial violet glow wash under the flat bg color */
+[data-theme="dark"] body {
+  background: var(--bg-glow), var(--color-bg);
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ─── Scrollbar ───────────────────────────────────────────────────────────── */
@@ -155,60 +220,6 @@ body {
 [data-theme="dark"] {
   --search-divider: rgba(255, 255, 255, 0.05);
   --search-section-label: #4b5563;
-}
-
-/* Overlay: stronger blur for cinematic feel (keeping for backward compat) */
-.search-overlay {
-  background: rgba(0, 0, 0, 0.60);
-  backdrop-filter: blur(10px) saturate(1.4);
-  -webkit-backdrop-filter: blur(10px) saturate(1.4);
-}
-
-/* Panel: premium frosted glass with gradient border glow */
-.search-panel {
-  border-radius: 18px;
-  /* Gradient border via box-shadow + outline trick */
-  position: relative;
-  overflow: hidden;
-
-  /* Light mode */
-  background: rgba(252, 253, 255, 0.92);
-  backdrop-filter: blur(40px) saturate(2);
-  -webkit-backdrop-filter: blur(40px) saturate(2);
-  box-shadow:
-    0 0 0 1px rgba(124, 92, 252, 0.18),
-    0 8px 16px rgba(0, 0, 0, 0.06),
-    0 32px 80px rgba(0, 0, 0, 0.14),
-    inset 0 1px 0 rgba(255, 255, 255, 1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.04);
-}
-
-/* Accent glow strip at top of panel */
-.search-panel::before {
-  content: '';
-  position: absolute;
-  top: 0; left: 0; right: 0;
-  height: 2px;
-  background: linear-gradient(90deg,
-    rgba(124, 92, 252, 0),
-    rgba(124, 92, 252, 0.9) 30%,
-    rgba(99, 179, 237, 0.9) 60%,
-    rgba(124, 92, 252, 0)
-  );
-  z-index: 1;
-}
-
-/* Dark mode panel */
-[data-theme="dark"] .search-panel {
-  background: rgba(11, 13, 22, 0.88);
-  backdrop-filter: blur(40px) saturate(2.2);
-  -webkit-backdrop-filter: blur(40px) saturate(2.2);
-  box-shadow:
-    0 0 0 1px rgba(124, 92, 252, 0.22),
-    0 8px 16px rgba(0, 0, 0, 0.30),
-    0 32px 80px rgba(0, 0, 0, 0.70),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 0 60px rgba(124, 92, 252, 0.06);
 }
 
 /* ── New glass-search class (2026 design tokens) ─────────────────────────── */
@@ -596,10 +607,6 @@ select.input-field:focus,
 .badge-pink {
   background: rgba(236, 72, 153, 0.12);
   color: var(--color-pink);
-}
-
-.gradient-accent {
-  background: linear-gradient(135deg, #7c5cfc, #a855f7);
 }
 
 /* ─── Animations ──────────────────────────────────────────────────────────── */
