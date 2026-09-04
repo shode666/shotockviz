@@ -106,6 +106,19 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
         };
     }, [selectedStock?.sym, fetchAll]);
 
+    // Escape closes the panel — bd:ux-2026-09 Chris review (Q-UX2): established
+    // pattern already used by SearchModal.tsx:163. `onClose` (passed down from
+    // ChartPage) also returns focus to the toggle button, so Escape/backdrop/X
+    // all converge on the same close+focus-return behavior.
+    useEffect(() => {
+        if (!isOpen) return;
+        const handler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') onClose();
+        };
+        window.addEventListener('keydown', handler);
+        return () => window.removeEventListener('keydown', handler);
+    }, [isOpen, onClose]);
+
     // News + fundamentals summary (loaded once per symbol, regardless of active tab)
     useEffect(() => {
         if (!selectedStock?.sym) return;

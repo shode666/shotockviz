@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { PanelRight } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import TradingChart from '@/components/chart/TradingChart';
@@ -38,6 +38,16 @@ export default function ChartPage() {
     const [crosshair, setCrosshair] = useState<CrosshairData | null>(null);
     const [isChartLoading, setIsChartLoading] = useState(false);
     const [rightPanelOpen, setRightPanelOpen] = useState(false);
+    const rightPanelToggleRef = useRef<HTMLButtonElement>(null);
+
+    // Single close path for the X button, Escape and the mobile backdrop
+    // (all three call RightPanel's onClose prop) — bd:ux-2026-09 Chris review
+    // (Q-UX2): focus must return to the trigger, not fall through to
+    // document.body when the just-clicked close button goes `inert`.
+    const closeRightPanel = useCallback(() => {
+        setRightPanelOpen(false);
+        rightPanelToggleRef.current?.focus();
+    }, []);
 
     return (
         <div className="flex flex-1 overflow-hidden">
@@ -94,6 +104,7 @@ export default function ChartPage() {
                         button since it had no z-index (auto=0). z-index: 20 wins regardless
                         of that library's internal value. */}
                     <button
+                        ref={rightPanelToggleRef}
                         onClick={() => setRightPanelOpen(v => !v)}
                         className="absolute top-3 right-3 panel border rounded-xl p-2 transition-colors hover:bg-[var(--color-hover)]"
                         style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)', zIndex: 20 }}
@@ -105,7 +116,7 @@ export default function ChartPage() {
                 </div>
             </div>
 
-            <RightPanel selectedStock={selectedStock} isOpen={rightPanelOpen} onClose={() => setRightPanelOpen(false)} />
+            <RightPanel selectedStock={selectedStock} isOpen={rightPanelOpen} onClose={closeRightPanel} />
         </div>
     );
 }

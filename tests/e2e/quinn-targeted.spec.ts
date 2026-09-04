@@ -135,7 +135,9 @@ test.describe('RightPanel overlay', () => {
     await expect(panel).toHaveJSProperty('inert', true, { timeout: 3_000 });
   });
 
-  test('Escape key closes the panel — 🔴 FINDING: no keydown handler exists', async ({ page }) => {
+  test('Escape key closes the panel', async ({ page }) => {
+    // bd:ux-2026-09 Chris review (Q-UX2) fix-verify — RightPanel.tsx now has
+    // a keydown/Escape handler (pattern: SearchModal.tsx:163).
     await page.setViewportSize({ width: 1280, height: 900 });
     const toggle = page.getByRole('button', { name: 'เปิดแผงข้อมูล' });
     await toggle.click();
@@ -143,14 +145,14 @@ test.describe('RightPanel overlay', () => {
     await expect(panel).toBeVisible();
 
     await page.keyboard.press('Escape');
-    // EXPECTED (per delegation spec): panel closes on Escape.
-    // ACTUAL: RightPanel.tsx has no keydown/Escape handler at all
-    // (grep confirms zero matches) — this assertion is expected to FAIL,
-    // documenting the gap, not asserting current (wrong) behavior.
     await expect(panel).toHaveJSProperty('inert', true, { timeout: 2_000 });
   });
 
-  test('focus returns to trigger button after close — 🔴 FINDING: no focus management', async ({ page }) => {
+  test('focus returns to trigger button after close', async ({ page }) => {
+    // bd:ux-2026-09 Chris review (Q-UX2) fix-verify — ChartPage's closeRightPanel
+    // now explicitly refocuses the toggle button (rightPanelToggleRef) instead
+    // of letting the just-clicked close button go `inert` and drop focus to
+    // document.body.
     await page.setViewportSize({ width: 1280, height: 900 });
     const toggle = page.getByRole('button', { name: 'เปิดแผงข้อมูล' });
     await toggle.click();
@@ -158,10 +160,6 @@ test.describe('RightPanel overlay', () => {
     const closeBtn = panel.getByRole('button', { name: 'ปิดแผงข้อมูล' });
     await closeBtn.click();
 
-    // EXPECTED: focus returns to the toggle button (now re-labeled "เปิดแผงข้อมูล").
-    // ACTUAL: no explicit focus() call anywhere in RightPanel.tsx/ChartPage.tsx
-    // — closing the panel makes the just-clicked close button `inert`,
-    // which forces focus to document.body, not back to the trigger.
     await expect(page.getByRole('button', { name: 'เปิดแผงข้อมูล' })).toBeFocused({ timeout: 2_000 });
   });
 });
