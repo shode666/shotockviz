@@ -4,7 +4,7 @@ Pure file move: `GET /{symbol}/fundamentals`, `GET /{symbol}/financials`,
 """
 import json as _json
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from api.middleware.auth import get_optional_user
@@ -115,20 +115,14 @@ async def get_financials_history(
 
 @router.get("/{symbol}/earnings")
 async def get_earnings_events(
-    request: Request,
     symbol: str,
     limit: int = Query(8, ge=1, le=20, description="Number of recent earnings events"),
-    offset: int = Query(0, ge=0, description="Number of most-recent events to skip"),
     _user: User | None = Depends(get_optional_user),
 ):
     """Get recent earnings events with EPS surprise and price impact — pure-read.
 
     Returns actual vs estimated EPS, surprise %, and 1-day price impact
     for chart marker overlays (green = beat, red = miss).
-
-    bd:deps-2026-09 S2 (ADR-004) — paginated via limit/offset; page window
-    also surfaced in the envelope's meta.total/limit/offset (opt-in via
-    request.state.pagination, schemas/envelope.py).
     """
     sym = symbol.upper()
 
@@ -139,9 +133,7 @@ async def get_earnings_events(
         cached = await r.get(cache_key)
         if cached:
             data = _json.loads(cached)
-            page = data[offset : offset + limit]
-            request.state.pagination = {"total": len(data), "limit": limit, "offset": offset}
-            return {"symbol": sym, "earnings": page}
+            return {"symbol": sym, "earnings": data[:limit]}
     except Exception:
         pass
 
@@ -149,19 +141,12 @@ async def get_earnings_events(
     try:
         from core.database import AsyncSessionLocal
         from models.earnings_event import EarningsEvent
-        from sqlalchemy import func
 
         async with AsyncSessionLocal() as session:
-            total = (
-                await session.execute(
-                    select(func.count()).select_from(EarningsEvent).where(EarningsEvent.symbol == sym)
-                )
-            ).scalar_one()
             result = await session.execute(
                 select(EarningsEvent)
                 .where(EarningsEvent.symbol == sym)
                 .order_by(EarningsEvent.report_date.desc())
-                .offset(offset)
                 .limit(limit)
             )
             rows = result.scalars().all()
@@ -185,7 +170,6 @@ async def get_earnings_events(
                     await redis_cache.setex(cache_key, 21600, _json.dumps(data))
                 except Exception:
                     pass
-                request.state.pagination = {"total": total, "limit": limit, "offset": offset}
                 return {"symbol": sym, "earnings": data}
     except Exception as e:
         logger.debug("Earnings events DB error", symbol=sym, error=str(e))

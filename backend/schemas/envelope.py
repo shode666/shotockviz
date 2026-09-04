@@ -79,17 +79,6 @@ class EnvelopingAPIRoute(APIRoute):
             request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
             envelope = BaseResponse.ok(data=body, request_id=request_id)
 
-            # bd:deps-2026-09 S2 (ADR-004) — opt-in pagination meta. A list
-            # handler that supports limit/offset sets
-            # `request.state.pagination = {"total": ..., "limit": ..., "offset": ...}`
-            # before returning; everything else leaves meta.total/limit/offset
-            # as None (additive field, schemas/common.py).
-            pagination = getattr(request.state, "pagination", None)
-            if pagination:
-                envelope.meta.total = pagination.get("total")
-                envelope.meta.limit = pagination.get("limit")
-                envelope.meta.offset = pagination.get("offset")
-
             return JSONResponse(
                 content=envelope.model_dump(mode="json"),
                 status_code=response.status_code,
