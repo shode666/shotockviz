@@ -20,7 +20,12 @@ function Section({ id, title, children }: { id: string; title: string; children:
 }
 
 export default function SettingsPage() {
-    const { theme, toggleTheme } = useAppStore();
+    // bd:ux-2026-09 user-reported regression investigation — was toggleTheme,
+    // which just flips dark<->light regardless of which card was clicked;
+    // clicking the theme you're already ON silently landed you on the OTHER
+    // one. setTheme(key) selects the clicked card's theme explicitly instead
+    // (appStore.ts).
+    const { theme, setTheme } = useAppStore();
     // Telegram chat id — UI only, local state (bd:ux-2026-09). Backend wiring
     // for actually saving/verifying this id belongs to the features-2026-09 bd.
     const [telegramChatId, setTelegramChatId] = useState('');
@@ -74,7 +79,7 @@ export default function SettingsPage() {
                                     return (
                                         <button
                                             key={key}
-                                            onClick={toggleTheme}
+                                            onClick={() => setTheme(key)}
                                             aria-pressed={active}
                                             className="flex flex-col items-center justify-center p-4 rounded-xl transition-all"
                                             style={{

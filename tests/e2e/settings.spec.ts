@@ -132,6 +132,18 @@ test.describe('Settings Page — navigation', () => {
   test('clicking "Light" card switches to light mode', async ({ page }) => {
     await page.addInitScript(() => localStorage.setItem('theme', 'dark'));
     await page.goto('/settings');
+    // bd:ux-2026-09 user-reported regression investigation — same hydration
+    // race as the item-6 fix in the describe above (line 20-25): this is a
+    // SECOND page.goto() (the describe's own beforeEach already navigated to
+    // '/'), so it re-triggers a full document load + re-hydration. goto()
+    // only waits for the browser 'load' event, not for React to finish
+    // hydrating and wire up this button's onClick — the click below landed
+    // on a DOM-present-but-not-yet-interactive button and did nothing.
+    // Verified via repro: data-theme stayed `null` after both the goto AND
+    // the click without this wait [output: scratchpad/diag-settings-repro.mjs
+    // vs diag-settings-repro2.mjs — same page, same clicks, only difference
+    // is this wait — repro2 resolves 'dark' then 'light' correctly].
+    await page.waitForLoadState('networkidle');
 
     await page.getByRole('button', { name: 'Light', exact: false }).first().click();
 

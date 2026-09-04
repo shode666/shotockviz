@@ -79,8 +79,25 @@ export default function Navbar() {
         <>
             <nav
                 className="hidden md:flex items-center px-4 gap-5 border-b flex-shrink-0"
+                // bd:ux-2026-09 user-reported regression — account-dropdown bled through
+                // by the chart canvas on the Chart page. Root cause verified via
+                // elementFromPoint() at the geometric overlap between the dropdown
+                // (bottom edge ~y139) and TradingChart's <canvas> (top edge ~y127,
+                // fixed regardless of viewport height): `backdropFilter` on THIS <nav>
+                // creates its own stacking context, so the dropdown's `z-50` only wins
+                // comparisons *inside* that context — from the root stacking context,
+                // the whole Navbar paints at the implicit "auto" layer (same class as
+                // z-index:0/static content) while lightweight-charts' canvases (their
+                // own z-index:1/2, same trick as [Q-UX1] commit 80f0d7d) sit in the
+                // *positive* z-index paint layer, which always wins regardless of DOM
+                // order. Bumping the dropdown's own z-index further would not help —
+                // it already wins locally. Elevating the trapping context (this <nav>)
+                // above every z-index used inside chart components (max observed: 20,
+                // ChartPage.tsx RightPanel toggle) is what actually fixes it.
                 style={{
                     height: 48,
+                    position: 'relative',
+                    zIndex: 30,
                     background: 'var(--surface-1)',
                     backdropFilter: 'var(--glass-blur-nav)',
                     WebkitBackdropFilter: 'var(--glass-blur-nav)',
