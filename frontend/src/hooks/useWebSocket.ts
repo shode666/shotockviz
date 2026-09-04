@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import useAuthStore from '@/store/authStore';
 import useAppStore from '@/store/appStore';
 import toast from 'react-hot-toast';
+import { shouldBumpDataVersion } from './wsDataReady';
 
 /**
  * WebSocket hook for real-time updates.
@@ -11,6 +12,8 @@ import toast from 'react-hot-toast';
  *   - 'price_update'    → update live prices in sidebar
  *   - 'data_ready'      → backend finished fetching external data,
  *                          bump dataVersion so React components re-fetch
+ *                          (quote data_type bumps immediately — see
+ *                          shouldBumpDataVersion)
  */
 export default function useWebSocket() {
     const { token, user } = useAuthStore();
@@ -67,6 +70,11 @@ export default function useWebSocket() {
                         console.debug('[WS] data_ready:', data.data_type, data.symbol, data.timeframe);
                         if (setPayloadRef.current) {
                             setPayloadRef.current(data);
+                        }
+                        // Quote data is what the sidebar/watchlist poll (usePriceUpdates)
+                        // cares about — bump immediately instead of waiting up to 60s.
+                        if (shouldBumpDataVersion(data)) {
+                            useAppStore.getState().bumpDataVersion();
                         }
                     } else if (data.type === 'price_update') {
                         // Live price push from Celery worker
