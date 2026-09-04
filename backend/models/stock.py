@@ -22,6 +22,7 @@ class MarketType(str, PyEnum):
     TW = "TW"      # Taiwan Stock Exchange (.TW)
     SG = "SG"      # Singapore Exchange (.SI)
     IT = "IT"      # Borsa Italiana (.MI)
+    CRYPTO = "CRYPTO"  # BTC-USD / ETH-USD (bd:features-2026-09 slice B)
 
 
 class Stock(Base):

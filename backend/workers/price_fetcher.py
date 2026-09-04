@@ -5,16 +5,17 @@ KEY DESIGN — "Round-robin market rotation"
 Single `fetch_prices` task runs every 1 minute.  Each run it picks the NEXT
 market slot from a rotating list (stored as Redis counter).
 
-With 5 market slots (SET, US, JP+HK+CN, EU, overview) each market updates
-every 5 minutes.  During off-hours a market is skipped → faster rotation
-for markets that are open.
+With 6 market slots (SET, US, JP+HK+CN, EU, Crypto, overview) each market
+updates every 6 minutes.  During off-hours a market is skipped → faster
+rotation for markets that are open.
 
 Slot assignment:
   0 = SET (.BK)                — skip if outside SET hours
   1 = US  (no suffix)          — skip if outside US hours
   2 = Asia (JP .T, HK .HK, CN .SS/.SZ) — skip if outside Asia hours
   3 = Europe (UK .L, DE .DE, FR .PA, NL .AS) — skip if outside EU hours
-  4 = Overview (indices, FX, gold) — always runs
+  4 = Crypto (BTC-USD, ETH-USD)  — always runs (24/7, no market hours)
+  5 = Overview (indices, FX, gold) — always runs
 
 If the current slot's market is closed, the task immediately advances to
 the next slot, so open markets get more frequent updates.
@@ -30,6 +31,7 @@ from core.symbol_utils import (
     normalize_for_yahoo,
     detect_market,
     is_thai_stock,
+    is_crypto,
     deduplicate,
 )
 from workers.helpers.symbol_loader import get_watched_symbols
@@ -66,7 +68,14 @@ def _is_europe(sym: str) -> bool:
 
 
 def _is_us(sym: str) -> bool:
-    return not is_thai_stock(sym) and not _is_asia(sym) and not _is_europe(sym)
+    # bd:features-2026-09 slice B — exclude crypto so BTC-USD/ETH-USD don't
+    # land in both the US slot (catch-all) AND the new Crypto slot below.
+    return (
+        not is_thai_stock(sym)
+        and not _is_asia(sym)
+        and not _is_europe(sym)
+        and not is_crypto(sym)
+    )
 
 
 def _set_hours(utc_now: datetime) -> bool:
@@ -110,6 +119,9 @@ MARKET_SLOTS = [
     ("US", _is_us, _us_hours),
     ("Asia", _is_asia, _asia_hours),
     ("Europe", _is_europe, _eu_hours),
+    # bd:features-2026-09 slice B — 24/7, reuse existing `_always` (no new
+    # market-hours model per Tara/Sara: 24/7 = "no market hours", simplest case).
+    ("Crypto", is_crypto, _always),
     ("Overview", None, _always),  # None = use FALLBACK_IDX only
 ]
 

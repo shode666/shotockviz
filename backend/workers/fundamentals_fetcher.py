@@ -14,10 +14,12 @@ logger = get_logger(__name__)
 @shared_task(bind=True, max_retries=2, default_retry_delay=60)
 def prefetch_fundamentals(self):
     """
-    Pre-fetch fundamentals for all tracked symbols (not FUND market type).
+    Pre-fetch fundamentals for all tracked symbols (not FUND/CRYPTO market type).
 
     Flow:
-      1. Query DB for all active symbols (exclude FUND market type)
+      1. Query DB for all active symbols (exclude FUND, CRYPTO market types —
+         bd:features-2026-09 slice B §4.5: BTC-USD has no PE/PB/EPS, skipping
+         saves yfinance quota and avoids junk fundamentals fields)
       2. For each symbol: call yfinance .info to get PE, PB, EPS, marketCap, etc.
       3. Cache in Redis `fundamentals:{symbol}` with 14400s (4h) TTL
       4. Publish `data_ready` type=fundamentals on `price_updates` channel
@@ -34,10 +36,11 @@ def prefetch_fundamentals(self):
         # Connect to sync DB
         engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
 
-        # Query all active non-FUND symbols
+        # Query all active non-FUND, non-CRYPTO symbols
         with engine.connect() as conn:
             rows = conn.execute(text(
-                "SELECT symbol FROM stocks WHERE is_active = true AND market != 'FUND' ORDER BY symbol"
+                "SELECT symbol FROM stocks WHERE is_active = true "
+                "AND market NOT IN ('FUND', 'CRYPTO') ORDER BY symbol"
             )).fetchall()
 
         if not rows:

@@ -6,6 +6,7 @@ from core.symbol_utils import (
     detect_market,
     is_thai_stock,
     is_fund,
+    is_crypto,
     partition_by_market,
     deduplicate,
     YAHOO_SYMBOL_MAP,
@@ -141,6 +142,26 @@ class TestPartitionByMarket:
         thai, other = partition_by_market(["PTT.BK", "PTT.BK", "AAPL", "AAPL"])
         assert thai == ["PTT.BK"]
         assert other == ["AAPL"]
+
+
+# ── is_crypto (bd:features-2026-09 slice B) ──────────────────────────────────
+
+class TestIsCrypto:
+    @pytest.mark.parametrize("symbol,expected", [
+        ("BTC-USD", True),
+        ("ETH-USD", True),
+        ("btc-usd", True),   # case-insensitive
+        ("BRK-B", False),    # suffix "-B", not "-USD"
+        ("BF-B", False),
+        ("BF-A", False),
+        ("GLD", False),      # plain US ETF ticker, no dash at all
+        ("PTT.BK", False),
+        ("THBUSD=X", False),  # ends "=X", not "-USD"
+        ("K-CHINA", False),
+        ("AAPL", False),
+    ])
+    def test_allowlist_and_edge_cases(self, symbol, expected):
+        assert is_crypto(symbol) is expected
 
 
 # ── deduplicate ───────────────────────────────────────────────────────────────
