@@ -179,7 +179,10 @@ export default function LoginPage() {
                         </ClientOnly>
                     </div>
 
-                    <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--color-text-sub)', opacity: 0.7 }}>
+                    {/* bd:ux-2026-09 g1 iter1 (Uma FAIL #2) — solid --color-text-muted
+                        token instead of opacity-thinned --color-text-sub (was 4.02:1,
+                        below AA; token measures 4.78:1 dark / 4.67:1 light). */}
+                    <p className="text-xs text-center leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>
                         ระบบจะสร้างบัญชีให้อัตโนมัติเมื่อเข้าสู่ระบบครั้งแรก
                     </p>
                 </div>

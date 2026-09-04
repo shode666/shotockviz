@@ -17,6 +17,10 @@
   --color-border-strong: #d8dbe4;
   --color-text: #2d3142;
   --color-text-sub: #8b91a7;
+  /* Solid muted color — NOT opacity — measured 4.67:1 on white panel.
+     bd:ux-2026-09 g1 iter1 (Uma FAIL #2): opacity thins the actual
+     rendered color below AA; use this token for de-emphasized text instead. */
+  --color-text-muted: #6b7392;
   --color-hover: #f0f1f5;
   --color-input-bg: #f0f2f7;
   --surface-1: rgba(0, 0, 0, 0.03);
@@ -81,6 +85,9 @@
   --color-border-strong: rgba(255, 255, 255, 0.16);
   --color-text: #f1f5f9;
   --color-text-sub: #94a3b8;
+  /* Solid muted color — measured 4.78:1 on surface-1 composite #171921
+     [output: scratchpad wcag.py-derived check, bd:ux-2026-09 g1 iter1]. */
+  --color-text-muted: #7c8698;
   --color-hover: var(--surface-2);
   --color-input-bg: rgba(255, 255, 255, 0.05);
   --surface-1: rgba(255, 255, 255, 0.055);
@@ -510,7 +517,10 @@ select.input-field:focus,
 }
 
 .btn-accent {
-  background: var(--color-accent);
+  /* bd:ux-2026-09 g1 iter1 (Uma FAIL #1) — --color-accent (#7c5cfc) gives
+     white text only 4.38:1; --color-accent-strong (#6343e8) is the token
+     doc's designated solid-button fill, measured 6.00:1. */
+  background: var(--color-accent-strong);
   color: #fff;
   border: none;
   border-radius: var(--radius-md);

@@ -387,7 +387,12 @@ export default function Sidebar() {
                             onDragOver={(e) => handleDragOver(e, s.sym)}
                             onDragEnd={handleDragEnd}
                             style={{
-                                minHeight: 'var(--row-h)',
+                                // bd:ux-2026-09 g1 iter1 (Uma FAIL #3) — fixed height (was
+                                // minHeight, which let the default 1.5 line-height on 2
+                                // stacked text lines + py-2 push rows to ~49px). Row must
+                                // be exactly --row-h (34px) per token/mock.
+                                height: 'var(--row-h)',
+                                overflow: 'hidden',
                                 background: isActive ? 'var(--surface-3)' : 'transparent',
                                 borderRight: isActive ? '2px solid var(--color-accent)' : '2px solid transparent',
                                 borderTop: isDragOver ? '2px solid var(--color-accent)' : '2px solid transparent',
@@ -406,20 +411,20 @@ export default function Sidebar() {
                             )}
                             <button
                                 onClick={() => handleSelect(s.sym, s.name)}
-                                className="flex-1 flex items-center justify-between px-2 py-2 transition-colors text-left"
-                                style={{ cursor: 'pointer' }}
+                                className="flex-1 flex items-center justify-between px-2 py-0 transition-colors text-left"
+                                style={{ cursor: 'pointer', height: 'var(--row-h)' }}
                                 onMouseEnter={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'var(--surface-2)'; }}
                                 onMouseLeave={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'transparent'; }}
                             >
-                                <div>
-                                    <div className="text-[11px] font-semibold">{parseSymbol(s.sym).display}</div>
-                                    <div className="text-[10px] truncate" style={{ maxWidth: 90, color: 'var(--color-text-sub)' }}>
+                                <div className="leading-none">
+                                    <div className="text-[11px] font-semibold leading-none">{parseSymbol(s.sym).display}</div>
+                                    <div className="text-[10px] leading-none truncate mt-1" style={{ maxWidth: 90, color: 'var(--color-text-sub)' }}>
                                         {s.name}{isPending ? ' · เพิ่งเพิ่ม' : ''}
                                     </div>
                                 </div>
-                                <div className="text-right">
+                                <div className="text-right leading-none">
                                     {isPending ? (
-                                        <div className="flex items-center gap-1.5 justify-end" style={{ color: 'var(--color-text-sub)' }}>
+                                        <div className="flex items-center gap-1.5 justify-end leading-none" style={{ color: 'var(--color-text-sub)' }}>
                                             <span
                                                 aria-hidden="true"
                                                 style={{
@@ -430,15 +435,15 @@ export default function Sidebar() {
                                                     animation: 'spin 0.65s linear infinite',
                                                 }}
                                             />
-                                            <span className="text-[10px]">loading price…</span>
+                                            <span className="text-[10px] leading-none">loading price…</span>
                                         </div>
                                     ) : (
-                                        <div className="text-[11px] font-medium" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>{price}</div>
+                                        <div className="text-[11px] font-medium leading-none" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>{price}</div>
                                     )}
                                     {isPending ? (
-                                        <div className="skeleton ml-auto" style={{ width: 34, height: 8, borderRadius: 4 }} />
+                                        <div className="skeleton ml-auto mt-1" style={{ width: 34, height: 8, borderRadius: 4 }} />
                                     ) : (
-                                        <div className="text-[10px]" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', color: (isFund && (!q?.change_pct || q.change_pct === 0)) ? 'var(--color-text-sub)' : (up ? 'var(--color-green)' : 'var(--color-red)') }}>{pct}</div>
+                                        <div className="text-[10px] leading-none mt-1" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', color: (isFund && (!q?.change_pct || q.change_pct === 0)) ? 'var(--color-text-sub)' : (up ? 'var(--color-green)' : 'var(--color-red)') }}>{pct}</div>
                                     )}
                                 </div>
                             </button>
