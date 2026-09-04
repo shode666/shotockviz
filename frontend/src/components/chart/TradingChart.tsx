@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Timer, Landmark, BarChart3 } from 'lucide-react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
 import useAppStore from '@/store/appStore';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP } from '@/utils/indicators';
@@ -324,7 +325,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             {isTimeout && !isLoading && (
                 <div className="absolute inset-0 flex items-center justify-center z-10" style={{ background: 'var(--color-bg)', opacity: 0.92 }}>
                     <div className="text-center">
-                        <div className="text-2xl mb-2">⏱</div>
+                        <Timer size={24} strokeWidth={2} className="mb-2 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-3" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
                         <button onClick={refetch} className="btn-accent text-xs px-3 py-1.5">Retry</button>
@@ -344,7 +345,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     >
                         {isFund ? (
                             <>
-                                <span className="text-4xl block mb-3">🏦</span>
+                                <Landmark size={24} strokeWidth={2} className="block mx-auto mb-3" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                                 <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
                                     กองทุนรวม — ไม่มีข้อมูลกราฟ
                                 </div>
@@ -356,7 +357,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                             </>
                         ) : (
                             <>
-                                <span className="text-4xl block mb-3">📊</span>
+                                <BarChart3 size={24} strokeWidth={2} className="block mx-auto mb-3" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                                 <div className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>
                                     No data available
                                 </div>

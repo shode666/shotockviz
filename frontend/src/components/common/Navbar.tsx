@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Link, useMatches, useNavigate } from '@tanstack/react-router'
 import {
-    Search, Sun, Moon, LogOut, Settings,
+    Search, Sun, Moon, LogOut, Settings, Command,
     TrendingUp, SlidersHorizontal, Briefcase, Bell, Newspaper, LayoutDashboard,
 } from 'lucide-react'
 import useAppStore from '@/store/appStore'
@@ -141,7 +141,10 @@ export default function Navbar() {
                         style={{ height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
                     >
                         <Search size={12} />
-                        ค้นหา PTT, AAPL... ⌘K
+                        <span className="flex items-center gap-0.5">
+                            ค้นหา PTT, AAPL...
+                            <Command size={12} strokeWidth={2} aria-hidden="true" />K
+                        </span>
                     </button>
 
                     {/* Market Status — dynamic */}

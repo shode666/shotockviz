@@ -25,13 +25,9 @@ const LAYOUT_CONFIGS: Record<LayoutMode, { rows: number; cols: number }> = {
     '2x2': { rows: 2, cols: 2 },
 };
 
-const LAYOUT_LABELS: Record<LayoutMode, string> = {
-    '1x1': '▢',
-    '2x1': '▢▢',
-    '1x2': '▢\n▢',
-    '2x2': '▢▢\n▢▢',
-};
-
+// bd:ux-2026-09 icon rule — dead LAYOUT_LABELS (unicode ▢ text) removed; the
+// actual grid picker already renders LayoutIcon below (inline SVG rects, the
+// allowed data-viz exception per 05-icon-font-rule.md).
 function LayoutIcon({ mode, active }: { mode: LayoutMode; active: boolean }) {
     const { rows, cols } = LAYOUT_CONFIGS[mode];
     const size = 20;

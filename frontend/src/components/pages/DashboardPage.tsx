@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2 } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2, ArrowRight } from 'lucide-react';
 import dashboardService from '@/services/dashboardService';
 import portfolioService from '@/services/portfolioService';
 import useAppStore from '@/store/appStore';
@@ -150,9 +150,9 @@ export default function DashboardPage() {
                                 <Briefcase size={11} /> Portfolio
                             </span>
                             <button onClick={() => navigate({ to: '/portfolio' })}
-                                className="text-[10px] font-medium transition-colors hover:opacity-70"
+                                className="text-[10px] font-medium transition-colors hover:opacity-70 flex items-center gap-0.5"
                                 style={{ color: 'var(--color-accent)' }}>
-                                ดูทั้งหมด →
+                                ดูทั้งหมด <ArrowRight size={12} strokeWidth={2} aria-hidden="true" />
                             </button>
                         </div>
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Newspaper, Briefcase, BarChart2, StickyNote, Save } from 'lucide-react';
+import { Newspaper, Briefcase, BarChart2, StickyNote, Save, Check } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
 import stockService from '@/services/stockService';
@@ -193,7 +193,11 @@ export default function BottomPanel() {
                                                 บันทึก thesis สำหรับ {displaySymbol(selectedStock?.sym)}
                                             </span>
                                             <div className="flex items-center gap-1.5">
-                                                {noteSaved && <span className="text-[10px]" style={{ color: 'var(--color-green)' }}>✓ บันทึกแล้ว</span>}
+                                                {noteSaved && (
+                                                    <span className="text-[10px] flex items-center gap-0.5" style={{ color: 'var(--color-green)' }}>
+                                                        <Check size={11} strokeWidth={2} aria-hidden="true" /> บันทึกแล้ว
+                                                    </span>
+                                                )}
                                                 <button onClick={saveNote} disabled={noteSaving}
                                                     className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg transition-colors"
                                                     style={{ background: 'var(--color-accent-glow, rgba(124,92,252,0.15))', color: 'var(--color-accent)' }}>

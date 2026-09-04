@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { HeadContent, Outlet, Scripts, createRootRoute } from '@tanstack/react-router'
 import { Toaster } from 'react-hot-toast'
+import { CheckCircle2, XCircle } from 'lucide-react'
 import { GoogleOAuthProvider, useGoogleOneTapLogin } from '@react-oauth/google'
 
 import Navbar from '@/components/common/Navbar'
@@ -116,7 +117,14 @@ function RootComponent() {
       <StatusBar />
       <MobileTabBar />
       <SearchModal />
-      <Toaster />
+      {/* bd:ux-2026-09 icon rule #4 — lucide icons replace react-hot-toast's
+          own default SVGs so toasts match the rest of the app's icon set. */}
+      <Toaster
+        toastOptions={{
+          success: { icon: <CheckCircle2 size={20} strokeWidth={2} color="var(--color-green)" aria-hidden="true" /> },
+          error: { icon: <XCircle size={20} strokeWidth={2} color="var(--color-red)" aria-hidden="true" /> },
+        }}
+      />
     </div>
   )
 }

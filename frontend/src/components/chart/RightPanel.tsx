@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { BellPlus } from 'lucide-react';
+import { BellPlus, Timer } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
 import alertService from '@/services/alertService';
@@ -136,8 +136,8 @@ export default function RightPanel({ selectedStock }) {
             <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
                 <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Stats</div>
                 {timedOut && (
-                    <div className="text-[11px] py-1 mb-1" style={{ color: 'var(--color-text-sub)' }}>
-                        ⏱ Timed out —{' '}
+                    <div className="text-[11px] py-1 mb-1 flex items-center gap-1" style={{ color: 'var(--color-text-sub)' }}>
+                        <Timer size={12} strokeWidth={2} aria-hidden="true" /> Timed out —{' '}
                         <button
                             className="underline"
                             style={{ color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}

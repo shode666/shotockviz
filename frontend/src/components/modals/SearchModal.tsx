@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Search, Clock, X, TrendingUp, Star, ArrowRight, Zap } from 'lucide-react';
+import { Search, Clock, X, TrendingUp, Star, ArrowRight, Zap, ArrowUp, ArrowDown, CornerDownLeft } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
@@ -351,7 +351,7 @@ export default function SearchModal() {
                     {/* No results */}
                     {!loading && query.length > 0 && displayItems.length === 0 && (
                         <div className="py-10 text-center">
-                            <div className="text-2xl mb-2">🔍</div>
+                            <Search size={24} strokeWidth={2} className="mb-2 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                             <div className="text-xs" style={{ color: 'var(--color-text-sub)' }}>
                                 ไม่พบ "<span style={{ color: 'var(--color-text)' }}>{query}</span>"
                             </div>
@@ -412,12 +412,12 @@ export default function SearchModal() {
                 {/* ── Footer hint ───────────────────────────────────────────── */}
                 <div className="search-footer flex items-center gap-4 px-5 py-2.5">
                     <span className="flex items-center gap-1">
-                        <kbd className="search-kbd-mini">↑</kbd>
-                        <kbd className="search-kbd-mini">↓</kbd>
+                        <kbd className="search-kbd-mini"><ArrowUp size={10} strokeWidth={2} aria-hidden="true" /></kbd>
+                        <kbd className="search-kbd-mini"><ArrowDown size={10} strokeWidth={2} aria-hidden="true" /></kbd>
                         <span>เลือก</span>
                     </span>
                     <span className="flex items-center gap-1">
-                        <kbd className="search-kbd-mini">↵</kbd>
+                        <kbd className="search-kbd-mini"><CornerDownLeft size={10} strokeWidth={2} aria-hidden="true" /></kbd>
                         <span>เปิด</span>
                     </span>
                     <span className="flex items-center gap-1">

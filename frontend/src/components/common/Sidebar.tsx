@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import { useNavigate, useMatchRoute, useRouterState } from '@tanstack/react-router';
-import { Plus, GripVertical, Loader2 } from 'lucide-react';
+import { Plus, GripVertical, Loader2, X } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
 import watchlistService from '@/services/watchlistService';
@@ -451,12 +451,13 @@ export default function Sidebar() {
                                 <button
                                     onClick={() => handleRemove(s.sym)}
                                     disabled={deletingSyms.has(s.sym)}
+                                    aria-label={`ลบ ${s.sym} ออกจาก watchlist`}
                                     className="pr-2 opacity-0 group-hover:opacity-100 transition-opacity"
                                     style={{ color: 'var(--color-text-sub)', cursor: deletingSyms.has(s.sym) ? 'default' : 'pointer' }}
                                 >
                                     {deletingSyms.has(s.sym)
                                         ? <Loader2 size={11} className="animate-spin" />
-                                        : <span style={{ fontSize: '10px' }}>✕</span>
+                                        : <X size={11} strokeWidth={2} aria-hidden="true" />
                                     }
                                 </button>
                             )}

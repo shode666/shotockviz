@@ -1,4 +1,4 @@
-import { Bell, Zap } from 'lucide-react';
+import { Bell, Zap, ArrowRight } from 'lucide-react';
 import { displaySymbol } from '@/utils/formatters';
 
 interface AlertNearTargetItemProps {
@@ -64,10 +64,10 @@ export function AlertsNearTarget({
                 </span>
                 <button
                     onClick={onNavigateToAlerts}
-                    className="text-[10px] font-medium transition-colors hover:opacity-70"
+                    className="text-[10px] font-medium transition-colors hover:opacity-70 flex items-center gap-0.5"
                     style={{ color: 'var(--color-accent)' }}
                 >
-                    จัดการ →
+                    จัดการ <ArrowRight size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
             </div>
 
@@ -88,8 +88,8 @@ export function AlertsNearTarget({
                     <div className="flex-1 min-w-0">
                         {alertsNear.length > 0 ? (
                             <div className="space-y-1.5">
-                                <p className="text-[10px] font-semibold mb-1" style={{ color: '#f59e0b' }}>
-                                    ⚡ ใกล้ถึง target:
+                                <p className="text-[10px] font-semibold mb-1 flex items-center gap-1" style={{ color: '#f59e0b' }}>
+                                    <Zap size={11} strokeWidth={2} aria-hidden="true" /> ใกล้ถึง target:
                                 </p>
                                 {alertsNear.map((a: any, i: number) => (
                                     <AlertNearTarget

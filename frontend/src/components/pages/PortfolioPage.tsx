@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Briefcase, Trash2, History, BarChart2, FilterX } from 'lucide-react';
+import { Briefcase, Trash2, History, BarChart2, FilterX, Timer } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, formatPriceTH } from '@/utils/formatters';
@@ -101,7 +101,7 @@ export default function PortfolioPage() {
                     </>
                 ) : timedOut ? (
                     <div className="panel border rounded-2xl p-8 text-center animate-fade-in" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
-                        <div className="text-3xl mb-3">⏱</div>
+                        <Timer size={24} strokeWidth={2} className="mb-3 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-4" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
                         <button onClick={reload} className="btn-accent">Retry</button>

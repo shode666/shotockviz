@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Bell, BellPlus, X, Search, Loader2 } from 'lucide-react';
+import { Bell, BellPlus, X, Search, Loader2, CheckCircle2, Timer } from 'lucide-react';
 import alertService from '@/services/alertService';
 import stockService from '@/services/stockService';
 import useAuthStore from '@/store/authStore';
@@ -8,10 +8,14 @@ import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/ut
 const ALERT_TYPES = ['Price Above', 'Price Below', 'RSI Below', 'RSI Above', 'Golden Cross', 'Death Cross', 'Volume Spike'];
 const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
 
+// label has no glyph prefix — the status dot (rendered separately, see the
+// `<div className="w-2 h-2 rounded-full" ...>` toggle button) already carries
+// that signal; only "triggered" gets an extra lucide CheckCircle2 (bd:ux-2026-09
+// icon rule — no emoji/unicode glyph as icon).
 const STATUS_STYLE = {
-    active: { dot: 'var(--color-green)', label: '● Active', color: 'var(--color-green)' },
-    triggered: { dot: 'var(--color-yellow)', label: '✅ Triggered', color: 'var(--color-yellow)' },
-    inactive: { dot: 'var(--color-text-sub)', label: '○ Inactive', color: 'var(--color-text-sub)' },
+    active: { dot: 'var(--color-green)', label: 'Active', color: 'var(--color-green)', Icon: null },
+    triggered: { dot: 'var(--color-yellow)', label: 'Triggered', color: 'var(--color-yellow)', Icon: CheckCircle2 },
+    inactive: { dot: 'var(--color-text-sub)', label: 'Inactive', color: 'var(--color-text-sub)', Icon: null },
 };
 
 const EMPTY_FORM = { symbol: '', alert_type: 'Price Above', condition: 'above', value: '', channel: 'in_app' };
@@ -174,7 +178,7 @@ export default function AlertsPage() {
                     </div>
                 ) : timedOut ? (
                     <div className="panel border rounded-2xl p-8 text-center animate-fade-in" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
-                        <div className="text-3xl mb-3">⏱</div>
+                        <Timer size={24} strokeWidth={2} className="mb-3 mx-auto" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                         <p className="text-sm font-medium mb-1">Request timed out</p>
                         <p className="text-xs mb-4" style={{ color: 'var(--color-text-sub)' }}>ข้อมูลใช้เวลานานเกินไป — กรุณาลองใหม่</p>
                         <button onClick={loadAlerts} className="btn-accent">Retry</button>
@@ -212,7 +216,10 @@ export default function AlertsPage() {
                                         </div>
                                     </div>
                                     <div className="text-right flex-shrink-0">
-                                        <div className="text-[11px] mb-0.5" style={{ color: s.color }}>{s.label}</div>
+                                        <div className="text-[11px] mb-0.5 flex items-center justify-end gap-1" style={{ color: s.color }}>
+                                            {s.Icon && <s.Icon size={11} strokeWidth={2} aria-hidden="true" />}
+                                            {s.label}
+                                        </div>
                                     </div>
                                     <button onClick={() => handleDelete(a.id)} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
                                         onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}

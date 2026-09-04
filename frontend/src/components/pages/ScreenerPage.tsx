@@ -122,12 +122,12 @@ export default function ScreenerPage() {
                 {/* Results table */}
                 <div className="panel border rounded-2xl overflow-hidden" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
                     <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: 'var(--color-border)' }}>
-                        <span className="text-xs font-semibold">
+                        <span className="text-xs font-semibold inline-flex items-center gap-1">
                             {loading
                                 ? 'กำลังค้นหา…'
                                 : hasRun
                                     ? `ผลลัพธ์ ${results.length} หุ้น`
-                                    : 'กด ▶ Run Screen เพื่อเริ่มค้นหา'}
+                                    : <>กด <Play size={12} strokeWidth={2} aria-hidden="true" /> Run Screen เพื่อเริ่มค้นหา</>}
                         </span>
                         <button className="btn-outline py-1 flex items-center gap-1.5"><Download size={12} /> Export CSV</button>
                     </div>
@@ -159,7 +159,9 @@ export default function ScreenerPage() {
                             ) : !hasRun ? (
                                 <tr>
                                     <td colSpan={8} className="text-center py-16 text-sm" style={{ color: 'var(--color-text-sub)' }}>
-                                        ตั้งค่าเงื่อนไขแล้วกด ▶ Run Screen
+                                        <span className="inline-flex items-center gap-1">
+                                            ตั้งค่าเงื่อนไขแล้วกด <Play size={12} strokeWidth={2} aria-hidden="true" /> Run Screen
+                                        </span>
                                     </td>
                                 </tr>
                             ) : results.length === 0 ? (
