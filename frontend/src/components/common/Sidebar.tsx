@@ -124,6 +124,11 @@ export default function Sidebar() {
     // Add-stock UI state
     const [adding, setAdding] = useState(false);
 
+    // Symbols just added this session that don't have a quote yet — shows the
+    // "loading price…" spinner row until usePriceUpdates delivers the first
+    // quote (bd:ux-2026-09 — Chart mock's just-added watchlist row state).
+    const [pendingSyms, setPendingSyms] = useState<Set<string>>(new Set());
+
     // Symbols currently being deleted (shows spinner, disables button)
     const [deletingSyms, setDeletingSyms] = useState<Set<string>>(new Set());
 
@@ -193,9 +198,23 @@ export default function Sidebar() {
         try {
             await watchlistService.addStock(watchlistId, sym);
             setSymbols((prev) => (prev.includes(sym) ? prev : [...prev, sym]));
+            setPendingSyms((prev) => new Set(prev).add(sym));
         } catch { /* duplicate or error */ }
         setAdding(false);
     };
+
+    // Clear the "just added" pending state once a quote arrives for that symbol
+    useEffect(() => {
+        setPendingSyms((prev) => {
+            if (prev.size === 0) return prev;
+            const next = new Set(prev);
+            let changed = false;
+            for (const sym of prev) {
+                if (prices[sym]) { next.delete(sym); changed = true; }
+            }
+            return changed ? next : prev;
+        });
+    }, [prices]);
 
     const handleRemove = async (sym) => {
         if (!watchlistId || deletingSyms.has(sym)) return;
@@ -203,6 +222,7 @@ export default function Sidebar() {
         // Optimistic remove — feels instant
         setSymbols((prev) => prev.filter((s) => s !== sym));
         setDeletingSyms((prev) => new Set(prev).add(sym));
+        setPendingSyms((prev) => { if (!prev.has(sym)) return prev; const next = new Set(prev); next.delete(sym); return next; });
 
         try {
             await watchlistService.removeStock(watchlistId, sym);
@@ -262,12 +282,29 @@ export default function Sidebar() {
         : GUEST_SYMBOLS;
 
     return (
-        <aside className="panel border-r flex flex-col overflow-hidden" style={{ width: 220, minWidth: 220, borderRightWidth: 1, borderRightStyle: 'solid', borderRightColor: 'var(--color-border)' }}>
+        <aside
+            className="hidden md:flex flex-col overflow-hidden flex-shrink-0"
+            aria-label="Watchlist"
+            style={{
+                width: 264, minWidth: 264,
+                background: 'var(--surface-1)',
+                backdropFilter: 'var(--glass-blur-nav)',
+                WebkitBackdropFilter: 'var(--glass-blur-nav)',
+                borderRight: '1px solid var(--color-border)',
+            }}
+        >
             {/* Header */}
             <div className="flex items-center justify-between px-3 py-2.5 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                <span className="text-[10px] font-semibold tracking-wider uppercase" style={{ color: 'var(--color-text-sub)' }}>Watchlist</span>
+                <span className="text-[10px] font-bold tracking-wider uppercase" style={{ color: 'var(--color-text-sub)' }}>Watchlist</span>
                 {isAuthenticated && (
-                    <button onClick={() => setAdding((v) => !v)} className="p-0.5 rounded hover:bg-[var(--color-hover)] transition-colors" style={{ color: 'var(--color-accent)' }}>
+                    <button
+                        onClick={() => setAdding((v) => !v)}
+                        aria-label="เพิ่มหุ้น"
+                        className="flex items-center justify-center rounded-lg transition-colors"
+                        style={{ width: 24, height: 24, color: 'var(--color-text-sub)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-sub)' }}
+                    >
                         <Plus size={14} />
                     </button>
                 )}
@@ -331,6 +368,7 @@ export default function Sidebar() {
                     const q = prices[s.sym];
                     const isActive = selectedStock?.sym === s.sym && isChart;
                     const isFund = s.market === 'FUND' || q?.type === 'fund_nav';
+                    const isPending = pendingSyms.has(s.sym) && !q;
                     const up = q ? q.change >= 0 : true;
                     const price = q?.price != null ? q.price.toFixed(2) : '—';
                     const pct = q?.change_pct != null && q.change_pct !== 0
@@ -349,9 +387,8 @@ export default function Sidebar() {
                             onDragOver={(e) => handleDragOver(e, s.sym)}
                             onDragEnd={handleDragEnd}
                             style={{
-                                background: isActive
-                                    ? 'color-mix(in srgb, var(--color-accent) 8%, transparent)'
-                                    : 'transparent',
+                                minHeight: 'var(--row-h)',
+                                background: isActive ? 'var(--surface-3)' : 'transparent',
                                 borderRight: isActive ? '2px solid var(--color-accent)' : '2px solid transparent',
                                 borderTop: isDragOver ? '2px solid var(--color-accent)' : '2px solid transparent',
                                 opacity: dragSymRef.current === s.sym ? 0.4 : 1,
@@ -369,18 +406,40 @@ export default function Sidebar() {
                             )}
                             <button
                                 onClick={() => handleSelect(s.sym, s.name)}
-                                className="flex-1 flex items-center justify-between px-2 py-2.5 transition-colors text-left"
+                                className="flex-1 flex items-center justify-between px-2 py-2 transition-colors text-left"
                                 style={{ cursor: 'pointer' }}
-                                onMouseEnter={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'var(--color-hover)'; }}
+                                onMouseEnter={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'var(--surface-2)'; }}
                                 onMouseLeave={(e) => { if (!isActive) (e.currentTarget.parentElement as HTMLElement).style.background = 'transparent'; }}
                             >
                                 <div>
                                     <div className="text-[11px] font-semibold">{parseSymbol(s.sym).display}</div>
-                                    <div className="text-[10px] truncate" style={{ maxWidth: 80, color: 'var(--color-text-sub)' }}>{s.name}</div>
+                                    <div className="text-[10px] truncate" style={{ maxWidth: 90, color: 'var(--color-text-sub)' }}>
+                                        {s.name}{isPending ? ' · เพิ่งเพิ่ม' : ''}
+                                    </div>
                                 </div>
                                 <div className="text-right">
-                                    <div className="text-[11px] font-medium tabular-nums">{price}</div>
-                                    <div className="text-[10px] tabular-nums" style={{ color: (isFund && (!q?.change_pct || q.change_pct === 0)) ? 'var(--color-text-sub)' : (up ? 'var(--color-green)' : 'var(--color-red)') }}>{pct}</div>
+                                    {isPending ? (
+                                        <div className="flex items-center gap-1.5 justify-end" style={{ color: 'var(--color-text-sub)' }}>
+                                            <span
+                                                aria-hidden="true"
+                                                style={{
+                                                    display: 'inline-block', width: 10, height: 10,
+                                                    border: '2px solid var(--color-border-strong)',
+                                                    borderTopColor: 'var(--color-accent)',
+                                                    borderRadius: '50%',
+                                                    animation: 'spin 0.65s linear infinite',
+                                                }}
+                                            />
+                                            <span className="text-[10px]">loading price…</span>
+                                        </div>
+                                    ) : (
+                                        <div className="text-[11px] font-medium" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums' }}>{price}</div>
+                                    )}
+                                    {isPending ? (
+                                        <div className="skeleton ml-auto" style={{ width: 34, height: 8, borderRadius: 4 }} />
+                                    ) : (
+                                        <div className="text-[10px]" style={{ fontFamily: 'var(--font-mono)', fontVariantNumeric: 'tabular-nums', color: (isFund && (!q?.change_pct || q.change_pct === 0)) ? 'var(--color-text-sub)' : (up ? 'var(--color-green)' : 'var(--color-red)') }}>{pct}</div>
+                                    )}
                                 </div>
                             </button>
                             {isAuthenticated && (

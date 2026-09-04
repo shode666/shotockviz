@@ -79,7 +79,17 @@ export default function Navbar() {
 
     return (
         <>
-            <nav className="flex items-center justify-between px-4 py-2 border-b" style={{ background: 'var(--color-panel)', borderColor: 'var(--color-border)' }}>
+            <nav
+                className="hidden md:flex items-center px-4 gap-5 border-b flex-shrink-0"
+                style={{
+                    height: 48,
+                    background: 'var(--surface-1)',
+                    backdropFilter: 'var(--glass-blur-nav)',
+                    WebkitBackdropFilter: 'var(--glass-blur-nav)',
+                    borderColor: 'var(--color-border)',
+                    boxShadow: 'var(--glass-inset-edge)',
+                }}
+            >
                 <div className="flex items-center gap-6">
                     {/* Logo */}
                     <div className="flex items-center gap-2.5">
@@ -99,29 +109,36 @@ export default function Navbar() {
 
                     {/* Navigation */}
                     <div className="flex items-center gap-1">
-                        {navItems.map(({ to, label, Icon }) => (
-                            <Link
-                                key={to}
-                                to={to}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                                style={{
-                                    background: currentPath === to ? 'var(--color-accent-glow, rgba(124,92,252,0.14))' : 'transparent',
-                                    color: currentPath === to ? 'var(--color-accent)' : 'var(--color-text-sub)',
-                                }}
-                            >
-                                <Icon size={13} />
-                                {label}
-                            </Link>
-                        ))}
+                        {navItems.map(({ to, label, Icon }) => {
+                            const isActive = currentPath === to
+                            return (
+                                <Link
+                                    key={to}
+                                    to={to}
+                                    aria-current={isActive ? 'page' : undefined}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-semibold transition-colors"
+                                    style={{
+                                        background: isActive ? 'var(--surface-3)' : 'transparent',
+                                        color: isActive ? 'var(--color-text)' : 'var(--color-text-sub)',
+                                        boxShadow: isActive ? 'inset 0 -2px 0 var(--color-accent)' : 'none',
+                                    }}
+                                    onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--surface-2)' }}
+                                    onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent' }}
+                                >
+                                    <Icon size={13} />
+                                    {label}
+                                </Link>
+                            )
+                        })}
                     </div>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="ml-auto flex items-center gap-3">
                     {/* Search */}
                     <button
                         onClick={() => setSearchOpen(true)}
-                        className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs"
-                        style={{ background: 'var(--color-input-bg)', color: 'var(--color-text-sub)' }}
+                        className="flex items-center gap-2 px-3 rounded-lg text-[11px] border transition-colors"
+                        style={{ height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
                     >
                         <Search size={12} />
                         ค้นหา PTT, AAPL... ⌘K
@@ -134,7 +151,14 @@ export default function Navbar() {
                     </div>
 
                     {/* Theme Toggle */}
-                    <button onClick={toggleTheme} className="p-1.5 rounded-lg hover:bg-[var(--color-hover)] transition-colors" style={{ color: 'var(--color-text-sub)' }}>
+                    <button
+                        onClick={toggleTheme}
+                        aria-label="สลับธีม"
+                        className="flex items-center justify-center rounded-lg border transition-colors"
+                        style={{ width: 30, height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
+                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' }}
+                        onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.color = 'var(--color-text-sub)' }}
+                    >
                         {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
                     </button>
 
@@ -142,7 +166,7 @@ export default function Navbar() {
                     {isLoading ? (
                         /* Spinner while checkAuth retries — prevents "Login" flash */
                         <div
-                            className="w-8 h-8 rounded-full flex items-center justify-center"
+                            className="w-7 h-7 rounded-full flex items-center justify-center"
                             style={{ background: 'var(--color-hover)' }}
                         >
                             <span
@@ -160,8 +184,8 @@ export default function Navbar() {
                         <div className="relative" ref={dropdownRef}>
                             <button
                                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                                className="w-8 h-8 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
-                                style={{ background: 'var(--color-accent)' }}
+                                className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white hover:opacity-90 transition-opacity"
+                                style={{ background: 'linear-gradient(135deg, #7c5cfc, #a855f7)' }}
                             >
                                 {user?.display_name?.[0]?.toUpperCase() || 'U'}
                             </button>
