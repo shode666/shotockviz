@@ -161,7 +161,7 @@ ShotockViz/
 │   │   ├── routes/              ← Pages (TanStack file-based routing)
 │   │   ├── components/          ← UI components
 │   │   │   ├── chart/           ← TradingChart, ChartToolbar, RightPanel
-│   │   │   ├── common/          ← Sidebar, WatchlistSearch, Navbar, AIChatPanel
+│   │   │   ├── common/          ← Sidebar, WatchlistSearch, Navbar
 │   │   │   ├── modals/          ← SearchModal, SettingsModal, DrawingModal
 │   │   │   ├── pages/           ← AlertsPage, ScreenerPage, NewsPage
 │   │   │   ├── portfolio/       ← HoldingsTable, AddTransactionModal
@@ -221,8 +221,6 @@ GOOGLE_CLIENT_ID=<your-google-client-id>.apps.googleusercontent.com
 # Optional — enhances features
 FINNHUB_API_KEY=<free tier at finnhub.io>
 TELEGRAM_BOT_TOKEN=<for alert notifications>
-OLLAMA_URL=http://ollama:11434
-OLLAMA_MODEL=llama3.2
 TZ=Asia/Bangkok
 ```
 
@@ -333,12 +331,6 @@ docker-compose -f docker-compose.dev.yml exec backend python scripts/fetch_real_
 
 ### Google Login not working
 Verify `GOOGLE_CLIENT_ID` is set in `.env` and `https://localhost` is added to authorized origins in Google Cloud Console.
-
-### AI Chat not responding
-Ollama must be running and a model pulled:
-```bash
-docker-compose -f docker-compose.dev.yml exec ollama ollama pull llama3.2
-```
 
 ### WebSocket errors
 Check Caddy proxy config: `docker-compose -f docker-compose.dev.yml logs caddy`. Ensure WebSocket upgrade is configured in Caddyfile.

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import redis.asyncio as aioredis
 from redis.asyncio import Redis
+from redis.maint_notifications import MaintNotificationsConfig
 
 from core.config import settings
 from core.logger import get_logger
@@ -42,6 +43,11 @@ async def init_redis() -> None:
         socket_connect_timeout=3,
         socket_timeout=3,
         health_check_interval=30,
+        # bd:deps-2026-09 — redis-py 8.1 defaults RESP3 + "auto" maint
+        # notifications; our server is Redis 7 (no MAINT_NOTIFICATIONS
+        # subcommand). [redis/connection.py:2467-2470] auto-enables it
+        # unless explicitly opted out here.
+        maint_notifications_config=MaintNotificationsConfig(enabled=False),
     )
     # Verify connectivity early so we fail fast on misconfiguration
     await _redis.ping()

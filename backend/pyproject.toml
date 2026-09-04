@@ -1,0 +1,29 @@
+# bd:deps-2026-09 WP-B0 — new file (repo had none before this branch).
+# Config per outputs/deps-2026-09/03-stan-refactor-strategy.md §2.3.
+
+[tool.ruff]
+target-version = "py313"
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "S110", "S112", "DTZ", "RUF", "F401"]
+# NOT enabled yet: BLE001 (202 hits = deliberate CQRS degrade pattern; revisit post-bump)
+ignore = []
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI DI idiom — kills all B008 false positives without disabling B008
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body", "fastapi.Header"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S110", "S112", "DTZ"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["api", "core", "models", "services", "workers"]
+
+[tool.mypy]
+python_version = "3.13"
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+plugins = ["pydantic.mypy"]
+# Ratchet stage 2 (follow-up bd): disallow_untyped_defs = true for core.* and services.*

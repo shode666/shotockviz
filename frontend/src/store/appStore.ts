@@ -7,7 +7,38 @@ import { create } from 'zustand';
  */
 const isBrowser = typeof window !== 'undefined';
 
-const useAppStore = create((set) => ({
+export interface SelectedStock {
+    sym: string;
+    name: string;
+    price: string | number | null;
+    chg: string | number | null;
+    pct: string | number | null;
+    up: boolean;
+}
+
+interface DataReadyPayload {
+    [key: string]: unknown;
+    _key?: number;
+}
+
+interface AppState {
+    theme: string;
+    darkMode: boolean;
+    toggleTheme: () => void;
+    initTheme: () => void;
+    screen: string;
+    setScreen: (screen: string) => void;
+    selectedStock: SelectedStock;
+    setSelectedStock: (stock: SelectedStock) => void;
+    searchOpen: boolean;
+    setSearchOpen: (open: boolean) => void;
+    dataVersion: number;
+    bumpDataVersion: () => void;
+    dataReadyPayload: DataReadyPayload | null;
+    setDataReadyPayload: (payload: Record<string, unknown>) => void;
+}
+
+const useAppStore = create<AppState>()((set) => ({
     // ── Theme ─────────────────────────────────────────────────────────────────
     // Default to 'dark'; initTheme() corrects it on the client from localStorage.
     theme: 'dark',

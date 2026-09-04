@@ -100,7 +100,7 @@ test.describe('Sidebar — authenticated user with server watchlist', () => {
     await mockAuthSession(page, MOCK_AUTH_ME);
 
     // Override watchlist 401 stub from mockStockAPIs with a real 200 response
-    await page.route('**/api/watchlists**', (route) =>
+    await page.route('**/api/v1/watchlists**', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',

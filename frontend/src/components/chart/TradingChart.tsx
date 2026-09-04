@@ -83,17 +83,18 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             if (!bar) return;
             const isCandle = 'open' in bar;
             if (isCandle) {
+                const volumeBar = volumeRef.current ? param.seriesData.get(volumeRef.current) : undefined;
                 onCrosshairMove({
                     open: bar.open,
                     high: bar.high,
                     low: bar.low,
                     close: bar.close,
-                    volume: volumeRef.current ? param.seriesData.get(volumeRef.current)?.value : undefined,
+                    volume: volumeBar && 'value' in volumeBar ? volumeBar.value : undefined,
                     isUp: bar.close >= bar.open,
                 });
             } else {
-                // Line/area: only has value
-                onCrosshairMove({ close: bar.value, isUp: true });
+                // Line/area: only has value (CustomData has no guaranteed 'value' — guard it)
+                onCrosshairMove({ close: 'value' in bar ? bar.value : 0, isUp: true });
             }
         });
 

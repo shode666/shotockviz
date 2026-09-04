@@ -1,0 +1,23 @@
+# bd:deps-2026-09 WP-B1 — new file (Oliver/Sentinel Q3 decision, S-AC-6 mitigation).
+# Test/dev-only packages split out of requirements.txt so the prod image
+# (backend/Dockerfile) does not ship pytest/pytest-asyncio/aiosqlite/
+# pip-audit/ruff/mypy into the runtime container. Install for local dev/CI:
+#
+#   uv pip install -r backend/requirements-dev.txt
+#
+# All pins exact `==`, frozen from `uv pip install` resolve (§1.4 pin rule,
+# same resolve as requirements.txt — see requirements.txt header).
+-r requirements.txt
+
+# Testing
+pytest==9.1.1
+pytest-asyncio==1.4.0
+pytest-cov==7.1.0
+aiosqlite==0.22.1
+
+# Security scanning
+pip-audit==2.10.1
+
+# Lint/type (01-sara-adr-migration.md; 03-stan-refactor-strategy.md §2.3)
+ruff==0.16.5
+mypy==2.3.1

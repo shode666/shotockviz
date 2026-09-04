@@ -7,8 +7,11 @@ from models.user import User
 from models.drawing import Drawing
 from models.schemas import DrawingCreate, DrawingUpdate, DrawingResponse
 from api.middleware.auth import get_current_user
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/drawings", tags=["drawings"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/drawings -> /drawings,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/drawings", tags=["drawings"], route_class=EnvelopingAPIRoute)
 
 
 @router.get("/{symbol}", response_model=list[DrawingResponse])

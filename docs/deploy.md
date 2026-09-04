@@ -93,7 +93,7 @@ This runs `scripts/deploy.sh` which:
 
 1. Ensures `shared-proxy` Docker network exists
 2. **rsync** project files to droplet (excludes `.git`, `node_modules`, `.env`, etc.)
-3. **docker compose build** + **up** (prod compose, no Caddy, no Ollama)
+3. **docker compose build** + **up** (prod compose, no Caddy)
 4. Runs database migrations
 5. Health checks
 
@@ -140,7 +140,6 @@ Client (HTTPS)
     ├─ town.shode.dev  → ShoDe Town services
     └─ stock.shode.dev → ShotockViz services
         ├─ /api/ws/*   → stockviz-backend:8000 (WebSocket)
-        ├─ /api/ai/*   → stockviz-backend:8000 (SSE streaming)
         ├─ /api/*      → stockviz-backend:8000 (REST)
         └─ /*          → stockviz-frontend:3000 (Nitro SSR)
 ```

@@ -8,8 +8,11 @@ from models.user import User
 from models.watchlist import Watchlist, WatchlistItem
 from models.schemas import WatchlistCreate, WatchlistUpdate, WatchlistItemAdd, WatchlistResponse, WatchlistReorderRequest
 from api.middleware.auth import get_current_user
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/watchlists", tags=["watchlist"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/watchlists -> /watchlists,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/watchlists", tags=["watchlist"], route_class=EnvelopingAPIRoute)
 
 
 @router.get("", response_model=list[WatchlistResponse])

@@ -132,7 +132,7 @@ docker-compose -f docker-compose.dev.yml exec backend pytest tests/test_api_e2e.
 - **Database**: In-memory SQLite for fast, isolated tests
 - **Redis**: AsyncMock for cache operations
 - **Stock Service**: Mock `fetch_quote_now()`, `fetch_stock_history()`, etc.
-- **External APIs**: Mocked (Yahoo Finance, Google News, Ollama)
+- **External APIs**: Mocked (Yahoo Finance, Google News)
 
 ### Authentication
 - Test user created in `test_user` fixture
@@ -161,7 +161,6 @@ The test suite covers:
 - ✅ CRUD operations (watchlist, portfolio, alerts, drawings, notes)
 - ✅ Data aggregation (dashboard, screener, analytics)
 - ✅ Real-time (WebSocket price subscription)
-- ✅ AI integration (chat with Ollama)
 - ✅ Error handling & edge cases
 - ✅ Thai & US market data
 
@@ -214,7 +213,7 @@ All are already in `requirements.txt`.
 ## Known Limitations
 
 - WebSocket tests are simplified (full integration testing recommended separately)
-- External API calls (Yahoo Finance, Google News, Ollama) are mocked
+- External API calls (Yahoo Finance, Google News) are mocked
 - Tests use in-memory SQLite (production DB may behave differently)
 - Celery task mocking doesn't test actual background job execution
 - Rate limiting is not tested (would require Redis setup)

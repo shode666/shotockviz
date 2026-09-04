@@ -212,27 +212,12 @@ API:    https://localhost/api/health
 
 ## Phase 2.4 — AI/Observability
 
-### TC-RAG-001: pgvector Semantic Search Accuracy
+### TC-RAG-001: ~~pgvector Semantic Search Accuracy~~ — REMOVED
 
-**Feature:** pgvector Integration (RAG)
-**Priority:** MEDIUM
-
-**Acceptance Criteria:**
-- [ ] AI Chat ใช้ context จาก relevant news ที่ embed แล้ว
-- [ ] คำถามเกี่ยวกับ PTT.BK → context เป็นข่าว PTT.BK
-- [ ] Embedding worker ทำงานหลัง news fetch โดยอัตโนมัติ
-- [ ] Latency ของ AI response ไม่เพิ่มเกิน 3 วินาทีจาก V1
-
-**Test Cases:**
-
-| TC# | Input | Expected | Pass/Fail |
-|-----|-------|----------|-----------|
-| P01 | ถาม AI: "PTT.BK มีข่าวอะไรล่าสุด?" | AI ตอบโดยอ้างอิงข่าวล่าสุดที่ embed | |
-| P02 | ถาม AI: "AAPL earnings ล่าสุดเป็นอย่างไร?" | AI ดึง earnings context มาวิเคราะห์ | |
-| P03 | ถามเรื่องหุ้นที่ไม่มีข่าว | AI ตอบโดยไม่มี context injection (graceful) | |
-| P04 | ตรวจ DB: `document_embeddings` table | มี rows หลัง embedding worker ทำงาน | |
-| P05 | AI response latency (RAG vs non-RAG) | เพิ่มไม่เกิน 3 วินาที | |
-| P06 | Embedding ถูก dimension | vector(768) ตาม nomic-embed-text spec | |
+> bd:deps-2026-09 (2026-09) — the AI chat feature this test plan
+> targeted was removed entirely (local LLM runtime already dropped
+> from prod). No test cases apply; section kept struck through for
+> history only.
 
 ---
 

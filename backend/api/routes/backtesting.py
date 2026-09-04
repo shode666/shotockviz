@@ -11,8 +11,11 @@ from core.redis import get_redis
 from core import cache_keys
 from models.user import User
 from api.middleware.auth import get_current_user_optional
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/backtest", tags=["backtesting"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/backtest -> /backtest,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/backtest", tags=["backtesting"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 
 AVAILABLE_STRATEGIES = {

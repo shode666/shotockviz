@@ -20,9 +20,7 @@
 
 **Stock Screener** — Filter by market, price range, P/E, RSI, MACD signal, volume. Save presets for quick re-use.
 
-**News Feed** — Multi-source aggregation: Google News RSS + Finnhub. AI sentiment analysis via local Ollama (llama3.2). Filter by market, symbol, or watchlist.
-
-**AI Chat** — SSE-streamed chat with local LLM (Ollama). Context-aware stock analysis. No cloud dependency.
+**News Feed** — Multi-source aggregation: Google News RSS + Finnhub. Keyword-derived sentiment badges. Filter by market, symbol, or watchlist.
 
 **10 Markets Supported** — SET, US, Japan, Hong Kong, China, UK, Germany, France, Netherlands, Korea. Round-robin price fetching across all markets.
 
@@ -57,7 +55,6 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
 | Database | PostgreSQL 16 + TimescaleDB (hypertable for time-series) |
 | Cache | Redis 7 (L1 cache + Celery broker + WebSocket pub/sub) |
 | Background | Celery 5.6 + Beat (8 workers: price, names, fundamentals, fund NAV, history, on-demand, alerts, housekeeping) |
-| AI | Ollama (llama3.2) — 100% local, no cloud |
 | Data | Yahoo Finance + pythainav (Thai fund NAV) + Finnhub (free tier) |
 | Auth | Google OAuth one-tap (`@react-oauth/google`) |
 | Proxy | Caddy 2 (reverse proxy + auto TLS) |
@@ -118,7 +115,7 @@ cp .env.example .env
 docker-compose -f docker-compose.dev.yml up -d
 ```
 
-8 services will start: frontend, backend, postgres, redis, celery, celery-beat, ollama, caddy.
+8 services will start: frontend, backend, postgres, redis, celery, celery-beat, flower, caddy.
 
 ### 3. Access
 
@@ -237,7 +234,6 @@ See `.env.example` for the full list. Key variables:
 | `JWT_SECRET_KEY` | Token signing key |
 | `GOOGLE_CLIENT_ID` | Google OAuth login |
 | `TELEGRAM_BOT_TOKEN` | Alert notifications via Telegram |
-| `OLLAMA_URL` | Local LLM endpoint (default: `http://ollama:11434`) |
 | `FINNHUB_API_KEY` | Optional — enhanced US data |
 
 ---

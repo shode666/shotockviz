@@ -13,8 +13,11 @@ from models.stock import Stock, MarketType
 from models.ohlcv import OHLCVBar
 from models.user import User
 from api.middleware.auth import get_optional_user
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api/screener", tags=["screener"])
+# bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/screener -> /screener,
+# mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
+router = APIRouter(prefix="/screener", tags=["screener"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
 
 # ─── Indicator helpers ──────────────────────────────────────────────────────

@@ -8,6 +8,139 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### bd:deps-2026-09 — remove AI chat / Ollama feature entirely (2026-09-04)
+
+User decision (Phase 2, scope add): the AI chat feature was removed
+entirely — its local LLM runtime was already dropped from prod, so the
+backend route, embedding worker/service/model, frontend panel, Caddy
+SSE matcher, and dev-compose LLM service were all dead weight. Single
+commit, no new abstractions. Inventory + proof:
+`grep -rni 'ollama\|ai_chat\|aiService\|AIChatPanel\|embedding\|/api/ai'`
+across `*.py`/`*.ts`/`*.tsx`/`*.yml`/`*.md`/`Caddyfile*` → 0 hits outside
+`outputs/` and this changelog entry.
+
+- **Removed files**: `backend/api/routes/ai_chat.py`,
+  `backend/services/embedding_service.py`,
+  `backend/models/document_embedding.py`,
+  `backend/workers/embedding_worker.py`,
+  `frontend/src/components/common/AIChatPanel.tsx`,
+  `frontend/src/services/aiService.ts`, `tests/e2e/ai-chat.spec.ts`.
+- **`backend/main.py`** — dropped the `ai_chat` import/router mount; the
+  unversioned-exception set shrinks from 3 to 2 (`/api/health`,
+  `/api/ws/prices`).
+- **`backend/schemas/envelope.py`** — `_is_enveloped_path()` now scopes
+  to `/api/v1/*` only (was `/api/v1/*` OR the AI route's unversioned
+  prefix).
+- **`backend/models/__init__.py`**, **`backend/db/migrations/env.py`**
+  — dropped the vector-embeddings model import. **No DB migration
+  written** — the existing `document_embeddings` table is left
+  orphaned; drop it manually if reclaiming disk space.
+- **`backend/workers/celery_app.py`** — dropped the embedding worker
+  from `include=[...]` and its beat-schedule entry.
+- **`backend/workers/housekeeping.py`**, **`backend/api/routes/admin.py`**
+  — dropped the now-dead `document_embeddings` cleanup query / disk-usage
+  accounting line.
+- **`backend/core/config.py`** — dropped `ollama_url` setting.
+- **`frontend/src/routes/__root.tsx`** — dropped the `AIChatPanel` import
+  + render, no dangling state.
+- **`docker-compose.dev.yml`** — dropped the `ollama` service, the
+  `ollamadata` volume, its `depends_on` edge, and `OLLAMA_URL`/
+  `OLLAMA_MODEL` env lines across all 3 services that had them.
+- **`caddy/Caddyfile`**, **`caddy/Caddyfile.dev`** — dropped the AI-chat
+  SSE-flush `@ai` matcher block.
+- **`.env.example`** — dropped the `OLLAMA_URL` line.
+- **`tests/api/test_api_endpoints.py`** — dropped `TestAIModels` +
+  `TestAIChat`. **`tests/api/test_contract_v1.py`** — unversioned-prefix
+  exception set now `{"/api/health"}` + `("/api/ws/",)` only.
+  **`tests/e2e/helpers/mocks.ts`** — dropped `MOCK_AI_MODELS`, the
+  `/api/ai/models` route stub, and `mockAIChat()`.
+- **Docs**: `CLAUDE.md`, `README.md`, `REQUIREMENTS.md`,
+  `INSTRUCTIONS.md`, `master_plan.md`, `V2_DEV_SPEC.md`,
+  `V2_Features.md`, `V2_QA_PLAN.md`, `PRODUCTION_DEPLOY.md`,
+  `tasklist.md`, `docs/deploy.md`, `docs/deploy-gha.md`,
+  `docs/engagements/deps-2026-09.md`,
+  `.claude/skills/bench-api/SKILL.md` — every AI-chat/Ollama reference
+  removed or struck through with a removal note; historical spec
+  sections kept for record with `~~strikethrough~~ — REMOVED` headers
+  rather than deleted outright.
+- **Verify**: `backend && pytest tests -q` → 114 passed, 2 skipped, 38
+  deselected (0 fail). `PYTHONPATH=backend pytest tests/api -q` → 23
+  failed / 197 passed (pre-existing DB-less failures; the drop from the
+  prior 26-failed baseline is exactly the 8 removed AI test methods, no
+  new failures). `frontend && npm run build` → green. `npm run
+  typecheck` → 1 whitelisted error (`router.tsx:5`, unchanged). `python
+  -c "import yaml; yaml.safe_load(open('docker-compose.dev.yml'))"` →
+  OK, 8 services (was 9). `backend && python -c "import main"` → clean,
+  import graph intact.
+
+### bd:deps-2026-09 iter1 — Phase 3b FAIL fix pack (2026-09-03)
+
+Chris (code review) and Quinn (integration/E2E/contract review) both
+returned Phase 3b FAIL on the `/api/v1` + `{data,meta}` envelope
+migration branch (`chore/deps-2026-09`). Full evidence/proof per finding:
+`outputs/deps-2026-09/16-dave-iter1-fixes.md`. Reviews (never edited):
+`outputs/deps-2026-09/14-chris-review.md`, `15-quinn-review.md`.
+
+- **CHRIS-05** — `hash_password()` unconditionally broken (passlib 1.7.4 x
+  bcrypt 5.0.0); replaced with direct `bcrypt.hashpw()`, dropped passlib.
+- **CHRIS-01/Q-1/Q-3/Q-4/Q-5** — `tests/api/conftest.py` pytest-asyncio
+  1.x rewrite (StaticPool, shared engine, `APP_ENV=test`), fixed the 17
+  new test failures the S2 envelope flip owed (11 envelope-unwrap + 6
+  auth-fixture). 3x-reproducible: 28 failed/208 passed, 0 errors.
+- **CHRIS-02/Q-2** — rate-limiter's 429 was an unhandled non-JSON 500
+  (`HTTPException` raised inside `BaseHTTPMiddleware.dispatch()`); now
+  returns the real `{data,meta}` envelope.
+- **CHRIS-03** — added `TRUSTED_PROXIES` allowlist so `X-Forwarded-For`
+  is only honored from a configured trusted hop (default empty = safest,
+  falls back to the raw socket peer) — closes an XFF-spoofing rate-limit
+  bypass.
+- **CHRIS-06** — `/openapi.json` now documents the real `{data,meta}`
+  envelope + error shape (`app.openapi()` override) instead of each
+  handler's raw `response_model` / FastAPI's stock validation-error shape.
+  Regenerated `outputs/deps-2026-09/openapi-v1.json`.
+- **CHRIS-07** — `.github/workflows/ci.yml` steps reconciled
+  (`requirements-dev.txt`, Node 24, `.output/` artifact path, `APP_ENV`
+  env var); trigger stays `workflow_dispatch`-only (unchanged, prior
+  explicit decision).
+
+### bd:deps-2026-09 iter2 — CHRIS-16/Q-10 fix (2026-09-03)
+
+Chris's and Quinn's iter1 re-verify both surfaced the same new High
+finding via live-`uvicorn`/`gunicorn` curl (not `TestClient`, which
+structurally cannot see this class of bug): uvicorn/gunicorn's OWN
+proxy-header trust (`forwarded_allow_ips` defaults to `'127.0.0.1'`)
+rewrites `request.client.host` from a spoofed `X-Forwarded-For` BEFORE
+the CHRIS-03/iter1 app-level `TRUSTED_PROXIES` allowlist ever runs, when
+the connecting peer is loopback. Full evidence:
+`outputs/deps-2026-09/16-dave-iter1-fixes.md` § iter 2.
+
+- **NEW `backend/gunicorn.conf.py`** — derives `forwarded_allow_ips` from
+  the same `TRUSTED_PROXIES` env var `core/config.py` reads. Auto-loaded
+  by `gunicorn` (own-run confirmed: `gunicorn --help` defaults `-c` to
+  `./gunicorn.conf.py`) — closes the gap for `docker-compose.prod.yml`/
+  `docker-compose.ghcr.yml`'s existing `command:` lines with **zero
+  compose edit**, live-curl-verified (6 spoofed XFF from loopback -> 1
+  bucket, 429 on the 6th).
+- **`backend/Dockerfile`** — added `CMD` wiring `-c gunicorn.conf.py`
+  explicitly (for standalone `docker run`; the 3 compose files' own
+  `command:` still wins over it, unaffected).
+- **`api/middleware/rate_limit.py`** — `_client_ip()` now parses
+  multi-hop `X-Forwarded-For` chains via rightmost-untrusted-hop (was
+  leftmost-claimed), matching uvicorn's own `_TrustedHosts` algorithm;
+  defense-in-depth for paths (e.g. `TestClient`) that never go through
+  the real ASGI proxy-header middleware at all.
+- **`.env.example` / `docs/deploy-gha.md`** — documented the two-layer
+  (ASGI server + app) proxy-trust model and the still-open R1 gap:
+  `docker-compose.dev.yml`'s plain `uvicorn` command has no equivalent
+  auto-wiring in this repo yet (needs a 1-line compose edit, not applied
+  — compose files are read-only on this branch).
+- **NEW `backend/tests/test_rate_limit_proxy_boundary_live.py`** —
+  subprocess-`uvicorn` integration tests (marked `integration`,
+  deselected by default, run explicitly): reproduces the original bug as
+  a negative control, then proves both directions of the fix (spoofed XFF
+  collapses to one bucket when unset; distinct real users behind a
+  correctly-configured trusted proxy do NOT collapse into one).
+
 ### Fix: Dashboard Top Holdings cross-currency sorting (2026-03-11)
 
 - `api/routes/dashboard.py` — Top Holdings now sorts by THB-normalized value using USD/THB exchange rate from cache. Previously compared raw THB and USD values directly, causing Thai funds (~฿5,000) to rank above US stocks (~$4,000 = ฿130,000). Also fixes total portfolio value to show correct THB-normalized sum. Added float precision guard and currency field tracking per holding.

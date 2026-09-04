@@ -10,7 +10,7 @@
 
 | ข้อกำหนด | รายละเอียด |
 |---------|-----------|
-| **Production server** | Ubuntu 22.04 LTS แนะนำ, RAM ≥ 4GB (8GB ถ้ารัน Ollama), Disk ≥ 50GB |
+| **Production server** | Ubuntu 22.04 LTS แนะนำ, RAM ≥ 4GB, Disk ≥ 50GB |
 | **Docker Engine** | ≥ 26.x + Docker Compose v2 (`docker compose` ไม่ใช่ `docker-compose`) |
 | **Domain name** | ชี้ A record ไปที่ IP server ก่อน เพราะ Caddy ต้องการ DNS propagate แล้วถึงออก TLS cert ได้ |
 | **Ports** | 80, 443 เปิดใน firewall (ufw allow 80 && ufw allow 443) |
@@ -81,10 +81,6 @@ CORS_ORIGINS=https://shotviz.yourdomain.com
 # ===== EXTERNAL APIs =====
 FINNHUB_API_KEY=<your-finnhub-key>
 TELEGRAM_BOT_TOKEN=<your-bot-token>         # optional
-
-# ===== OLLAMA =====
-OLLAMA_URL=http://ollama:11434
-OLLAMA_MODEL=llama3.2                       # หรือ llama3.2:1b ถ้า RAM น้อย
 
 # ===== APP =====
 TZ=Asia/Bangkok
@@ -181,22 +177,7 @@ Caddy จะ auto-obtain TLS certificate จาก Let's Encrypt เมื่อ
 
 ---
 
-## Step 8 — Pull Ollama Model (ครั้งแรกใช้เวลานาน)
-
-```bash
-# ดู log ollama เพื่อรอ model download เสร็จ
-docker compose -f docker-compose.prod.yml logs -f ollama
-# จะเห็น "Model ready. Ollama is running." เมื่อเสร็จ
-
-# หรือ pull manual แล้วรอ
-docker compose -f docker-compose.prod.yml exec ollama ollama pull llama3.2
-```
-
-> ⚠️ llama3.2 ขนาด ~2GB ถ้า bandwidth ช้าอาจใช้เวลาหลายนาที
-
----
-
-## Step 9 — Verify ระบบทำงานถูกต้อง
+## Step 8 — Verify ระบบทำงานถูกต้อง
 
 ```bash
 # 1. ดูสถานะทุก container
@@ -228,7 +209,7 @@ Expected healthy output จาก `/api/health`:
 
 ---
 
-## Step 10 — ทดสอบ Frontend
+## Step 9 — ทดสอบ Frontend
 
 เปิด browser ไปที่ `https://shotviz.yourdomain.com`:
 
@@ -312,7 +293,6 @@ docker compose -f docker-compose.prod.yml up -d caddy
 | Backend `502 Bad Gateway` | Backend container crash | `docker logs shotviz-backend-1` ดู traceback |
 | Frontend โหลดช้า / 404 | Image เก่า ยังไม่ rebuild | `docker compose build frontend && up -d frontend` |
 | Celery ไม่รัน task | Redis ไม่ connect | ตรวจ `REDIS_URL` ใน `.env` ให้ตรงกับ service name `redis` |
-| Ollama timeout | RAM ไม่พอหรือ model ยัง download | เพิ่ม RAM หรือใช้ `llama3.2:1b` แทน |
 | Google Login loop | OAuth origin ไม่ถูก | เพิ่ม `https://shotviz.yourdomain.com` ใน Google Cloud Console |
 | DB migration fail | Schema version conflict | ดู `alembic history` และ `alembic current` |
 
@@ -340,8 +320,5 @@ docker compose -f docker-compose.prod.yml up -d caddy
 | PostgreSQL + TimescaleDB | 512MB RAM | 1GB RAM |
 | Redis | 128MB RAM | 256MB RAM |
 | Celery (worker + beat) | 256MB RAM | 512MB RAM |
-| Ollama (llama3.2) | 4GB RAM | 8GB RAM |
-| **รวม** | **~6GB** | **~12GB** |
-
-> ถ้า server RAM น้อยกว่า 8GB ให้ใช้ `llama3.2:1b` (1B params, ~1GB RAM) แทน default 3B
+| **รวม** | **~2GB** | **~4GB** |
 

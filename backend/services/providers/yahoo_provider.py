@@ -126,7 +126,15 @@ async def fetch_quote_direct(symbol: str):
         short_name = meta.get("shortName") or meta.get("longName") or ""
         if short_name:
             try:
-                r = aioredis.from_url(settings.redis_url, decode_responses=True)
+                # bd:deps-2026-09 S0 — prefer the shared core.redis pool
+                # (explicit timeouts, set up by init_redis() in the app
+                # lifespan); fall back to a fresh ad-hoc client (previous
+                # behavior, unchanged) when core.redis isn't initialised.
+                from core.redis import get_redis as _get_shared_redis
+                try:
+                    r = await _get_shared_redis()
+                except RuntimeError:
+                    r = aioredis.from_url(settings.redis_url, decode_responses=True)
                 await r.setex(cache_keys.name(symbol), 86400, short_name)  # 24 h TTL
             except Exception:
                 pass

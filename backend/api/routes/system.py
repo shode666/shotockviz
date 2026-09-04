@@ -22,8 +22,17 @@ from core.database import get_db
 from core.config import settings
 from core.redis import get_redis
 from schemas.common import BaseResponse, CachedLayer
+from schemas.envelope import EnvelopingAPIRoute
 
-router = APIRouter(prefix="/api", tags=["system"])
+# bd:deps-2026-09 S2 (ADR-001 r3-2) — system.py splits into two routers:
+#   health_router — GET /health only, mounted bare at /api (infra contract:
+#     compose healthchecks curl this exact path unversioned; frozen, AC-B9).
+#     Already hand-wraps BaseResponse itself — no route_class needed/wanted.
+#   router — /system/ready, /system/celery-stats, /market/fgi — mounted
+#     under /api/v1 in main.py (so they become /api/v1/system/ready etc.);
+#     route_class = envelope wrap (ADR-002), same as the other 11 modules.
+health_router = APIRouter(prefix="/api", tags=["system"])
+router = APIRouter(tags=["system"], route_class=EnvelopingAPIRoute)
 
 # Key symbols that must be in cache for us to declare "ready"
 # Now includes both Thai (SET) and US stocks
@@ -79,7 +88,7 @@ def _check_celery_health() -> str:
             sys.stdout, sys.stderr = _old_stdout, _old_stderr
 
 
-@router.get("/health", response_model=BaseResponse[dict])
+@health_router.get("/health", response_model=BaseResponse[dict])
 async def health_check(
     request: Request,
     db: AsyncSession = Depends(get_db),

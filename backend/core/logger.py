@@ -33,7 +33,15 @@ def setup_logging():
     # Suppress verbose TCP-level lifecycle events from httpx/httpcore.
     # In debug mode these log EVERY connect/send/receive event per HTTP call,
     # flooding stdout with hundreds of lines and degrading performance.
-    for noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection"):
+    # Also: redis-py 8.1's "auto" maint-notifications handshake retry
+    # (redis/connection.py:667, redis/asyncio/connection.py:429) logs a
+    # DEBUG line per connection against our Redis 7 server (no
+    # MAINT_NOTIFICATIONS subcommand) — every sync worker connection +
+    # the Celery broker (kombu builds its own ConnectionPool, no opt-out
+    # kwarg exposed) hits this; core/redis.py's own async pool is opted
+    # out directly via maint_notifications_config.
+    for noisy in ("httpx", "httpcore", "httpcore.http11", "httpcore.connection",
+                  "redis.connection", "redis.asyncio.connection"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

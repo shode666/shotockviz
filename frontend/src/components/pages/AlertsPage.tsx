@@ -332,7 +332,7 @@ export default function AlertsPage() {
                             {/* Value with currency prefix for price alerts */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>
-                                    ค่าเงื่อนไข {isPriceAlert && selectedMarket && <span className="text-[9px] ml-1" style={{ color: currency.text || 'var(--color-accent)' }}>({currency.code})</span>}
+                                    ค่าเงื่อนไข {isPriceAlert && selectedMarket && <span className="text-[9px] ml-1" style={{ color: 'var(--color-accent)' }}>({currency.code})</span>}
                                 </div>
                                 {isPriceAlert && selectedMarket ? (
                                     <div className="input-field flex items-center gap-2 p-0 overflow-hidden">

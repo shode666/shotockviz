@@ -40,7 +40,14 @@ jobs:
         working-directory: backend
         run: |
           pip install uv
-          uv pip install -r requirements.txt --system
+          # bd:deps-2026-09 iter1 (CHRIS-07) — was `-r requirements.txt`
+          # alone; WP-B1 moved pytest/pytest-asyncio/pytest-cov/aiosqlite
+          # out into requirements-dev.txt (keeps the prod image clean,
+          # S-AC-6) — the "Run tests" step below would otherwise fail with
+          # `ModuleNotFoundError: No module named pytest`.
+          # requirements-dev.txt itself `-r requirements.txt`s the prod
+          # deps too, so this one line covers both.
+          uv pip install -r requirements-dev.txt --system
       - name: Run tests
         working-directory: backend
         env:
@@ -50,7 +57,12 @@ jobs:
           JWT_ALGORITHM: HS256
           ACCESS_TOKEN_EXPIRE_MINUTES: 15
           REFRESH_TOKEN_EXPIRE_DAYS: 7
-          ENVIRONMENT: test
+          # bd:deps-2026-09 iter1 (CHRIS-07, Dave-discovered addendum) —
+          # was `ENVIRONMENT: test`; core/config.py's field is `app_env`,
+          # pydantic-settings maps that to the `APP_ENV` env var (not
+          # `ENVIRONMENT` — that name was never read by anything, a dead
+          # var since this file was written).
+          APP_ENV: test
         run: |
           python -m pytest tests/ -v --tb=short --cov=. --cov-report=xml
       - name: Upload coverage
@@ -66,7 +78,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # bd:deps-2026-09 iter1 (CHRIS-07) — was '20'; this whole branch's
+          # premise is the Node 24 migration (01-sara-adr-migration.md
+          # §1.5) — CI was still building/type-checking on an untested
+          # Node version.
+          node-version: '24'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
@@ -83,7 +99,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
-          path: frontend/dist/
+          # bd:deps-2026-09 iter1 (CHRIS-07) — was `frontend/dist/`; Nitro
+          # (TanStack Start SSR) outputs to `.output/`, never `dist/` —
+          # confirmed via frontend/Dockerfile:28 (`COPY --from=builder
+          # .../app/.output ./.output`). Pre-existing bug, unrelated to
+          # this migration, left unfixed until now (Sara flagged it too).
+          path: frontend/.output/
           retention-days: 7
 
   docker-build:

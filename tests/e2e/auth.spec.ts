@@ -50,7 +50,7 @@ test.describe('Authenticated state', () => {
     await mockAuthSession(page, MOCK_AUTH_ME);
     await page.goto('/');
 
-    // After mount, checkAuth() is called → GET /api/auth/me → sets user
+    // After mount, checkAuth() is called → GET /api/v1/auth/me → sets user
     // The avatar button shows first letter of display_name
     await expect(page.getByRole('button', { name: 'T' })).toBeVisible({ timeout: 5000 });
   });

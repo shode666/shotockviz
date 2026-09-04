@@ -1,4 +1,4 @@
-FROM node:22-alpine AS builder
+FROM node:24-alpine AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ ENV VITE_GOOGLE_CLIENT_ID=$VITE_GOOGLE_CLIENT_ID
 RUN npm run build
 
 # --- Runtime (TanStack Start uses Node server via Nitro) ---
-FROM node:22-alpine
+FROM node:24-alpine
 
 RUN apk add --no-cache curl && \
     addgroup -S stockviz && adduser -S stockviz -G stockviz

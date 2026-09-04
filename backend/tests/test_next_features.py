@@ -18,6 +18,32 @@ Date: 2026-03-02
 """
 
 import pytest
+
+# bd:deps-2026-09 WP-B0 — quarantined (discovered, not caused, by this WP).
+# This file had a SyntaxError at line 630 (`class TestVolumeSpike Alerts:`)
+# that made pytest fail to COLLECT it at all (00-oliver-discover.md:26) — so
+# none of its 28 tests were ever part of the 107/26/5 baseline. Fixing that
+# one-line typo (mandated by 03-stan-refactor-strategy.md WP-B0) unmasks a
+# SEPARATE pre-existing bug: every test here takes a `client: AsyncClient`
+# fixture that does not exist in conftest.py (only `async_client` does) —
+# confirmed via `pytest --fixtures`, 0/28 tests can even reach setup, all
+# ERROR before running. The file's own docstring also says these are
+# "FAILING tests that define the specification for Phase 2 features... They
+# define the contract that implementation must satisfy" — i.e. intentionally
+# red TDD specs for unimplemented future work, not a regression surface for
+# a dependency migration. Per 02-bella-brd-ac.md §1.2 ("pre-existing test
+# baseline failures... not gated... unless Dave's plan explicitly elects to
+# fix a specific one") this is NOT elected for a fix on this branch —
+# quarantining consistent with test_api_e2e.py's treatment above.
+pytest.skip(
+    "quarantined bd:deps-2026-09 WP-B0 — unmasked by the :630 typo fix; "
+    "every test needs a `client` fixture that doesn't exist (conftest.py "
+    "only defines `async_client`), and the file is documented as "
+    "intentionally-red Phase-2 TDD specs, not current-baseline coverage. "
+    "See outputs/deps-2026-09/03-stan-refactor-strategy.md §6 Q1-adjacent.",
+    allow_module_level=True,
+)
+
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from httpx import AsyncClient
@@ -48,7 +74,7 @@ class TestRealizedPLTracking:
         """
         # Add BUY transaction
         resp = await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "AAPL",
                 "type": "BUY",
@@ -64,7 +90,7 @@ class TestRealizedPLTracking:
 
         # Add SELL transaction
         resp = await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "AAPL",
                 "type": "SELL",
@@ -79,7 +105,7 @@ class TestRealizedPLTracking:
         assert resp.status_code == 201, f"Failed to create sell transaction: {resp.text}"
 
         # Check analytics — WILL FAIL until realized P&L is implemented
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         assert resp.status_code == 200
         data = resp.json()
 
@@ -103,7 +129,7 @@ class TestRealizedPLTracking:
         """
         # BUY 100
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "PTT.BK",
                 "type": "BUY",
@@ -117,7 +143,7 @@ class TestRealizedPLTracking:
 
         # SELL 40
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "PTT.BK",
                 "type": "SELL",
@@ -129,7 +155,7 @@ class TestRealizedPLTracking:
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert data["realized_pl"] == 400.0, \
@@ -161,7 +187,7 @@ class TestRealizedPLTracking:
         """
         # BUY 100 @ 100
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "NVDA",
                 "type": "BUY",
@@ -175,7 +201,7 @@ class TestRealizedPLTracking:
 
         # BUY 100 @ 120
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "NVDA",
                 "type": "BUY",
@@ -189,7 +215,7 @@ class TestRealizedPLTracking:
 
         # SELL 150 @ 130
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "NVDA",
                 "type": "SELL",
@@ -201,7 +227,7 @@ class TestRealizedPLTracking:
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         # FIFO: first 100 @ 100 = 3000 profit, next 50 @ 120 = 500 profit
@@ -223,7 +249,7 @@ class TestRealizedPLTracking:
         Realized P&L = 15990 - 15010 = $980
         """
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "AAPL",
                 "type": "BUY",
@@ -236,7 +262,7 @@ class TestRealizedPLTracking:
         )
 
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "AAPL",
                 "type": "SELL",
@@ -248,7 +274,7 @@ class TestRealizedPLTracking:
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert data["realized_pl"] == 980.0, \
@@ -262,7 +288,7 @@ class TestRealizedPLTracking:
         Realized P&L = (140 - 150) * 100 = -$1000 (loss)
         """
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "TSLA",
                 "type": "BUY",
@@ -275,7 +301,7 @@ class TestRealizedPLTracking:
         )
 
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={
                 "symbol": "TSLA",
                 "type": "SELL",
@@ -287,7 +313,7 @@ class TestRealizedPLTracking:
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert data["realized_pl"] == -1000.0, \
@@ -306,41 +332,41 @@ class TestRealizedPLTracking:
         """
         # AAPL win
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": "2026-01-01"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "SELL", "qty": 100, "price": 160, "fee": 0, "date": "2026-01-02"},
             headers=auth_headers,
         )
 
         # TSLA loss
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "TSLA", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": "2026-01-03"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "TSLA", "type": "SELL", "qty": 100, "price": 140, "fee": 0, "date": "2026-01-04"},
             headers=auth_headers,
         )
 
         # MSFT win
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "MSFT", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": "2026-01-05"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "MSFT", "type": "SELL", "qty": 100, "price": 155, "fee": 0, "date": "2026-01-06"},
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert "win_rate" in data, "Response missing 'win_rate' field"
@@ -361,29 +387,29 @@ class TestRealizedPLTracking:
         # Two wins
         for i, price in enumerate([160, 155]):
             await client.post(
-                "/api/portfolio/transactions",
+                "/api/v1/portfolio/transactions",
                 json={"symbol": f"SYM{i}", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": f"2026-01-{i+1:02d}"},
                 headers=auth_headers,
             )
             await client.post(
-                "/api/portfolio/transactions",
+                "/api/v1/portfolio/transactions",
                 json={"symbol": f"SYM{i}", "type": "SELL", "qty": 100, "price": price, "fee": 0, "date": f"2026-01-{i+2:02d}"},
                 headers=auth_headers,
             )
 
         # One loss
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "LOSS", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": "2026-01-10"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "LOSS", "type": "SELL", "qty": 100, "price": 140, "fee": 0, "date": "2026-01-11"},
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert "profit_factor" in data, "Response missing 'profit_factor' field"
@@ -397,17 +423,17 @@ class TestRealizedPLTracking:
         - symbol, qty, entry_price, exit_price, realized_pl, holding_days
         """
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": "2026-01-01"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "SELL", "qty": 100, "price": 160, "fee": 0, "date": "2026-01-05"},
             headers=auth_headers,
         )
 
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         data = resp.json()
 
         assert "closed_positions" in data, "Response missing 'closed_positions' field"
@@ -438,7 +464,7 @@ class TestStochasticOscillator:
 
     async def test_stochastic_api_returns_k_and_d(self, client: AsyncClient, auth_headers: dict):
         """
-        GET /api/stocks/{symbol}/indicators?indicator=stochastic
+        GET /api/v1/stocks/{symbol}/indicators?indicator=stochastic
 
         Response should include:
         - stoch_k: array of %K values (0-100)
@@ -447,7 +473,7 @@ class TestStochasticOscillator:
         """
         # This test assumes AAPL has historical data available
         resp = await client.get(
-            "/api/stocks/AAPL/indicators?indicator=stochastic&period=14",
+            "/api/v1/stocks/AAPL/indicators?indicator=stochastic&period=14",
             headers=auth_headers,
         )
 
@@ -476,7 +502,7 @@ class TestStochasticOscillator:
         When stoch_k < 20, it's oversold (buy signal for mean reversion).
         """
         resp = await client.get(
-            "/api/stocks/AAPL/indicators?indicator=stochastic&period=14",
+            "/api/v1/stocks/AAPL/indicators?indicator=stochastic&period=14",
             headers=auth_headers,
         )
         data = resp.json()
@@ -493,7 +519,7 @@ class TestStochasticOscillator:
         When stoch_k > 80, it's overbought (sell/pullback signal).
         """
         resp = await client.get(
-            "/api/stocks/AAPL/indicators?indicator=stochastic&period=14",
+            "/api/v1/stocks/AAPL/indicators?indicator=stochastic&period=14",
             headers=auth_headers,
         )
         data = resp.json()
@@ -511,7 +537,7 @@ class TestStochasticOscillator:
         Bearish signal: %K crosses below %D (especially in overbought zone)
         """
         resp = await client.get(
-            "/api/stocks/AAPL/indicators?indicator=stochastic&period=14",
+            "/api/v1/stocks/AAPL/indicators?indicator=stochastic&period=14",
             headers=auth_headers,
         )
         data = resp.json()
@@ -549,7 +575,7 @@ class TestGoldenDeathCrossAlerts:
         User can create a Golden Cross alert for a symbol.
         """
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "AAPL",
                 "alert_type": "GOLDEN_CROSS",
@@ -572,7 +598,7 @@ class TestGoldenDeathCrossAlerts:
         User can create a Death Cross alert for a symbol.
         """
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "TSLA",
                 "alert_type": "DEATH_CROSS",
@@ -598,7 +624,7 @@ class TestGoldenDeathCrossAlerts:
         """
         # Create alert
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "AAPL",
                 "alert_type": "GOLDEN_CROSS",
@@ -613,7 +639,7 @@ class TestGoldenDeathCrossAlerts:
         # that simulates the golden cross condition
 
         # Get alert status
-        resp = await client.get("/api/alerts", headers=auth_headers)
+        resp = await client.get("/api/v1/alerts", headers=auth_headers)
         alerts = resp.json()
 
         # Find our alert
@@ -627,7 +653,7 @@ class TestGoldenDeathCrossAlerts:
 # FEATURE 4: VOLUME SPIKE ALERTS
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestVolumeSpike Alerts:
+class TestVolumeSpikeAlerts:
     """
     Feature: Volume Spike alert (volume > 2x or 3x average)
     Priority: P0 — Breakout confirmation signal
@@ -643,7 +669,7 @@ class TestVolumeSpike Alerts:
         User can create a volume spike alert with multiplier (2x, 3x, etc).
         """
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "NVDA",
                 "alert_type": "VOLUME_SPIKE",
@@ -678,12 +704,12 @@ class TestScreenerFilters:
 
     async def test_screener_golden_cross_filter(self, client: AsyncClient, auth_headers: dict):
         """
-        GET /api/screener/run?market=US&filter=golden_cross
+        GET /api/v1/screener/run?market=US&filter=golden_cross
 
         Returns list of stocks where 20-SMA > 50-SMA (bullish signal)
         """
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={
                 "market": "US",
                 "filters": {
@@ -711,7 +737,7 @@ class TestScreenerFilters:
         Screen for stocks with Stochastic %K < 20 (oversold, mean reversion setup)
         """
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={
                 "market": "SET",
                 "filters": {
@@ -732,7 +758,7 @@ class TestScreenerFilters:
         Screen for stocks breaking above Donchian 20-bar high
         """
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={
                 "market": "US",
                 "filters": {
@@ -765,11 +791,11 @@ class TestDashboardRealizedPL:
 
     async def test_dashboard_includes_realized_pl_card(self, client: AsyncClient, auth_headers: dict):
         """
-        GET /api/dashboard
+        GET /api/v1/dashboard
 
         Response should include realized_pl_today and realized_pl_ytd
         """
-        resp = await client.get("/api/dashboard", headers=auth_headers)
+        resp = await client.get("/api/v1/dashboard", headers=auth_headers)
 
         assert resp.status_code == 200
         data = resp.json()
@@ -788,23 +814,23 @@ class TestDashboardRealizedPL:
         """
         # Create some test trades
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "BUY", "qty": 100, "price": 150, "fee": 0, "date": date.today().isoformat()},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "SELL", "qty": 100, "price": 160, "fee": 0, "date": date.today().isoformat()},
             headers=auth_headers,
         )
 
         # Get dashboard
-        resp = await client.get("/api/dashboard", headers=auth_headers)
+        resp = await client.get("/api/v1/dashboard", headers=auth_headers)
         assert resp.status_code == 200
         dashboard_data = resp.json()
 
         # Get portfolio analytics
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         portfolio_data = resp.json()
 
         # Dashboard P&L should match portfolio realized_pl
@@ -832,7 +858,7 @@ class TestADXIndicator:
 
     async def test_adx_api_returns_adx_values(self, client: AsyncClient, auth_headers: dict):
         """
-        GET /api/stocks/{symbol}/indicators?indicator=adx
+        GET /api/v1/stocks/{symbol}/indicators?indicator=adx
 
         Response should include:
         - adx: array of ADX values (0-100)
@@ -840,7 +866,7 @@ class TestADXIndicator:
         - minus_di: -DI line
         """
         resp = await client.get(
-            "/api/stocks/AAPL/indicators?indicator=adx&period=14",
+            "/api/v1/stocks/AAPL/indicators?indicator=adx&period=14",
             headers=auth_headers,
         )
 
@@ -857,7 +883,7 @@ class TestADXIndicator:
         Screener should have ADX > 25 filter (strong trend).
         """
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={
                 "market": "US",
                 "filters": {
@@ -889,13 +915,13 @@ class TestAlertHistory:
 
     async def test_alert_history_endpoint(self, client: AsyncClient, auth_headers: dict):
         """
-        GET /api/alerts/{alert_id}/history
+        GET /api/v1/alerts/{alert_id}/history
 
         Returns list of trigger events with timestamp, price, triggered.
         """
         # Create an alert
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "AAPL",
                 "alert_type": "PRICE_ABOVE",
@@ -909,7 +935,7 @@ class TestAlertHistory:
 
         # Get history
         resp = await client.get(
-            f"/api/alerts/{alert_id}/history",
+            f"/api/v1/alerts/{alert_id}/history",
             headers=auth_headers,
         )
 
@@ -950,7 +976,7 @@ class TestTelegramAlertDelivery:
 
         # Create alert
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={
                 "symbol": "AAPL",
                 "alert_type": "PRICE_ABOVE",
@@ -983,24 +1009,24 @@ class TestPerformanceAndIntegration:
         """
         # 1. Add transactions
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "BUY", "qty": 100, "price": 150, "fee": 10, "date": "2026-01-01"},
             headers=auth_headers,
         )
         await client.post(
-            "/api/portfolio/transactions",
+            "/api/v1/portfolio/transactions",
             json={"symbol": "AAPL", "type": "SELL", "qty": 100, "price": 160, "fee": 10, "date": "2026-01-05"},
             headers=auth_headers,
         )
 
         # 2. Check P&L
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         assert resp.status_code == 200
         assert resp.json()["realized_pl"] == 980.0
 
         # 3. Run screener
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={"market": "US", "filters": {"golden_cross": True}},
             headers=auth_headers,
         )
@@ -1008,14 +1034,14 @@ class TestPerformanceAndIntegration:
 
         # 4. Create alert
         resp = await client.post(
-            "/api/alerts",
+            "/api/v1/alerts",
             json={"symbol": "TSLA", "alert_type": "GOLDEN_CROSS", "channel": "telegram"},
             headers=auth_headers,
         )
         assert resp.status_code == 201
 
         # 5. Check dashboard
-        resp = await client.get("/api/dashboard", headers=auth_headers)
+        resp = await client.get("/api/v1/dashboard", headers=auth_headers)
         assert resp.status_code == 200
 
     async def test_portfolio_analytics_performance_p95_under_1s(self, client: AsyncClient, auth_headers: dict):
@@ -1028,7 +1054,7 @@ class TestPerformanceAndIntegration:
         # Create diverse portfolio
         for i in range(20):
             await client.post(
-                "/api/portfolio/transactions",
+                "/api/v1/portfolio/transactions",
                 json={
                     "symbol": f"SYM{i:02d}",
                     "type": "BUY",
@@ -1042,7 +1068,7 @@ class TestPerformanceAndIntegration:
 
         # Measure analytics fetch time
         start = time.time()
-        resp = await client.get("/api/portfolio/analytics", headers=auth_headers)
+        resp = await client.get("/api/v1/portfolio/analytics", headers=auth_headers)
         elapsed = time.time() - start
 
         assert resp.status_code == 200
@@ -1057,7 +1083,7 @@ class TestPerformanceAndIntegration:
 
         start = time.time()
         resp = await client.post(
-            "/api/screener/run",
+            "/api/v1/screener/run",
             json={
                 "market": "US",
                 "filters": {

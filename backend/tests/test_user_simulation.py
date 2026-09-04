@@ -26,6 +26,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 import pytest
 
+# bd:deps-2026-09 WP-B0 — this suite requires a live stack at https://localhost
+# (see API_BASE_URL below); baseline run showed 26 failures here, all
+# live-stack-dependent (outputs/deps-2026-09/00-oliver-discover.md:26).
+# Marked integration + deselected via pytest.ini addopts per
+# outputs/deps-2026-09/03-stan-refactor-strategy.md § r3-B-1 (no ci.yml touch).
+pytestmark = pytest.mark.integration
+
 # Environment configuration
 API_BASE_URL = "https://localhost"
 API_ENDPOINT = f"{API_BASE_URL}/api"

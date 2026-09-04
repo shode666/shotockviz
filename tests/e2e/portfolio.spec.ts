@@ -27,7 +27,7 @@ const MOCK_PORTFOLIO = [
 ];
 
 async function mockPortfolioAPI(page: any, data = MOCK_PORTFOLIO) {
-  await page.route('**/api/portfolio**', (route: any) =>
+  await page.route('**/api/v1/portfolio**', (route: any) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -128,7 +128,7 @@ test.describe('Portfolio Page — empty state', () => {
   test('shows empty state when portfolio is empty', async ({ page }) => {
     await mockStockAPIs(page);
     await mockAuthSession(page, MOCK_AUTH_ME);
-    await page.route('**/api/portfolio**', (route) =>
+    await page.route('**/api/v1/portfolio**', (route) =>
       route.fulfill({
         status: 200,
         contentType: 'application/json',

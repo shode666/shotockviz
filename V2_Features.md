@@ -24,7 +24,7 @@
 ยกระดับการจัดการระบบหลังบ้านให้ตรวจสอบได้แบบ Real-time ตามมาตรฐาน Senior Dev
 
 - **Flower Monitoring Dashboard**: ติดตั้ง Flower ใน Docker Compose เพื่อตรวจสอบสถานะและ Performance ของ Celery Workers ทั้ง 10 ตัวแบบละเอียด
-- **pgvector Integration (RAG)**: ติดตั้ง Extension `pgvector` ใน PostgreSQL เพื่อทำ Semantic Search ให้ AI (Ollama) สามารถดึงข่าวสารที่เกี่ยวข้องที่สุดมาวิเคราะห์ได้อย่างแม่นยำ
+- ~~**pgvector Integration (RAG)**~~ — REMOVED (bd:deps-2026-09): AI chat feature นี้ถูกถอดออกทั้งหมด local LLM runtime ถูกถอดจาก prod ไปแล้วก่อนหน้า
 - **Data Retention UI**: หน้าจอตั้งค่าระยะเวลาการเก็บข้อมูล (Housekeeping Policy) เพื่อให้ User บริหารจัดการพื้นที่ Disk บนเครื่อง Local ได้เอง
 
 ## 4. Professional Analysis Tools (TradingView Style)

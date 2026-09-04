@@ -28,6 +28,7 @@ from core.config import settings
 from core.logger import get_logger
 from core.database import AsyncSessionLocal
 from core import cache_keys
+from core.redis import get_redis as _get_shared_redis
 from models.schemas import OHLCVBar
 from models.ohlcv import OHLCVBar as OHLCVBarModel
 
@@ -84,9 +85,19 @@ DAILY_TIMEFRAMES = {"1D", "1W", "1M"}
 async def get_redis() -> aioredis.Redis:
     """Get or create the global Redis client.
 
-    Cached for the lifetime of the process.
+    Prefers the shared connection pool from ``core.redis`` (created by
+    ``init_redis()`` in the app lifespan with explicit connect/socket
+    timeouts, bd:deps-2026-09 S0) so this module shares one pool with the
+    rest of the app instead of opening its own unbounded connection.
+    Falls back to a locally-cached, lazily-created client — the previous
+    behavior, unchanged — when ``core.redis`` hasn't been initialised
+    (e.g. this module used outside the FastAPI app lifespan).
     """
     global _redis_client
+    try:
+        return await _get_shared_redis()
+    except RuntimeError:
+        pass
     if _redis_client is None:
         _redis_client = aioredis.from_url(settings.redis_url, decode_responses=True)
     return _redis_client

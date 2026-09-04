@@ -26,7 +26,6 @@ celery_app = Celery(
         "workers.corporate_actions_fetcher",
         "workers.financials_history_fetcher",
         "workers.earnings_events_fetcher",
-        "workers.embedding_worker",
         "workers.fgi_fetcher",
     ],
 )
@@ -128,10 +127,5 @@ celery_app.conf.beat_schedule = {
     "fetch-fear-greed": {
         "task": "workers.fgi_fetcher.fetch_fear_greed",
         "schedule": crontab(minute="*/30"),
-    },
-    # Generate embeddings for RAG — runs after news fetch, every 6 hours
-    "embed-documents": {
-        "task": "workers.embedding_worker.embed_new_documents",
-        "schedule": crontab(minute=45, hour="*/6"),
     },
 }

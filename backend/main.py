@@ -4,7 +4,7 @@ import json
 from contextlib import asynccontextmanager
 from typing import Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
@@ -12,9 +12,10 @@ from core.database import create_tables
 from core.logger import setup_logging, get_logger
 from core.redis import init_redis, close_redis
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
-from api.routes import dashboard, ai_chat, notes, portfolio_performance, admin, backtesting
+from api.routes import dashboard, notes, portfolio_performance, admin, backtesting
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
+from schemas.envelope import install_error_envelope
 
 # Import the configured Celery app so it becomes Celery's *current app* in this
 # process (Celery() defaults set_as_current=True). Without this, @shared_task
@@ -265,28 +266,44 @@ app.add_middleware(
 )
 
 # Rate limiting (before routing, after CORS)
-app.add_middleware(RateLimitMiddleware, redis_url=settings.redis_url)
+# bd:deps-2026-09 iter1 (Dave-discovered) — `redis_url=` param dropped;
+# RateLimitMiddleware now uses core.redis's shared, lifespan-scoped client
+# instead of building its own separately-cycled one (see
+# api/middleware/rate_limit.py's get_redis() docstring).
+app.add_middleware(RateLimitMiddleware)
 
 # Request-ID (innermost — runs first, so request_id is available to all downstream)
 app.add_middleware(RequestIDMiddleware)
 
+# bd:deps-2026-09 S2 (ADR-001 r3, ADR-002) — envelope error handlers, scoped
+# to /api/v1/* paths only (schemas/envelope.py).
+install_error_envelope(app)
+
 # ─── Routers ────────────────────────────────────────────────────────────────
+# bd:deps-2026-09 S2 (ADR-001 r3) — 12 modules move under one /api/v1
+# aggregate (envelope + version together, AC-B1-r3). 2 exceptions stay at
+# their old, unversioned paths (AC-B9): GET /api/health (health_router,
+# below — infra contract, compose healthchecks) and WS /api/ws/prices
+# (unchanged, further down this file).
 
-app.include_router(system.router)
-app.include_router(auth.router)
-app.include_router(stocks.router)
-app.include_router(watchlist.router)
-app.include_router(portfolio.router)
-app.include_router(portfolio_performance.router)   # equity curve
-app.include_router(alerts.router)
-app.include_router(drawings.router)
-app.include_router(screener.router)
-app.include_router(dashboard.router)               # market overview
-app.include_router(ai_chat.router)                 # AI assistant
-app.include_router(notes.router)                   # stock notes
-app.include_router(admin.router)                   # admin settings
-app.include_router(backtesting.router)             # strategy backtesting
+api_v1 = APIRouter(prefix="/api/v1")
+api_v1.include_router(auth.router)
+api_v1.include_router(stocks.router)
+api_v1.include_router(watchlist.router)
+api_v1.include_router(portfolio.router)
+api_v1.include_router(portfolio_performance.router)   # equity curve
+api_v1.include_router(alerts.router)
+api_v1.include_router(drawings.router)
+api_v1.include_router(screener.router)
+api_v1.include_router(dashboard.router)                # market overview
+api_v1.include_router(notes.router)                    # stock notes
+api_v1.include_router(admin.router)                     # admin settings
+api_v1.include_router(backtesting.router)               # strategy backtesting
+api_v1.include_router(system.router)                     # /system/ready, /system/celery-stats, /market/fgi
+app.include_router(api_v1)
 
+# 2 unversioned exceptions — old paths, frozen (AC-B9)
+app.include_router(system.health_router)   # GET /api/health
 
 # ─── WebSocket ──────────────────────────────────────────────────────────────
 

@@ -1,7 +1,39 @@
 // Technical Indicators Calculation Utility
 
-export function calculateSMA(data, period = 20) {
-    const result = [];
+export interface Bar {
+    time: number;
+    open?: number;
+    high?: number;
+    low?: number;
+    close: number;
+    volume?: number;
+}
+
+export interface IndicatorPoint {
+    time: number;
+    value: number | null;
+}
+
+export interface HistogramPoint {
+    time: number;
+    value: number;
+    color: string;
+}
+
+export interface MACDResult {
+    macdLine: IndicatorPoint[];
+    signalLine: IndicatorPoint[];
+    histogram: HistogramPoint[];
+}
+
+export interface BollingerBandsResult {
+    upper: IndicatorPoint[];
+    middle: IndicatorPoint[];
+    lower: IndicatorPoint[];
+}
+
+export function calculateSMA(data: Bar[], period = 20): IndicatorPoint[] {
+    const result: IndicatorPoint[] = [];
     for (let i = 0; i < data.length; i++) {
         if (i < period - 1) {
             result.push({ time: data[i].time, value: null });
@@ -16,8 +48,8 @@ export function calculateSMA(data, period = 20) {
     return result.filter(r => r.value !== null);
 }
 
-export function calculateEMA(data, period = 50) {
-    const result = [];
+export function calculateEMA(data: Bar[], period = 50): IndicatorPoint[] {
+    const result: IndicatorPoint[] = [];
     if (data.length < period) return result;
 
     const k = 2 / (period + 1);
@@ -38,8 +70,8 @@ export function calculateEMA(data, period = 50) {
     return result;
 }
 
-export function calculateRSI(data, period = 14) {
-    const result = [];
+export function calculateRSI(data: Bar[], period = 14): IndicatorPoint[] {
+    const result: IndicatorPoint[] = [];
     if (data.length < period + 1) return result;
 
     // Accumulate simple average gains/losses over the first `period` changes
@@ -72,19 +104,24 @@ export function calculateRSI(data, period = 14) {
     return result;
 }
 
-export function calculateMACD(data, shortPeriod = 12, longPeriod = 26, signalPeriod = 9) {
+export function calculateMACD(
+    data: Bar[],
+    shortPeriod = 12,
+    longPeriod = 26,
+    signalPeriod = 9,
+): MACDResult {
     const emaShort = calculateEMA(data, shortPeriod);
     const emaLong = calculateEMA(data, longPeriod);
 
     // Map long EMA by time
     const emaLongMap = new Map(emaLong.map(item => [item.time, item.value]));
 
-    const macdLineData = [];
+    const macdLineData: Bar[] = [];
     for (const short of emaShort) {
         if (emaLongMap.has(short.time)) {
             macdLineData.push({
                 time: short.time,
-                close: short.value - emaLongMap.get(short.time) // use 'close' field so we can pass to calculateEMA later
+                close: (short.value as number) - (emaLongMap.get(short.time) as number), // use 'close' field so we can pass to calculateEMA later
             });
         }
     }
@@ -92,19 +129,19 @@ export function calculateMACD(data, shortPeriod = 12, longPeriod = 26, signalPer
     const signalLineData = calculateEMA(macdLineData, signalPeriod);
     const signalMap = new Map(signalLineData.map(item => [item.time, item.value]));
 
-    const histogram = [];
-    const macdLine = [];
-    const signalLine = [];
+    const histogram: HistogramPoint[] = [];
+    const macdLine: IndicatorPoint[] = [];
+    const signalLine: IndicatorPoint[] = [];
 
     for (const macd of macdLineData) {
         macdLine.push({ time: macd.time, value: macd.close });
         if (signalMap.has(macd.time)) {
-            const sig = signalMap.get(macd.time);
+            const sig = signalMap.get(macd.time) as number;
             signalLine.push({ time: macd.time, value: sig });
             histogram.push({
                 time: macd.time,
                 value: macd.close - sig,
-                color: (macd.close - sig) >= 0 ? '#26a69a' : '#ef5350'
+                color: (macd.close - sig) >= 0 ? '#26a69a' : '#ef5350',
             });
         }
     }
@@ -112,8 +149,8 @@ export function calculateMACD(data, shortPeriod = 12, longPeriod = 26, signalPer
     return { macdLine, signalLine, histogram };
 }
 
-export function calculateBollingerBands(data, period = 20, stdDevs = 2) {
-    const result = { upper: [], middle: [], lower: [] };
+export function calculateBollingerBands(data: Bar[], period = 20, stdDevs = 2): BollingerBandsResult {
+    const result: BollingerBandsResult = { upper: [], middle: [], lower: [] };
 
     for (let i = period - 1; i < data.length; i++) {
         const slice = data.slice(i - period + 1, i + 1);
@@ -131,11 +168,11 @@ export function calculateBollingerBands(data, period = 20, stdDevs = 2) {
     return result;
 }
 
-export function calculateVWAP(data) {
-    const result = [];
+export function calculateVWAP(data: Bar[]): IndicatorPoint[] {
+    const result: IndicatorPoint[] = [];
     let cumPV = 0;
     let cumV = 0;
-    let lastDate = null;
+    let lastDate: string | null = null;
 
     for (const bar of data) {
         // Reset at each calendar day boundary

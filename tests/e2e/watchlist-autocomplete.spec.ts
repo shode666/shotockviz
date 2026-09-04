@@ -42,13 +42,13 @@ test.describe('Watchlist autocomplete — authenticated', () => {
     await expect(input).toBeFocused();
   });
 
-  test('typing a query calls /api/stocks/search', async ({ page }) => {
+  test('typing a query calls /api/v1/stocks/search', async ({ page }) => {
     await page.locator('aside').locator('button').first().click();
     const input = page.locator('input[placeholder="PTT.BK, AAPL..."]');
     await input.waitFor({ state: 'visible' });
 
     const [request] = await Promise.all([
-      page.waitForRequest((req) => req.url().includes('/api/stocks/search')),
+      page.waitForRequest((req) => req.url().includes('/api/v1/stocks/search')),
       input.fill('PTT'),
     ]);
     expect(request.url()).toContain('q=PTT');
@@ -121,7 +121,7 @@ test.describe('Watchlist autocomplete — authenticated', () => {
 
   test('unknown ticker shows "add directly" option', async ({ page }) => {
     // Override search to return empty
-    await page.route('**/api/stocks/search**', (route) =>
+    await page.route('**/api/v1/stocks/search**', (route) =>
       route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }),
     );
     await page.locator('aside').locator('button').first().click();
