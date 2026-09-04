@@ -61,6 +61,8 @@ htmlcov/
 frontend/playwright-report/
 frontend/test-results/
 frontend/.playwright/
+tests/e2e/playwright-report/
+tests/e2e/test-results/
 
 # ===== Database / Data =====
 *.sql.gz
