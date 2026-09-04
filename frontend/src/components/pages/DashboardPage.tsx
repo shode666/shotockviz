@@ -128,10 +128,11 @@ export default function DashboardPage() {
                     <button
                         onClick={load}
                         disabled={loading}
+                        aria-label="รีเฟรชข้อมูล"
                         className="p-1.5 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
                         style={{ color: 'var(--color-text-sub)' }}
                     >
-                        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                        <RefreshCw size={13} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
                     </button>
                 </div>
 

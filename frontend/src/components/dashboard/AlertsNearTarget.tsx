@@ -52,7 +52,7 @@ export function AlertsNearTarget({
 }: AlertsNearTargetProps) {
     return (
         <div
-            className="md:col-span-3 xl:col-span-4 panel rounded-xl border p-4 flex flex-col gap-2"
+            className="md:col-span-3 xl:col-span-2 panel rounded-xl border p-4 flex flex-col gap-2"
             style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
         >
             <div className="flex items-center justify-between">
