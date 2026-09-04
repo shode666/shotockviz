@@ -305,14 +305,14 @@ export default function NewsPage() {
                             ข่าวสำหรับ:
                         </span>
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md"
-                            style={{ background: 'rgba(124,92,252,0.15)', color: 'var(--color-accent)' }}>
+                            style={{ background: 'rgba(124,92,252,0.15)', color: 'var(--color-accent-text)' }}>
                             {fetchSym}
                         </span>
                         {news.length > 0 && (
                             <div className="flex items-center gap-1.5 ml-auto">
-                                <span className="text-[10px] font-semibold" style={{ color: 'var(--color-green)' }}>▲ {pos}</span>
-                                <span className="text-[10px] font-semibold" style={{ color: 'var(--color-red)' }}>▼ {neg}</span>
-                                <span className="text-[10px] font-semibold" style={{ color: 'var(--color-text-sub)' }}>◆ {neu}</span>
+                                <span className="badge" style={{ background: 'var(--color-up-muted)', color: 'var(--color-up)' }}>▲ {pos}</span>
+                                <span className="badge" style={{ background: 'rgba(148,163,184,0.10)', color: 'var(--color-text-sub)' }}>◆ {neu}</span>
+                                <span className="badge" style={{ background: 'var(--color-down-muted)', color: 'var(--color-down)' }}>▼ {neg}</span>
                             </div>
                         )}
                     </div>
