@@ -136,7 +136,10 @@ export function displaySymbol(symbol: string | null | undefined): string {
  * Market tag color config for badges.
  */
 export const MARKET_COLORS: Record<string, { bg: string; text: string }> = {
-    US:   { bg: 'rgba(124,92,252,0.15)',  text: '#7c5cfc' },
+    // US text was #7c5cfc (3.59:1 on the badge composite over --color-panel #12141d
+    // — fails AA) — bd:ux-2026-09 Uma final check. #9d85ff measures 4.80:1 on the
+    // surface-3-over-bg composite (same violet as --color-accent-text-strong).
+    US:   { bg: 'rgba(157,133,255,0.15)', text: '#9d85ff' },
     SET:  { bg: 'rgba(52,211,153,0.15)',   text: '#34d399' },
     FUND: { bg: 'rgba(251,191,36,0.15)',   text: '#fbbf24' },
     JP:   { bg: 'rgba(248,113,113,0.15)',  text: '#f87171' },

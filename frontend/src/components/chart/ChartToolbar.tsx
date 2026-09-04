@@ -28,7 +28,7 @@ export default function ChartToolbar({
             <div className="flex items-center gap-2 mr-2">
                 <span className="font-bold text-sm">{parseSymbol(selectedStock.sym).display}</span>
                 {(() => { const p = parseSymbol(selectedStock.sym); const c = MARKET_COLORS[p.market]; return c ? (
-                    <span className="badge text-[9px]" style={{ background: c.bg, color: c.text }}>{p.market}</span>
+                    <span className="badge text-[11px]" style={{ background: c.bg, color: c.text }}>{p.market}</span>
                 ) : null; })()}
                 <span
                     className="text-sm font-bold"

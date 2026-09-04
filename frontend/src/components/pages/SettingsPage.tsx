@@ -52,7 +52,7 @@ export default function SettingsPage() {
                                 className="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl font-medium transition-all"
                                 style={{
                                     background: i === 0 ? 'var(--surface-3)' : 'transparent',
-                                    color: i === 0 ? 'var(--color-accent-text)' : 'var(--color-text-sub)',
+                                    color: i === 0 ? 'var(--color-accent-text-strong)' : 'var(--color-text-sub)',
                                 }}
                                 onMouseEnter={(e) => { if (i !== 0) e.currentTarget.style.background = 'var(--surface-2)' }}
                                 onMouseLeave={(e) => { if (i !== 0) e.currentTarget.style.background = 'transparent' }}

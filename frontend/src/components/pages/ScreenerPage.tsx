@@ -187,7 +187,7 @@ export default function ScreenerPage() {
                                             <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent-text)' }}>{r.sym}</td>
                                             <td className="px-4 py-3" style={{ color: 'var(--color-text-sub)' }}>{r.name}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums">{r.price}</td>
-                                            <td className="px-4 py-3 font-medium tabular-nums" style={{ color: r.up ? 'var(--color-green)' : 'var(--color-red)' }}>{r.chg}</td>
+                                            <td className="px-4 py-3 font-medium mono" style={{ color: r.up ? 'var(--color-green)' : 'var(--color-red)' }}>{r.up ? '▲' : '▼'} {r.chg}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums" style={{ color: r.rsi < 30 ? 'var(--color-green)' : r.rsi > 70 ? 'var(--color-red)' : 'var(--color-text)' }}>
                                                 {typeof r.rsi === 'number' ? r.rsi.toFixed(1) : r.rsi}
                                             </td>

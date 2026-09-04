@@ -30,6 +30,10 @@
   /* Accent — vibrant violet */
   --color-accent: #7c5cfc;
   --color-accent-text: #6343e8;
+  /* Higher-contrast accent text for brighter chrome (e.g. active item on
+     --surface-3) — light theme's --color-accent-text is already dark
+     enough (matches --color-accent-strong), so this aliases to it. */
+  --color-accent-text-strong: #6343e8;
   --color-accent-strong: #6343e8;
   --color-accent-hover: #6b4cf0;
   --color-accent-glow: rgba(124, 92, 252, 0.14);
@@ -95,6 +99,12 @@
   --surface-3: rgba(255, 255, 255, 0.13);
 
   --color-accent-text: #8f75ff;
+  /* bd:ux-2026-09 Uma final check — #8f75ff is only 3.70-4.09:1 on
+     --surface-3-tinted chrome (fails AA); #9d85ff measures 4.80:1 on the
+     surface-3-over-bg composite (same basis as 03-design-notes.md's
+     other measured pairs). Use for active nav/tab items on surface-3,
+     not general accent-colored text (keep --color-accent-text for that). */
+  --color-accent-text-strong: #9d85ff;
   --color-accent-strong: #6343e8;
   --color-accent-glow: rgba(124, 92, 252, 0.16);
 

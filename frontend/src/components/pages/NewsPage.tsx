@@ -215,6 +215,7 @@ export default function NewsPage() {
                     <button
                         onClick={() => fetchNews(fetchSym)}
                         disabled={loading || !fetchSym}
+                        aria-label="รีเฟรชข่าว"
                         className="p-1.5 rounded-lg transition-colors hover:bg-[var(--color-hover)]"
                         style={{ color: 'var(--color-text-sub)' }}>
                         <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
@@ -245,6 +246,7 @@ export default function NewsPage() {
                             {searchInput && !acLoading && (
                                 <button
                                     onClick={() => { setSearchInput(''); setShowDropdown(false); setAcResults([]); }}
+                                    aria-label="ล้างคำค้นหา"
                                     style={{ color: 'var(--color-text-sub)', flexShrink: 0 }}>
                                     <X size={12} />
                                 </button>
