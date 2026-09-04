@@ -1,6 +1,9 @@
 /**
- * Settings modal + theme toggle tests
- * Covers: open from navbar dropdown, theme switch, dark/light persistence, close.
+ * Settings page + theme toggle tests
+ * Covers: navbar gear link to /settings, theme switch, persistence, page sections.
+ *
+ * bd:ux-2026-09 g3 — SettingsModal replaced by a full `/settings` route
+ * (03-design-notes.md §Settings). This file was rewritten to match.
  */
 import { test, expect } from '@playwright/test';
 import { mockStockAPIs, mockAuthSession, MOCK_AUTH_ME } from './helpers/mocks';
@@ -17,23 +20,15 @@ test.describe('Theme Toggle — navbar button', () => {
   });
 
   test('theme toggle button is visible in navbar', async ({ page }) => {
-    // Sun or Moon icon button
-    const themeBtn = page.getByRole('button').filter({ has: page.locator('svg') }).nth(0);
     await expect(page.locator('nav button[class*="rounded-lg"]').nth(0)).toBeVisible();
   });
 
   test('clicking theme toggle switches between dark and light', async ({ page }) => {
-    // Get initial theme
     const initialTheme = await page.evaluate(() =>
       document.documentElement.getAttribute('data-theme'),
     );
 
-    // Find and click theme toggle button (has Sun or Moon icon)
-    const themeBtn = page.locator('nav').getByRole('button').filter({ has: page.locator('svg') }).last();
-    // Actually find by checking for the sun/moon button specifically
-    // It's the button before the auth section
     const navBtns = page.locator('nav button');
-    // Click the theme toggle (look for the one that changes data-theme)
     for (let i = 0; i < await navBtns.count(); i++) {
       const btn = navBtns.nth(i);
       const html = await btn.innerHTML();
@@ -47,7 +42,6 @@ test.describe('Theme Toggle — navbar button', () => {
       document.documentElement.getAttribute('data-theme'),
     );
 
-    // Theme should have changed
     if (initialTheme === 'dark') {
       expect(newTheme).toBe('light');
     } else {
@@ -56,7 +50,6 @@ test.describe('Theme Toggle — navbar button', () => {
   });
 
   test('theme persists after page reload', async ({ page }) => {
-    // Set to light via localStorage
     await page.evaluate(() => {
       localStorage.setItem('theme', 'light');
       document.documentElement.setAttribute('data-theme', 'light');
@@ -72,98 +65,56 @@ test.describe('Theme Toggle — navbar button', () => {
   });
 });
 
-test.describe('Settings Modal — open/close', () => {
+test.describe('Settings Page — navigation', () => {
   test.beforeEach(async ({ page }) => {
     await mockStockAPIs(page);
     await mockAuthSession(page, MOCK_AUTH_ME);
     await page.goto('/');
   });
 
-  test('opens settings modal from user dropdown', async ({ page }) => {
-    // Wait for auth to resolve
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await expect(avatarBtn).toBeVisible({ timeout: 5000 });
-    await avatarBtn.click();
-
-    // Settings button appears in dropdown
-    const settingsBtn = page.getByRole('button', { name: /Settings/ });
-    await expect(settingsBtn).toBeVisible();
-    await settingsBtn.click();
-
-    // Glass-panel modal should appear
-    await expect(page.locator('.glass-panel').first()).toBeVisible();
-    await expect(page.getByText('Settings').first()).toBeVisible();
+  test('gear icon in navbar links to /settings', async ({ page }) => {
+    const gearLink = page.getByRole('link', { name: 'ตั้งค่า' });
+    await expect(gearLink).toBeVisible();
+    await gearLink.click();
+    await expect(page).toHaveURL('/settings');
   });
 
-  test('settings modal has "Appearance" section', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-    await expect(page.getByText('Appearance')).toBeVisible();
+  test('settings page has General / Chart / Notification side nav', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByRole('link', { name: /General/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Chart/ })).toBeVisible();
+    await expect(page.getByRole('link', { name: /Notification/ })).toBeVisible();
   });
 
-  test('settings modal has Dark and Light theme cards', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-    await expect(page.getByText('Dark').first()).toBeVisible();
-    await expect(page.getByText('Light').first()).toBeVisible();
+  test('settings page has Dark and Light theme cards', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Dark', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('Light', { exact: true }).first()).toBeVisible();
   });
 
-  test('settings modal has Timezone selector', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
+  test('settings page has Timezone selector', async ({ page }) => {
+    await page.goto('/settings');
     await expect(page.getByText('Timezone')).toBeVisible();
-    // Select should have Asia/Bangkok option
-    const timezoneSelect = page.locator('select').first();
-    await expect(timezoneSelect).toBeVisible();
+    await expect(page.locator('#settings-tz')).toBeVisible();
   });
 
-  test('settings modal has Chart Defaults section', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-    await expect(page.getByText('Chart Defaults').first()).toBeVisible();
+  test('settings page has Chart Defaults section', async ({ page }) => {
+    await page.goto('/settings');
+    await expect(page.getByText('Chart Defaults')).toBeVisible();
   });
 
-  test('clicking "ปิด" closes the settings modal', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-    await expect(page.locator('.glass-panel').first()).toBeVisible();
-
-    await page.getByRole('button', { name: 'ปิด' }).click();
-    await expect(page.locator('.glass-overlay').first()).not.toBeVisible();
+  test('settings page has a Telegram Chat ID field (local state only)', async ({ page }) => {
+    await page.goto('/settings');
+    const input = page.locator('#settings-telegram');
+    await expect(input).toBeVisible();
+    await input.fill('128845067');
+    await expect(input).toHaveValue('128845067');
   });
 
-  test('clicking outside the modal closes it', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-    await expect(page.locator('.glass-overlay').first()).toBeVisible();
+  test('clicking "Light" card switches to light mode', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('theme', 'dark'));
+    await page.goto('/settings');
 
-    // Click the overlay backdrop (not the panel)
-    await page.mouse.click(10, 10);
-    await expect(page.locator('.glass-overlay').first()).not.toBeVisible();
-  });
-});
-
-test.describe('Settings Modal — theme switching', () => {
-  test('clicking "Light" card in settings switches to light mode', async ({ page }) => {
-    await mockStockAPIs(page);
-    await mockAuthSession(page, MOCK_AUTH_ME);
-    // Start in dark mode
-    await page.addInitScript(() => {
-      localStorage.setItem('theme', 'dark');
-    });
-    await page.goto('/');
-
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await page.getByRole('button', { name: /Settings/ }).click();
-
-    // Click Light card
     await page.getByRole('button', { name: 'Light', exact: false }).first().click();
 
     const theme = await page.evaluate(() =>
@@ -187,12 +138,6 @@ test.describe('Navbar User Dropdown', () => {
     await expect(page.getByText('test@example.com')).toBeVisible();
   });
 
-  test('dropdown has Settings button', async ({ page }) => {
-    const avatarBtn = page.getByRole('button', { name: 'T' });
-    await avatarBtn.click();
-    await expect(page.getByRole('button', { name: /Settings/ })).toBeVisible();
-  });
-
   test('dropdown has Logout button', async ({ page }) => {
     const avatarBtn = page.getByRole('button', { name: 'T' });
     await avatarBtn.click();
@@ -204,7 +149,6 @@ test.describe('Navbar User Dropdown', () => {
     await avatarBtn.click();
     await expect(page.getByText('Test User')).toBeVisible();
 
-    // Click somewhere else
     await page.mouse.click(200, 400);
     await expect(page.getByText('Test User')).not.toBeVisible();
   });

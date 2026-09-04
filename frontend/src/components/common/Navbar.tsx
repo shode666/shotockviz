@@ -7,7 +7,6 @@ import {
 import useAppStore from '@/store/appStore'
 import useAuthStore from '@/store/authStore'
 import ShotockLogo from './ShotockLogo'
-import SettingsModal from '@/components/modals/SettingsModal'
 import { getSetStatus, getUsStatus, type MarketStatusResult } from '@/utils/marketStatus'
 
 const navItems = [
@@ -46,7 +45,6 @@ export default function Navbar() {
     const navigate = useNavigate()
 
     const [isDropdownOpen, setIsDropdownOpen] = useState(false)
-    const [isSettingsOpen, setIsSettingsOpen] = useState(false)
     const dropdownRef = useRef<HTMLDivElement>(null)
 
     const [setStatus, setSetStatus] = useState<MarketStatusResult>(getSetStatus)
@@ -165,6 +163,23 @@ export default function Navbar() {
                         {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
                     </button>
 
+                    {/* Settings */}
+                    <Link
+                        to="/settings"
+                        aria-label="ตั้งค่า"
+                        aria-current={currentPath === '/settings' ? 'page' : undefined}
+                        className="flex items-center justify-center rounded-lg border transition-colors"
+                        style={{
+                            width: 30, height: 30, background: 'var(--surface-1)',
+                            borderColor: currentPath === '/settings' ? 'var(--color-accent)' : 'var(--color-border)',
+                            color: currentPath === '/settings' ? 'var(--color-accent-text)' : 'var(--color-text-sub)',
+                        }}
+                        onMouseEnter={(e) => { if (currentPath !== '/settings') { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' } }}
+                        onMouseLeave={(e) => { if (currentPath !== '/settings') { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.color = 'var(--color-text-sub)' } }}
+                    >
+                        <Settings size={14} />
+                    </Link>
+
                     {/* Auth */}
                     {isLoading ? (
                         /* Spinner while checkAuth retries — prevents "Login" flash */
@@ -203,17 +218,6 @@ export default function Navbar() {
                                     </div>
                                     <div className="p-1">
                                         <button
-                                            onClick={() => {
-                                                setIsSettingsOpen(true)
-                                                setIsDropdownOpen(false)
-                                            }}
-                                            className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-[var(--color-hover)]"
-                                            style={{ color: 'var(--color-text)' }}
-                                        >
-                                            <Settings size={14} />
-                                            Settings
-                                        </button>
-                                        <button
                                             onClick={handleLogout}
                                             className="w-full flex items-center gap-2 px-3 py-2 text-xs rounded-lg transition-colors hover:bg-red-500/10 text-red-500"
                                         >
@@ -229,7 +233,6 @@ export default function Navbar() {
                     )}
                 </div>
             </nav>
-            <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
         </>
     )
 }
