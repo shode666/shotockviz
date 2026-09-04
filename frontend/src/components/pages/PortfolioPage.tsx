@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Briefcase, Trash2, History, BarChart2, FilterX, Timer } from 'lucide-react';
+import { Briefcase, Trash2, History, BarChart2, FilterX, Timer, Hourglass } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, formatPriceTH } from '@/utils/formatters';
@@ -126,12 +126,12 @@ export default function PortfolioPage() {
                             <button
                                 onClick={() => setActiveTab('holdings')}
                                 className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold transition-colors relative"
-                                style={{ color: activeTab === 'holdings' ? 'var(--color-accent)' : 'var(--color-text-sub)' }}
+                                style={{ color: activeTab === 'holdings' ? 'var(--color-accent-text)' : 'var(--color-text-sub)' }}
                             >
                                 <BarChart2 size={13} />
                                 Holdings
                                 {analytics?.holdings?.length > 0 && (
-                                    <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: activeTab === 'holdings' ? 'var(--color-accent)' : 'var(--color-hover)', color: activeTab === 'holdings' ? '#fff' : 'var(--color-text-sub)' }}>
+                                    <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: activeTab === 'holdings' ? 'var(--color-accent-strong)' : 'var(--color-hover)', color: activeTab === 'holdings' ? '#fff' : 'var(--color-text-sub)' }}>
                                         {analytics.holdings.length}
                                     </span>
                                 )}
@@ -142,12 +142,12 @@ export default function PortfolioPage() {
                             <button
                                 onClick={() => setActiveTab('history')}
                                 className="flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold transition-colors relative"
-                                style={{ color: activeTab === 'history' ? 'var(--color-accent)' : 'var(--color-text-sub)' }}
+                                style={{ color: activeTab === 'history' ? 'var(--color-accent-text)' : 'var(--color-text-sub)' }}
                             >
                                 <History size={13} />
                                 ประวัติธุรกรรม
                                 {txns.length > 0 && (
-                                    <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: activeTab === 'history' ? 'var(--color-accent)' : 'var(--color-hover)', color: activeTab === 'history' ? '#fff' : 'var(--color-text-sub)' }}>
+                                    <span className="ml-1 text-[9px] px-1.5 py-0.5 rounded-full" style={{ background: activeTab === 'history' ? 'var(--color-accent-strong)' : 'var(--color-hover)', color: activeTab === 'history' ? '#fff' : 'var(--color-text-sub)' }}>
                                         {txns.length}
                                     </span>
                                 )}
@@ -159,7 +159,16 @@ export default function PortfolioPage() {
 
                         {/* Tab: Holdings */}
                         {activeTab === 'holdings' && (
-                            <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
+                            <>
+                                <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
+                                {analytics?.has_pending_prices && (
+                                    <div className="text-xs mt-2 px-4 py-2 flex items-center gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
+                                        <Hourglass size={12} strokeWidth={2} aria-hidden="true" />
+                                        {(analytics?.holdings ?? []).filter((h) => h.current_price == null).map((h) => h.symbol).join(', ')}
+                                        {' '}— รอราคาล่าสุด จะอัปเดตอัตโนมัติเมื่อข้อมูลพร้อม
+                                    </div>
+                                )}
+                            </>
                         )}
 
                         {/* Tab: Transaction History */}
@@ -173,7 +182,7 @@ export default function PortfolioPage() {
                                             <button key={f} onClick={() => setHistoryFilter(f)}
                                                 className="px-3 py-1.5 font-semibold transition-all"
                                                 style={{
-                                                    background: historyFilter === f ? 'var(--color-accent)' : 'transparent',
+                                                    background: historyFilter === f ? 'var(--color-accent-strong)' : 'transparent',
                                                     color: historyFilter === f ? '#fff' : 'var(--color-text-sub)',
                                                 }}>
                                                 {f === 'ALL' ? 'ทั้งหมด' : f === 'BUY' ? 'ซื้อ' : 'ขาย'}
@@ -187,7 +196,7 @@ export default function PortfolioPage() {
                                         onChange={e => setFilterSymbol(e.target.value)}
                                         className="text-[10px] font-semibold px-2 py-1.5 rounded-lg outline-none transition-all"
                                         style={{
-                                            background: filterSymbol ? 'var(--color-accent)' : 'var(--color-input-bg)',
+                                            background: filterSymbol ? 'var(--color-accent-strong)' : 'var(--color-input-bg)',
                                             color: filterSymbol ? '#fff' : 'var(--color-text-sub)',
                                             border: 'none',
                                             cursor: 'pointer',
@@ -203,7 +212,7 @@ export default function PortfolioPage() {
                                         onChange={e => setFilterMonth(e.target.value)}
                                         className="text-[10px] font-semibold px-2 py-1.5 rounded-lg outline-none transition-all"
                                         style={{
-                                            background: filterMonth ? 'var(--color-accent)' : 'var(--color-input-bg)',
+                                            background: filterMonth ? 'var(--color-accent-strong)' : 'var(--color-input-bg)',
                                             color: filterMonth ? '#fff' : 'var(--color-text-sub)',
                                             border: 'none',
                                             cursor: 'pointer',
@@ -259,7 +268,7 @@ export default function PortfolioPage() {
                                                             onMouseEnter={e => (e.currentTarget.style.background = 'var(--color-hover)')}
                                                             onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}>
                                                             <td className="px-4 py-3 tabular-nums whitespace-nowrap" style={{ color: 'var(--color-text-sub)' }}>{t.date}</td>
-                                                            <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--color-accent)' }}>
+                                                            <td className="px-4 py-3 font-semibold whitespace-nowrap" style={{ color: 'var(--color-accent-text)' }}>
                                                                 {displaySymbol(t.symbol)}
                                                                 <span className="ml-1 text-[9px] px-1 py-0.5 rounded font-normal" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
                                                                     {t.currency ?? 'THB'}
