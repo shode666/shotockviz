@@ -120,3 +120,8 @@ TESTING_QUICK_START.md
 *.docx
 *.xlsx
 *.pptx
+
+# ===== Engagement evidence (process artifacts, archived off-repo) =====
+# bd:deps-2026-09 D4 — phase reports/review findings/screenshots stay in
+# the cloud workspace, not the git tree. See docs/engagements/deps-2026-09.md.
+outputs/
