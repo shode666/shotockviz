@@ -25,6 +25,15 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://stockviz:password@db:5432/stockviz_db"
 
+    @field_validator("database_url")
+    @classmethod
+    def _check_async_driver(cls, v: str) -> str:
+        # bd:deps-2026-09 fix — core/database.py's engine is async-only;
+        # fail loudly at config load, not deep inside SQLAlchemy's asyncio extension.
+        if "+asyncpg" not in v:
+            raise ValueError(f"DATABASE_URL must use 'postgresql+asyncpg://' (found: {v!r}).")
+        return v
+
     # Redis
     redis_url: str = "redis://redis:6379/0"
 

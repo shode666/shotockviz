@@ -52,3 +52,14 @@ def test_custom_jwt_secret_in_production_boots_clean(monkeypatch):
         jwt_secret_key="a-real-32-character-secret-value",
     )
     assert settings.jwt_secret_key == "a-real-32-character-secret-value"
+
+
+def test_sync_database_url_scheme_raises():
+    """bd:deps-2026-09 fix — a bare `postgresql://` DATABASE_URL must fail
+    at config load (clear message), not deep inside SQLAlchemy's asyncio
+    extension at engine-creation time (core/database.py is async-only)."""
+    with pytest.raises(ValueError, match="postgresql\\+asyncpg"):
+        Settings(
+            _env_file=None,
+            database_url="postgresql://stockviz:password@db:5432/stockviz_db",
+        )
