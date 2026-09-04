@@ -21,6 +21,10 @@ export interface SrLevelLike {
     color?: string | null;
     level_type?: SrLevelType | string;
     tag?: string | null;
+    /** bd:features-2026-09 slice A — 'auto_pivot' | 'manual_import' | 'user_created'.
+     * Already present in the API payload (backend/models/schemas.py:257,
+     * SRLevelResponse.source) — no backend change needed to add this field. */
+    source?: string | null;
 }
 
 /** Fallback hexes used only when a row's `color` column is NULL. */

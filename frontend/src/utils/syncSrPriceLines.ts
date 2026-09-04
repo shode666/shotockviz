@@ -74,7 +74,13 @@ export function syncSrPriceLines(
             price: (level as { price: number }).price,
             color: resolveSrLevelColor(level),
             lineWidth: 1,
-            lineStyle: LineStyle.Dashed,
+            // bd:features-2026-09 slice A (09-sara-autopivot-crypto-spec.md
+            // §3) — dashed = computed (auto_pivot), solid = user-owned
+            // (manual_import/user_created). This is a visual convention
+            // FLIP for pre-existing manual_import rows, which used to
+            // render dashed too (everything was hardcoded Dashed before) —
+            // see R2 visual-change note in the spec, release note required.
+            lineStyle: level.source === 'auto_pivot' ? LineStyle.Dashed : LineStyle.Solid,
             axisLabelVisible: true,
             title: resolveSrLevelTitle(level),
         })

@@ -22,6 +22,7 @@ celery_app = Celery(
         "workers.symbol_registrar",
         "workers.index_populator",
         "workers.news_fetcher",
+        "workers.sr_auto_pivot",
         # V2 workers
         "workers.corporate_actions_fetcher",
         "workers.financials_history_fetcher",
@@ -127,5 +128,13 @@ celery_app.conf.beat_schedule = {
     "fetch-fear-greed": {
         "task": "workers.fgi_fetcher.fetch_fear_greed",
         "schedule": crontab(minute="*/30"),
+    },
+    # bd:features-2026-09 slice A — daily-only, no dirty-flag/recompute
+    # avoidance by design (Tara: over-engineering for this workload).
+    # 18:00 ICT = 11:00 UTC, after SET close (16:30 ICT), before US open
+    # (21:30 ICT).
+    "compute-auto-pivots": {
+        "task": "workers.sr_auto_pivot.compute_auto_pivots",
+        "schedule": crontab(hour=11, minute=0),
     },
 }

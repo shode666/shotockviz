@@ -17,11 +17,12 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { LineStyle } from 'lightweight-charts';
 import { syncSrPriceLines, type SrLineSeriesLike } from './syncSrPriceLines.ts';
 
 interface FakeLine {
     __id: number;
-    options: { price: number; color: string; title: string };
+    options: { price: number; color: string; title: string; lineStyle: LineStyle };
 }
 
 function makeFakeSeries() {
@@ -163,4 +164,37 @@ test('chart recreation with showSrLevels currently false: old lines are still cl
     const result = syncSrPriceLines(newSeries, linesOnOldSeries, LEVELS, false);
     assert.equal(removeCalls, 2, 'cleanup must still be attempted for every stale line even when toggled off');
     assert.deepEqual(result, []);
+});
+
+// ── lineStyle per source (bd:features-2026-09 slice A) ──────────────────────
+// dashed = computed (auto_pivot), solid = user-owned (manual_import /
+// user_created). This is a deliberate FLIP for manual_import rows, which
+// previously rendered dashed too (everything was hardcoded Dashed).
+
+test('auto_pivot level renders Dashed', () => {
+    const { series, created } = makeFakeSeries();
+    const levels = [{ price: 100, level_type: 'support' as const, tag: 'AUTO S1', color: null, source: 'auto_pivot' }];
+    syncSrPriceLines(series, [], levels, true);
+    assert.equal((created[0] as FakeLine).options.lineStyle, LineStyle.Dashed);
+});
+
+test('manual_import level renders Solid (flip from the old hardcoded Dashed)', () => {
+    const { series, created } = makeFakeSeries();
+    const levels = [{ price: 100, level_type: 'support' as const, tag: 'S1', color: '#fde047', source: 'manual_import' }];
+    syncSrPriceLines(series, [], levels, true);
+    assert.equal((created[0] as FakeLine).options.lineStyle, LineStyle.Solid);
+});
+
+test('user_created level renders Solid', () => {
+    const { series, created } = makeFakeSeries();
+    const levels = [{ price: 100, level_type: 'support' as const, tag: 'S1', color: null, source: 'user_created' }];
+    syncSrPriceLines(series, [], levels, true);
+    assert.equal((created[0] as FakeLine).options.lineStyle, LineStyle.Solid);
+});
+
+test('missing/undefined source renders Solid (defaults to "user-owned" style, not computed)', () => {
+    const { series, created } = makeFakeSeries();
+    const levels = [{ price: 100, level_type: 'support' as const, tag: 'S1', color: null }];
+    syncSrPriceLines(series, [], levels, true);
+    assert.equal((created[0] as FakeLine).options.lineStyle, LineStyle.Solid);
 });
