@@ -17,6 +17,12 @@ test.describe('Theme Toggle — navbar button', () => {
     });
     await mockStockAPIs(page);
     await page.goto('/');
+    // bd:ux-2026-09 item 6 fix — this describe was the only one without this
+    // wait; under load the click below can race React hydration (button is
+    // DOM-present after 'load' but its onClick isn't wired yet), making the
+    // 'clicking theme toggle switches' test flaky (fails ~1/2 runs when the
+    // suite runs alongside quinn-targeted.spec.ts, passes solo).
+    await page.waitForLoadState('networkidle');
   });
 
   test('theme toggle button is visible in navbar', async ({ page }) => {
