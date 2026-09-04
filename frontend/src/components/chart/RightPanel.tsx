@@ -1,31 +1,59 @@
-import { useState, useEffect, useCallback } from 'react';
-import { BellPlus, Timer } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { BellPlus, Timer, Newspaper, Briefcase, BarChart2, StickyNote, Save, Check, X, Info } from 'lucide-react';
 import useAppStore from '@/store/appStore';
+import useAuthStore from '@/store/authStore';
 import stockService from '@/services/stockService';
+import portfolioService from '@/services/portfolioService';
+import notesService from '@/services/notesService';
 import alertService from '@/services/alertService';
 import { calculateRSI } from '@/utils/indicators';
+import { displaySymbol } from '@/utils/formatters';
 import toast from 'react-hot-toast';
 
 function isTimeoutError(err: any): boolean {
     return err?.code === 'ECONNABORTED' || !!err?.message?.includes('timeout');
 }
 
-export default function RightPanel({ selectedStock }) {
-    const { darkMode } = useAppStore();
+const TABS = [
+    { key: 'info', Icon: Info, label: 'Info' },
+    { key: 'news', Icon: Newspaper, label: 'News' },
+    { key: 'portfolio', Icon: Briefcase, label: 'Portfolio' },
+    { key: 'fundamentals', Icon: BarChart2, label: 'Fundamentals' },
+    { key: 'notes', Icon: StickyNote, label: 'Notes' },
+];
+
+interface RightPanelProps {
+    selectedStock: any;
+    isOpen: boolean;
+    onClose: () => void;
+}
+
+export default function RightPanel({ selectedStock, isOpen, onClose }: RightPanelProps) {
+    const { isAuthenticated } = useAuthStore();
+    const [tab, setTab] = useState('info');
+
+    // Info tab state (Quick Alert + Stats + RSI Gauge)
     const [fundamentals, setFundamentals] = useState(null);
     const [quote, setQuote] = useState(null);
     const [rsi, setRsi] = useState<number | null>(null);
     const [timedOut, setTimedOut] = useState(false);
 
-    // Fetch quote — single blocking call (backend fetch_quote_now blocks up to 7s server-side).
-    // 404 → symbol not found → quote stays null (stockService.getQuote returns {data:null}).
-    // Timeout → show retry UI.  No 202 retry loop needed anymore.
+    // News/Fundamentals tab state (moved from BottomPanel)
+    const [news, setNews] = useState([]);
+    const [holding, setHolding] = useState(null);
+    const [contentLoading, setContentLoading] = useState(false);
+
+    // Notes tab state (moved from BottomPanel)
+    const [noteContent, setNoteContent] = useState('');
+    const [noteSaving, setNoteSaving] = useState(false);
+    const [noteSaved, setNoteSaved] = useState(false);
+    const saveTimer = useRef<any>(null);
+
     const fetchQuote = useCallback((sym: string, signal: AbortSignal) => {
         stockService.getQuote(sym)
             .then(res => {
                 if (signal.aborted) return;
                 if (res.data?.price != null) setQuote(res.data);
-                // else: not found or no live price — quote stays null, panel shows "—"
             })
             .catch((err) => {
                 if (signal.aborted) return;
@@ -46,7 +74,6 @@ export default function RightPanel({ selectedStock }) {
 
         fetchQuote(sym, signal);
 
-        // Compute real RSI(14) from 1D history bars
         stockService.getHistory(sym, '1D')
             .then(res => {
                 if (signal.aborted) return;
@@ -71,7 +98,6 @@ export default function RightPanel({ selectedStock }) {
         setRsi(null);
         setTimedOut(false);
 
-        // AbortController cancels in-flight fetch if symbol changes before responses arrive
         const controller = new AbortController();
         fetchAll(selectedStock.sym, controller.signal);
 
@@ -79,6 +105,59 @@ export default function RightPanel({ selectedStock }) {
             controller.abort();
         };
     }, [selectedStock?.sym, fetchAll]);
+
+    // News + fundamentals summary (loaded once per symbol, regardless of active tab)
+    useEffect(() => {
+        if (!selectedStock?.sym) return;
+        setContentLoading(true);
+        stockService.getNews(selectedStock.sym).catch(() => ({ data: [] })).then((newsRes: any) => {
+            setNews(newsRes.data || []);
+            setContentLoading(false);
+        });
+    }, [selectedStock?.sym]);
+
+    // Load note when Notes tab is opened or stock changes
+    useEffect(() => {
+        if (tab !== 'notes' || !isAuthenticated || !selectedStock?.sym) return;
+        setNoteContent('');
+        notesService.get(selectedStock.sym)
+            .then(r => setNoteContent(r.data?.content ?? ''))
+            .catch(() => {});
+    }, [tab, isAuthenticated, selectedStock?.sym]);
+
+    const saveNote = useCallback(async () => {
+        if (!isAuthenticated || !selectedStock?.sym) return;
+        setNoteSaving(true);
+        try {
+            await notesService.upsert(selectedStock.sym, noteContent);
+            setNoteSaved(true);
+            setTimeout(() => setNoteSaved(false), 2000);
+        } catch { /* ignore */ }
+        finally { setNoteSaving(false); }
+    }, [isAuthenticated, selectedStock?.sym, noteContent]);
+
+    const handleNoteChange = (v: string) => {
+        setNoteContent(v);
+        setNoteSaved(false);
+        clearTimeout(saveTimer.current);
+        saveTimer.current = setTimeout(saveNote, 1500);
+    };
+
+    // Fetch portfolio holding for selected stock when portfolio tab is open
+    useEffect(() => {
+        if (tab !== 'portfolio' || !isAuthenticated || !selectedStock?.sym) {
+            setHolding(null);
+            return;
+        }
+        portfolioService.getAnalytics()
+            .then(res => {
+                const h = (res.data?.holdings ?? []).find(
+                    (h: any) => h.symbol === selectedStock.sym
+                );
+                setHolding(h ?? null);
+            })
+            .catch(() => setHolding(null));
+    }, [tab, isAuthenticated, selectedStock?.sym]);
 
     const stats = [
         ['52W High', fundamentals?.week_52_high?.toFixed(2) ?? '—'],
@@ -88,7 +167,13 @@ export default function RightPanel({ selectedStock }) {
         ['EPS', fundamentals?.eps?.toFixed(2) ?? '—'],
     ];
 
-    // Only show target if we have a live price — no fake fallback
+    const funData = [
+        ['P/E', fundamentals?.pe_ratio?.toFixed(2) ?? '—'],
+        ['Div Yield', fundamentals?.dividend_yield ? (fundamentals.dividend_yield * 100).toFixed(2) + '%' : '—'],
+        ['Mkt Cap', fundamentals?.market_cap ? (fundamentals.market_cap / 1e9).toFixed(2) + 'B' : '—'],
+        ['Beta', fundamentals?.beta?.toFixed(2) ?? '—'],
+    ];
+
     const targetPrice = quote?.price ? parseFloat((quote.price * 1.05).toFixed(2)) : null;
 
     const handleQuickAlert = async () => {
@@ -114,76 +199,252 @@ export default function RightPanel({ selectedStock }) {
         : 'var(--color-yellow)';
 
     return (
-        <aside className="panel border-l overflow-y-auto" style={{ width: 220, borderLeftWidth: 1, borderLeftStyle: 'solid', borderColor: 'var(--color-border)' }}>
-            {/* Quick Alert */}
-            <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Quick Alert</div>
-                <div className="flex items-center justify-between p-2 rounded-xl mb-2" style={{ background: 'var(--color-input-bg)' }}>
-                    <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>Target (+5%)</span>
-                    <span className="text-[11px] font-medium">{targetPrice ?? '—'}</span>
+        <>
+            {/* Backdrop — mobile bottom-sheet only (Uma #5: panel must not dock permanently on small screens) */}
+            {isOpen && (
+                <div
+                    className="fixed inset-0 z-20 md:hidden"
+                    style={{ background: 'rgba(0,0,0,0.45)' }}
+                    onClick={onClose}
+                    aria-hidden="true"
+                />
+            )}
+            <aside
+                className={`panel fixed z-30 flex flex-col overflow-hidden transition-transform duration-200
+                    inset-x-0 bottom-0 max-h-[70vh] rounded-t-2xl border-t
+                    md:top-12 md:bottom-0 md:right-0 md:left-auto md:inset-x-auto md:w-[260px] md:max-h-none md:rounded-none md:border-l md:border-t-0
+                    ${isOpen ? 'translate-y-0 md:translate-x-0' : 'translate-y-full md:translate-y-0 md:translate-x-full'}`}
+                style={{ borderColor: 'var(--color-border)' }}
+                aria-label="รายละเอียดหุ้น"
+                aria-hidden={!isOpen}
+            >
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-3 py-2 border-b shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+                    <span className="text-xs font-bold">{displaySymbol(selectedStock?.sym)}</span>
+                    <button onClick={onClose} className="p-1 rounded-lg transition-colors hover:bg-[var(--color-hover)]" aria-label="ปิดแผงข้อมูล">
+                        <X size={14} strokeWidth={2} aria-hidden="true" />
+                    </button>
                 </div>
-                <button
-                    onClick={handleQuickAlert}
-                    disabled={targetPrice === null}
-                    className="btn-accent w-full py-1.5 text-[11px] font-medium rounded-lg disabled:opacity-40 flex items-center justify-center gap-1.5"
-                >
-                    <BellPlus size={12} />
-                    Set Alert
-                </button>
-            </div>
 
-            {/* Stats */}
-            <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Stats</div>
-                {timedOut && (
-                    <div className="text-[11px] py-1 mb-1 flex items-center gap-1" style={{ color: 'var(--color-text-sub)' }}>
-                        <Timer size={12} strokeWidth={2} aria-hidden="true" /> Timed out —{' '}
+                {/* Tab headers */}
+                <div className="flex border-b overflow-x-auto shrink-0" style={{ borderColor: 'var(--color-border)' }}>
+                    {TABS.map(({ key, Icon, label }) => (
                         <button
-                            className="underline"
-                            style={{ color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-                            onClick={() => {
-                                if (!selectedStock?.sym) return;
-                                setTimedOut(false);
-                                setFundamentals(null);
-                                setQuote(null);
-                                setRsi(null);
-                                const ctrl = new AbortController();
-                                fetchAll(selectedStock.sym, ctrl.signal);
+                            key={key}
+                            onClick={() => setTab(key)}
+                            className="flex items-center gap-1 text-[10px] px-2.5 py-2 font-medium transition-all whitespace-nowrap"
+                            style={{
+                                color: tab === key ? 'var(--color-accent)' : 'var(--color-text-sub)',
+                                borderBottom: tab === key ? '2px solid var(--color-accent)' : '2px solid transparent',
                             }}
-                        >retry?</button>
-                    </div>
-                )}
-                {stats.map(([k, v]) => (
-                    <div key={k} className="flex justify-between items-center py-1.5 border-b last:border-0" style={{ borderColor: 'color-mix(in srgb, var(--color-border) 40%, transparent)' }}>
-                        <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>{k}</span>
-                        <span className="text-[11px] font-medium tabular-nums">{v}</span>
-                    </div>
-                ))}
-            </div>
+                        >
+                            <Icon size={11} />
+                            {label}
+                        </button>
+                    ))}
+                </div>
 
-            {/* RSI Gauge */}
-            <div className="p-3">
-                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>RSI (14)</div>
-                {rsiPct != null ? (
-                    <>
-                        <div className="relative my-3">
-                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to right, #34d399, #facc15, #f87171)' }}>
-                                <div
-                                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 shadow"
-                                    style={{ left: `${rsiPct}%`, borderColor: 'var(--color-accent)', transform: 'translate(-50%, -50%)' }}
-                                />
+                {/* Tab content */}
+                <div className="flex-1 overflow-y-auto">
+                    {tab === 'info' && (
+                        <>
+                            {/* Quick Alert */}
+                            <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+                                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Quick Alert</div>
+                                <div className="flex items-center justify-between p-2 rounded-xl mb-2" style={{ background: 'var(--color-input-bg)' }}>
+                                    <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>Target (+5%)</span>
+                                    <span className="text-[11px] font-medium">{targetPrice ?? '—'}</span>
+                                </div>
+                                <button
+                                    onClick={handleQuickAlert}
+                                    disabled={targetPrice === null}
+                                    className="btn-accent w-full py-1.5 text-[11px] font-medium rounded-lg disabled:opacity-40 flex items-center justify-center gap-1.5"
+                                >
+                                    <BellPlus size={12} />
+                                    Set Alert
+                                </button>
                             </div>
+
+                            {/* Stats */}
+                            <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
+                                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Stats</div>
+                                {timedOut && (
+                                    <div className="text-[11px] py-1 mb-1 flex items-center gap-1" style={{ color: 'var(--color-text-sub)' }}>
+                                        <Timer size={12} strokeWidth={2} aria-hidden="true" /> Timed out —{' '}
+                                        <button
+                                            className="underline"
+                                            style={{ color: 'var(--color-accent)', background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                            onClick={() => {
+                                                if (!selectedStock?.sym) return;
+                                                setTimedOut(false);
+                                                setFundamentals(null);
+                                                setQuote(null);
+                                                setRsi(null);
+                                                const ctrl = new AbortController();
+                                                fetchAll(selectedStock.sym, ctrl.signal);
+                                            }}
+                                        >retry?</button>
+                                    </div>
+                                )}
+                                {stats.map(([k, v]) => (
+                                    <div key={k} className="flex justify-between items-center py-1.5 border-b last:border-0" style={{ borderColor: 'color-mix(in srgb, var(--color-border) 40%, transparent)' }}>
+                                        <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>{k}</span>
+                                        <span className="text-[11px] font-medium tabular-nums">{v}</span>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {/* RSI Gauge */}
+                            <div className="p-3">
+                                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>RSI (14)</div>
+                                {rsiPct != null ? (
+                                    <>
+                                        <div className="relative my-3">
+                                            <div className="h-1.5 rounded-full overflow-hidden" style={{ background: 'linear-gradient(to right, #34d399, #facc15, #f87171)' }}>
+                                                <div
+                                                    className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full bg-white border-2 shadow"
+                                                    style={{ left: `${rsiPct}%`, borderColor: 'var(--color-accent)', transform: 'translate(-50%, -50%)' }}
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex justify-between items-center mt-2">
+                                            <span className="text-[10px] font-medium" style={{ color: 'var(--color-green)' }}>Oversold</span>
+                                            <span className="text-xs font-bold" style={{ color: rsiColor }}>{rsiPct.toFixed(1)}</span>
+                                            <span className="text-[10px] font-medium" style={{ color: 'var(--color-red)' }}>Overbought</span>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="text-[11px] py-4 text-center" style={{ color: 'var(--color-text-sub)' }}>—</div>
+                                )}
+                            </div>
+                        </>
+                    )}
+
+                    {tab !== 'info' && (
+                        <div className="p-3">
+                            {contentLoading && tab === 'news' ? (
+                                <div className="text-[11px] text-center mt-4" style={{ color: 'var(--color-text-sub)' }}>กำลังโหลด...</div>
+                            ) : (
+                                <>
+                                    {tab === 'news' && (
+                                        <div className="flex flex-col gap-1.5">
+                                            {news.length === 0 ? (
+                                                <div className="text-[11px] text-center mt-4" style={{ color: 'var(--color-text-sub)' }}>ไม่มีข่าวล่าสุด</div>
+                                            ) : (
+                                                news.slice(0, 8).map((n: any, i: number) => (
+                                                    <a
+                                                        key={i}
+                                                        href={n.url}
+                                                        target="_blank"
+                                                        rel="noreferrer"
+                                                        className="flex flex-col gap-1 p-2 rounded-lg transition-colors"
+                                                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
+                                                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                                                    >
+                                                        <span className="badge badge-violet flex-shrink-0 text-[10px] w-fit">{n.source}</span>
+                                                        <span className="text-[11px] font-medium hover:underline">{n.title}</span>
+                                                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                                                            {new Date(n.published_at).toLocaleDateString('th-TH', { month: 'short', day: 'numeric' })}
+                                                        </span>
+                                                    </a>
+                                                ))
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {tab === 'portfolio' && (
+                                        <div>
+                                            {!isAuthenticated ? (
+                                                <div className="text-[11px] text-center py-4" style={{ color: 'var(--color-text-sub)' }}>
+                                                    เข้าสู่ระบบเพื่อดูพอร์ตการลงทุน
+                                                </div>
+                                            ) : holding ? (
+                                                <div className="flex flex-col gap-2">
+                                                    {[
+                                                        ['จำนวน', holding.qty?.toLocaleString() ?? '—'],
+                                                        ['ต้นทุนเฉลี่ย', holding.avg_cost?.toFixed(2) ?? '—'],
+                                                        ['มูลค่าปัจจุบัน', holding.current_value?.toFixed(2) ?? '—'],
+                                                        ['กำไร/ขาดทุน%', holding.unrealized_pl_pct != null
+                                                            ? `${holding.unrealized_pl_pct >= 0 ? '+' : ''}${holding.unrealized_pl_pct.toFixed(2)}%`
+                                                            : '—'],
+                                                    ].map(([label, val], i) => (
+                                                        <div key={i} className="rounded-xl p-2.5 border" style={{ background: 'var(--color-input-bg)', borderColor: 'var(--color-border)' }}>
+                                                            <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--color-text-sub)' }}>{label}</div>
+                                                            <div className="text-sm font-bold tabular-nums"
+                                                                style={{ color: i === 3 && holding.unrealized_pl_pct != null
+                                                                    ? (holding.unrealized_pl_pct >= 0 ? 'var(--color-green)' : 'var(--color-red)')
+                                                                    : undefined }}>
+                                                                {val}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            ) : (
+                                                <div className="text-[11px] text-center py-4" style={{ color: 'var(--color-text-sub)' }}>
+                                                    ไม่มีหุ้น {displaySymbol(selectedStock?.sym)} ในพอร์ต
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {tab === 'notes' && (
+                                        <div className="flex flex-col gap-2">
+                                            {!isAuthenticated ? (
+                                                <div className="text-[11px] text-center mt-4" style={{ color: 'var(--color-text-sub)' }}>
+                                                    Login เพื่อบันทึก investment thesis
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="flex items-center justify-between">
+                                                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                                                            บันทึก thesis
+                                                        </span>
+                                                        <div className="flex items-center gap-1.5">
+                                                            {noteSaved && (
+                                                                <span className="text-[10px] flex items-center gap-0.5" style={{ color: 'var(--color-green)' }}>
+                                                                    <Check size={11} strokeWidth={2} aria-hidden="true" /> บันทึกแล้ว
+                                                                </span>
+                                                            )}
+                                                            <button onClick={saveNote} disabled={noteSaving}
+                                                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg transition-colors"
+                                                                style={{ background: 'var(--color-accent-glow, rgba(124,92,252,0.15))', color: 'var(--color-accent)' }}>
+                                                                <Save size={9} /> {noteSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    <textarea
+                                                        className="w-full resize-none text-[11px] rounded-lg p-2 outline-none"
+                                                        rows={8}
+                                                        style={{
+                                                            background: 'var(--color-input-bg)',
+                                                            border: '1px solid var(--color-border)',
+                                                            color: 'var(--color-text)',
+                                                        }}
+                                                        placeholder={`เหตุผลที่ซื้อ ${displaySymbol(selectedStock?.sym)}, จุดเข้า, เป้าหมายราคา, ความเสี่ยง...`}
+                                                        value={noteContent}
+                                                        onChange={e => handleNoteChange(e.target.value)}
+                                                    />
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {tab === 'fundamentals' && (
+                                        <div className="flex flex-col gap-2">
+                                            {funData.map(([k, v]) => (
+                                                <div key={k} className="rounded-xl p-2.5 border" style={{ background: 'var(--color-input-bg)', borderColor: 'var(--color-border)' }}>
+                                                    <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--color-text-sub)' }}>{k}</div>
+                                                    <div className="text-sm font-bold">{v}</div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </>
+                            )}
                         </div>
-                        <div className="flex justify-between items-center mt-2">
-                            <span className="text-[10px] font-medium" style={{ color: 'var(--color-green)' }}>Oversold</span>
-                            <span className="text-xs font-bold" style={{ color: rsiColor }}>{rsiPct.toFixed(1)}</span>
-                            <span className="text-[10px] font-medium" style={{ color: 'var(--color-red)' }}>Overbought</span>
-                        </div>
-                    </>
-                ) : (
-                    <div className="text-[11px] py-4 text-center" style={{ color: 'var(--color-text-sub)' }}>—</div>
-                )}
-            </div>
-        </aside>
+                    )}
+                </div>
+            </aside>
+        </>
     );
 }

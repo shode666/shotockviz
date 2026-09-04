@@ -231,16 +231,19 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 currentInds['EMA 50'].setData(calculateEMA(bars, 50));
             }
 
-            // Apply RSI 14
+            // Apply RSI 14 — own band at the bottom of the plot ("strip" under the
+            // candles per mock). When MACD is also active they split that bottom
+            // region into two stacked strips instead of overlapping (bd:ux-2026-09 g2).
+            const macdAlsoActive = activeIndicators.includes('MACD');
             if (activeIndicators.includes('RSI 14')) {
                 if (!currentInds['RSI 14']) {
                     currentInds['RSI 14'] = chart.addSeries(LineSeries, {
                         color: '#a855f7', lineWidth: 2, crosshairMarkerVisible: false, priceScaleId: 'rsi'
                     });
-                    chart.priceScale('rsi').applyOptions({
-                        scaleMargins: { top: 0.8, bottom: 0 },
-                    });
                 }
+                chart.priceScale('rsi').applyOptions({
+                    scaleMargins: macdAlsoActive ? { top: 0.62, bottom: 0.19 } : { top: 0.8, bottom: 0 },
+                });
                 currentInds['RSI 14'].setData(calculateRSI(bars, 14));
             }
 
@@ -255,18 +258,18 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 currentInds['VWAP'].setData(calculateVWAP(bars));
             }
 
-            // Apply MACD
+            // Apply MACD — own band, stacked below RSI's strip when both active.
             if (activeIndicators.includes('MACD')) {
                 if (!currentInds['MACD']) {
                     const macdLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
                     const signalLine = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
                     const hist = chart.addSeries(HistogramSeries, { priceScaleId: 'macd' });
 
-                    chart.priceScale('macd').applyOptions({
-                        scaleMargins: { top: 0.8, bottom: 0 },
-                    });
                     currentInds['MACD'] = [macdLine, signalLine, hist];
                 }
+                chart.priceScale('macd').applyOptions({
+                    scaleMargins: activeIndicators.includes('RSI 14') ? { top: 0.86, bottom: 0 } : { top: 0.8, bottom: 0 },
+                });
                 const macdData = calculateMACD(bars);
                 currentInds['MACD'][0].setData(macdData.macdLine);
                 currentInds['MACD'][1].setData(macdData.signalLine);

@@ -1,10 +1,10 @@
 import { useState } from 'react';
+import { PanelRight } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import TradingChart from '@/components/chart/TradingChart';
 import ChartToolbar from '@/components/chart/ChartToolbar';
 import DrawingToolbar from '@/components/chart/DrawingToolbar';
 import RightPanel from '@/components/chart/RightPanel';
-import BottomPanel from '@/components/chart/BottomPanel';
 
 interface CrosshairData {
     open?: number;
@@ -32,9 +32,12 @@ export default function ChartPage() {
     const { selectedStock } = useAppStore();
     const [selectedTF, setSelectedTF] = useState('1D');
     const [chartType, setChartType] = useState('candlestick');
-    const [activeIndicators, setActiveIndicators] = useState<string[]>([]);
+    // RSI 14 + MACD default-on: replaces the old BottomPanel tabs as the
+    // "under the chart" indicator strips (bd:ux-2026-09 g2, per 04-decisions.md)
+    const [activeIndicators, setActiveIndicators] = useState<string[]>(['RSI 14', 'MACD']);
     const [crosshair, setCrosshair] = useState<CrosshairData | null>(null);
     const [isChartLoading, setIsChartLoading] = useState(false);
+    const [rightPanelOpen, setRightPanelOpen] = useState(false);
 
     return (
         <div className="flex flex-1 overflow-hidden">
@@ -81,12 +84,23 @@ export default function ChartPage() {
                             <span style={{ color: 'var(--color-text-sub)' }}>Vol: <span>{fmtVol(crosshair?.volume)}</span></span>
                         </div>
                     </div>
-                </div>
 
-                <BottomPanel />
+                    {/* RightPanel toggle — panel is an overlay/bottom-sheet (never docked),
+                        so News/Portfolio/Fundamentals/Notes/Info stay reachable without
+                        eating chart width on desktop or half the screen on mobile (Uma #5) */}
+                    <button
+                        onClick={() => setRightPanelOpen(v => !v)}
+                        className="absolute top-3 right-3 panel border rounded-xl p-2 transition-colors hover:bg-[var(--color-hover)]"
+                        style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
+                        aria-label={rightPanelOpen ? 'ปิดแผงข้อมูล' : 'เปิดแผงข้อมูล'}
+                        aria-expanded={rightPanelOpen}
+                    >
+                        <PanelRight size={14} strokeWidth={2} aria-hidden="true" style={{ color: rightPanelOpen ? 'var(--color-accent)' : 'var(--color-text-sub)' }} />
+                    </button>
+                </div>
             </div>
 
-            <RightPanel selectedStock={selectedStock} />
+            <RightPanel selectedStock={selectedStock} isOpen={rightPanelOpen} onClose={() => setRightPanelOpen(false)} />
         </div>
     );
 }
