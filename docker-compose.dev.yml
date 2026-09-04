@@ -56,6 +56,11 @@ services:
       TZ: ${TZ:-Asia/Bangkok}
       CORS_ORIGINS: ${CORS_ORIGINS:-https://localhost,http://localhost:3000}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      # bd:deps-2026-09 R1 — dev runs bare uvicorn (no gunicorn.conf.py
+      # auto-load), so it needs its own proxy-header-trust wiring, derived
+      # from the same TRUSTED_PROXIES source of truth. See docs/deploy-gha.md
+      # § Proxy trust.
+      FORWARDED_ALLOW_IPS: ${TRUSTED_PROXIES:-}
     depends_on:
       db:
         condition: service_healthy
