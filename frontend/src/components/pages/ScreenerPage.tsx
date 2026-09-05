@@ -85,9 +85,22 @@ export default function ScreenerPage() {
     };
 
     const handleRowClick = (r) => {
-        // Fix: format pct field as percentage string, not duplicate r.chg
-        const pctStr = typeof r.pct === 'number' ? `${r.pct >= 0 ? '+' : ''}${r.pct.toFixed(2)}%` : r.pct ?? '—';
-        setSelectedStock({ sym: r.sym, name: r.name, price: r.price.toFixed(2), chg: r.chg.toFixed(2), pct: pctStr, up: r.up });
+        // bd:shotockviz-a5g — the screener API returns `price` and `chg` as
+        // pre-formatted STRINGS (backend/api/routes/screener.py), so the old
+        // `r.price.toFixed(2)` threw a TypeError on every row click, before
+        // navigate() ever ran. `fmt2` handles either shape rather than
+        // assuming one. `pct` is not in the screener payload at all — it
+        // falls through to the chg string, which is already a percentage.
+        const fmt2 = (v: unknown): string =>
+            typeof v === 'number' ? v.toFixed(2) : v == null ? '—' : String(v);
+        setSelectedStock({
+            sym: r.sym,
+            name: r.name,
+            price: fmt2(r.price),
+            chg: fmt2(r.chg),
+            pct: fmt2(r.pct ?? r.chg),
+            up: r.up,
+        });
         navigate({ to: '/' });
     };
 

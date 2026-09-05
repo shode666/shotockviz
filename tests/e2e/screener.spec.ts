@@ -178,18 +178,16 @@ test.describe('Screener Page — Run Screen flow', () => {
     await expect(page.getByText('ไม่พบหุ้นที่ตรงกับเงื่อนไข')).toBeVisible();
   });
 
-  // bd:shotockviz-tl0 / bd:shotockviz-a5g — NOT a stale-assertion issue like
-  // the test above. Root cause: ScreenerPage.tsx:90 calls r.price.toFixed(2)
-  // and r.chg.toFixed(2) inside handleRowClick, but the real backend
-  // (backend/api/routes/screener.py:248-249) returns price/chg as
-  // pre-formatted strings, not numbers — MOCK_SCREENER_RESULTS above
-  // correctly mirrors that contract. Calling .toFixed() on a string throws
-  // `TypeError: r.price.toFixed is not a function` (confirmed via
-  // page.on('pageerror') during a real click), which fires BEFORE
-  // navigate({to:'/'}) — so the row click no-ops and this test fails for
-  // real: clicking a result row is broken in production too. This is a
-  // genuine product bug (out of tests/ scope for Quinn to fix — see
-  // bd:shotockviz-a5g), left red on purpose rather than weakened to pass.
+  // bd:shotockviz-a5g regression guard — this was NOT a stale assertion like
+  // the test above; it was catching a real production bug. handleRowClick
+  // called r.price.toFixed(2) / r.chg.toFixed(2), but the screener API
+  // returns price/chg as pre-formatted STRINGS (backend/api/routes/
+  // screener.py) — MOCK_SCREENER_RESULTS above mirrors that contract
+  // faithfully. .toFixed() on a string threw `TypeError: r.price.toFixed is
+  // not a function` before navigate({to:'/'}) ran, so every screener row
+  // click silently no-opped in production. Fixed in ScreenerPage.tsx; keep
+  // this test honest to the real payload shape rather than mocking numbers,
+  // or the bug comes straight back.
   test('clicking a result row navigates to chart page', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
