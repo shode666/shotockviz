@@ -244,10 +244,69 @@ def _insert_bars(engine, symbol: str, n: int, base: float = 100.0):
         session.commit()
 
 
-class TestG1GuardManualWins:
-    def test_manual_import_row_present_skips_symbol_entirely(self, sync_sqlite_engine):
+def _insert_swing_bars(engine, symbol: str, n: int = 91):
+    """Insert bars with ONE confirmed swing low (dip) and ONE confirmed
+    swing high (peak), both far enough from the flat baseline (and from
+    each other, and from the array edges) to clear k=5 fractal confirmation
+    and the ±0.25% dead band around the final close (~100) — used by G1
+    per-side truth-table tests (13-tara-g1-guard-revision.md §2.2), which
+    need REAL non-flat data producing exactly one support + one resistance
+    candidate (flat bars give zero fractals and are not load-bearing here,
+    per the spec's DoD §5.1)."""
+    assert n >= 91, "need room for a dip at i=20 and a peak at i=60, both k=5-confirmable"
+    Session = sessionmaker(bind=engine)
+    from models.ohlcv import OHLCVBar
+
+    highs = [101.0] * n
+    lows = [99.0] * n
+    highs[60] = 130.0   # swing high -> resistance candidate (close ~100)
+    lows[20] = 70.0      # swing low -> support candidate
+
+    with Session() as session:
+        for i in range(n):
+            h, l = highs[i], lows[i]
+            session.add(OHLCVBar(
+                symbol=symbol, timeframe="1D", time_unix=i,
+                time_str=f"2026-01-{(i % 28) + 1:02d}",
+                open=100.0, high=h, low=l, close=100.0,
+                volume=1000,
+            ))
+        session.commit()
+
+
+class TestG1GuardPerSide:
+    """bd:features-2026-09 iter 7 — G1 is now per-side, NOT whole-symbol
+    (13-tara-g1-guard-revision.md §2.2 truth table). Each test below is one
+    row of that truth table. All use _insert_swing_bars, which produces
+    exactly one support candidate (price 70.0) and one resistance candidate
+    (price 130.0) against close=100.0 — real fractal data, not flat bars
+    (flat bars produce zero rows regardless of G1 and would not be
+    load-bearing here, per the spec's DoD §5.1)."""
+
+    def test_no_manual_both_sides_auto_write(self, sync_sqlite_engine):
+        """Truth table row 1: no manual on either side -> both sides auto."""
         engine = sync_sqlite_engine
-        _insert_bars(engine, "AAPL", n=61)
+        _insert_swing_bars(engine, "AAPL")
+
+        result = compute_auto_pivots()
+
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            auto_rows = session.execute(
+                select(SRLevel).where(SRLevel.symbol == "AAPL", SRLevel.source == "auto_pivot")
+            ).scalars().all()
+        by_type = {r.level_type: r.price for r in auto_rows}
+
+        assert by_type.get("support") == 70.0
+        assert by_type.get("resistance") == 130.0
+        assert result["rows_written"] == 2
+        assert result["symbols_skipped"] == 0
+
+    def test_manual_support_only_blocks_support_side_only(self, sync_sqlite_engine):
+        """Truth table row 2: manual support present -> auto support NOT
+        written, auto resistance IS written."""
+        engine = sync_sqlite_engine
+        _insert_swing_bars(engine, "AAPL")
 
         Session = sessionmaker(bind=engine)
         with Session() as session:
@@ -260,27 +319,94 @@ class TestG1GuardManualWins:
             auto_rows = session.execute(
                 select(SRLevel).where(SRLevel.symbol == "AAPL", SRLevel.source == "auto_pivot")
             ).scalars().all()
+        by_type = {r.level_type: r.price for r in auto_rows}
 
-        assert auto_rows == []
-        assert result["symbols_skipped"] == 1
-        assert result["rows_written"] == 0
+        assert "support" not in by_type
+        assert by_type.get("resistance") == 130.0
+        assert result["rows_written"] == 1
+        assert result["symbols_skipped"] == 0
 
-    def test_without_guard_this_would_fail(self, sync_sqlite_engine):
-        """Sanity check that the guard is actually load-bearing: WITHOUT any
-        manual_import row, the same flat-bar fixture produces zero rows too
-        (flat bars have no fractals) — so this test alone can't prove G1.
-        Proven instead by test_manual_import_row_present_skips_symbol_entirely
-        combined with test_auto_pivot_computed_when_no_manual_import below,
-        which shows rows DO get written when there's no manual_import row
-        and real (non-flat) price data."""
+    def test_manual_resistance_only_blocks_resistance_side_only(self, sync_sqlite_engine):
+        """Truth table row 3: manual resistance present -> auto resistance
+        NOT written, auto support IS written."""
         engine = sync_sqlite_engine
-        _insert_bars(engine, "AAPL", n=61)  # no manual_import row
+        _insert_swing_bars(engine, "AAPL")
+
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            session.add(SRLevel(symbol="AAPL", price=250.0, level_type="resistance", source="manual_import"))
+            session.commit()
 
         result = compute_auto_pivots()
-        # No manual row -> guard doesn't skip; flat bars simply produce no
-        # fractals, so 0 rows is the CORRECT outcome here (not a guard skip).
-        assert result["symbols_skipped"] == 0 or result["rows_written"] == 0
 
+        with Session() as session:
+            auto_rows = session.execute(
+                select(SRLevel).where(SRLevel.symbol == "AAPL", SRLevel.source == "auto_pivot")
+            ).scalars().all()
+        by_type = {r.level_type: r.price for r in auto_rows}
+
+        assert by_type.get("support") == 70.0
+        assert "resistance" not in by_type
+        assert result["rows_written"] == 1
+        assert result["symbols_skipped"] == 0
+
+    def test_manual_both_sides_blocks_all_auto_writes(self, sync_sqlite_engine):
+        """Truth table row 4: manual on both sides -> zero auto rows
+        written this run, but the task does NOT skip the symbol (G1 is not
+        a skip anymore — DELETE still ran, rows_written == 0 is a real,
+        counted outcome, not a guard-skip)."""
+        engine = sync_sqlite_engine
+        _insert_swing_bars(engine, "AAPL")
+
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            session.add_all([
+                SRLevel(symbol="AAPL", price=150.0, level_type="support", source="manual_import"),
+                SRLevel(symbol="AAPL", price=250.0, level_type="resistance", source="manual_import"),
+            ])
+            session.commit()
+
+        result = compute_auto_pivots()
+
+        with Session() as session:
+            auto_rows = session.execute(
+                select(SRLevel).where(SRLevel.symbol == "AAPL", SRLevel.source == "auto_pivot")
+            ).scalars().all()
+
+        assert auto_rows == []
+        assert result["rows_written"] == 0
+        assert result["symbols_skipped"] == 0
+
+    def test_stale_auto_support_removed_when_manual_support_added(self, sync_sqlite_engine):
+        """13-tara-g1-guard-revision.md §3 case B — this is the bug the
+        revision fixes: an auto_pivot support row from a PREVIOUS run must
+        be deleted this run once the user has since added a manual_import
+        support row, even though auto no longer writes that side itself."""
+        engine = sync_sqlite_engine
+        _insert_swing_bars(engine, "AAPL")
+
+        Session = sessionmaker(bind=engine)
+        with Session() as session:
+            # Simulate a stale row left over from a run before the manual
+            # import existed.
+            session.add(SRLevel(symbol="AAPL", price=65.0, level_type="support", source="auto_pivot"))
+            session.commit()
+
+        with Session() as session:
+            session.add(SRLevel(symbol="AAPL", price=150.0, level_type="support", source="manual_import"))
+            session.commit()
+
+        result = compute_auto_pivots()
+
+        with Session() as session:
+            auto_rows = session.execute(
+                select(SRLevel).where(SRLevel.symbol == "AAPL", SRLevel.source == "auto_pivot")
+            ).scalars().all()
+        by_type = {r.level_type: r.price for r in auto_rows}
+
+        assert "support" not in by_type   # stale 65.0 row must be GONE, not left behind
+        assert by_type.get("resistance") == 130.0
+        assert result["rows_written"] == 1
 
 class TestG2G3Guards:
     """bd:features-2026-09 iter5 — Chris review M1
@@ -370,18 +496,18 @@ class TestG2G3Guards:
 
 
 class TestDeleteScopedToAutoPivotOnly:
-    def test_g1_skip_leaves_all_existing_rows_of_every_source_untouched(self, sync_sqlite_engine):
-        """bd:features-2026-09 iter5 — Chris review M3
-        (10-chris-crypto-autopivot-review.md): this test was previously
-        misnamed `test_delete_never_touches_manual_import_or_user_created`,
-        implying it proves the DELETE WHERE-scope guard. It does NOT — for
-        this AAPL fixture, manual_import exists, so G1 fires and the whole
-        symbol is skipped BEFORE the DELETE statement ever executes. All
-        this proves is "G1 skip means zero writes happen at all" (a
-        weaker, still-true property). The DELETE WHERE-scope guard itself
-        is proven by test_rerun_is_idempotent_only_auto_pivot_rows_replaced
-        below (NVDA fixture, no manual_import, DELETE DOES execute) — see
-        that test's docstring."""
+    def test_g1_per_side_still_deletes_stale_auto_but_spares_manual_and_user_created(self, sync_sqlite_engine):
+        """bd:features-2026-09 iter7 — 13-tara-g1-guard-revision.md §3 case D.
+        This test previously (iter5, whole-symbol G1) asserted the OPPOSITE:
+        that a stale auto_pivot row survives untouched when manual_import
+        exists, because G1 used to `return None` before the DELETE ever ran
+        (Chris review M3, now superseded). Per-side G1 removed that
+        early-return entirely — DELETE always runs. Bars here are flat ->
+        classify_and_select produces 0 candidate rows regardless of any
+        side-filtering, which isolates the DELETE-runs-unconditionally
+        behavior on its own: the stale auto_pivot row must now be GONE,
+        while manual_import/user_created must still survive (DELETE stays
+        scoped to source='auto_pivot')."""
         engine = sync_sqlite_engine
         _insert_bars(engine, "AAPL", n=61)
 
@@ -398,22 +524,23 @@ class TestDeleteScopedToAutoPivotOnly:
 
         with Session() as session:
             rows = session.execute(select(SRLevel).where(SRLevel.symbol == "AAPL")).scalars().all()
-            by_source = {r.source: r.price for r in rows}
+            by_source_price = [(r.source, r.price) for r in rows if r.source == "auto_pivot"]
+            by_source = {r.source: r.price for r in rows if r.source != "auto_pivot"}
 
-        # manual_import present -> G1 skips AAPL entirely -> even the STALE
-        # auto_pivot row is untouched this run (skip means "do nothing", not
-        # "delete anyway") — but manual_import/user_created must survive
-        # regardless.
+        # Stale auto_pivot row must be gone — DELETE ran even though every
+        # side happens to be manual-blocked / flat-produces-nothing here.
+        assert by_source_price == []
+        # manual_import/user_created must survive regardless (R0-guard).
         assert by_source["manual_import"] == 150.0
         assert by_source["user_created"] == 250.0
 
     def test_rerun_is_idempotent_only_auto_pivot_rows_replaced(self, sync_sqlite_engine, monkeypatch):
-        """**This is the test that proves the DELETE WHERE-scope R0 guard**
-        — not the sibling test above (which only proves G1-skip-means-no-writes,
-        per its own docstring, Chris review M3). No manual_import row this
-        time — auto_pivot IS computed and
-        replaced on rerun, without disturbing a user_created row for the
-        same symbol."""
+        """**This is the test that proves the DELETE WHERE-scope R0 guard
+        under normal (rows-actually-produced) conditions** — complementary
+        to the sibling test above, which proves the DELETE runs even when
+        every produced row happens to be filtered out. No manual_import row
+        this time — auto_pivot IS computed and replaced on rerun, without
+        disturbing a user_created row for the same symbol."""
         engine = sync_sqlite_engine
 
         # Build bars with a real, confirmable swing so rows actually get

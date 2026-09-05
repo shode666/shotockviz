@@ -12,6 +12,11 @@ without a spec revision.
 
 Task shell below wires the pure functions to ohlcv_bars (read) and
 sr_levels (write), and owns the guard/transaction logic.
+
+G1 guard is PER-SIDE as of bd:features-2026-09 iter 7 — see
+outputs/features-2026-09/13-tara-g1-guard-revision.md (supersedes the
+"manual_import present -> skip whole symbol" behavior from
+06-tara-feature-scope.md §1.3).
 """
 from __future__ import annotations
 
@@ -218,8 +223,11 @@ def compute_auto_pivots(self):
 def _compute_and_write_symbol(engine, symbol: str) -> int | None:
     """Compute + write auto_pivot rows for one symbol.
 
-    Returns the number of rows written, or None if the symbol was skipped
-    by a guard (G1/G2/G3).
+    Returns the number of rows written (0 is a valid, non-skip outcome —
+    e.g. manual_import owns both sides), or None if the symbol was skipped
+    by G2/G3 (never gets to the write path at all). G1 no longer skips the
+    whole symbol — see per-side filtering below
+    (outputs/features-2026-09/13-tara-g1-guard-revision.md §2).
     """
     from sqlalchemy import text
 
@@ -253,28 +261,53 @@ def _compute_and_write_symbol(engine, symbol: str) -> int | None:
     # G1 is checked HERE — at write time, in the SAME transaction as the
     # delete+insert below — not pre-filtered at task start, to keep the
     # race window against a concurrent manual import as narrow as possible
-    # (09-sara-autopivot-crypto-spec.md §2.3).
+    # (09-sara-autopivot-crypto-spec.md §2.3). G1 is PER-SIDE as of iter 7
+    # (13-tara-g1-guard-revision.md §2.1): a manual_import row on one side
+    # blocks auto from writing THAT side only — the other side still gets
+    # its normal auto refresh.
     with engine.begin() as conn:
-        manual_exists = conn.execute(
+        manual_has_support = conn.execute(
             text(
-                "SELECT 1 FROM sr_levels WHERE symbol = :s AND source = 'manual_import' LIMIT 1"
+                "SELECT 1 FROM sr_levels WHERE symbol = :s AND source = 'manual_import' "
+                "AND level_type = 'support' LIMIT 1"
             ),
             {"s": symbol},
-        ).first()
-        if manual_exists:
-            logger.debug("compute_auto_pivots: manual_import exists, skip", symbol=symbol)
-            return None
+        ).first() is not None
+        manual_has_resistance = conn.execute(
+            text(
+                "SELECT 1 FROM sr_levels WHERE symbol = :s AND source = 'manual_import' "
+                "AND level_type = 'resistance' LIMIT 1"
+            ),
+            {"s": symbol},
+        ).first() is not None
+
+        blocked = set()
+        if manual_has_support:
+            blocked.add("support")
+        if manual_has_resistance:
+            blocked.add("resistance")
+        rows_to_write = [r for r in rows if r["level_type"] not in blocked]
+
+        if blocked:
+            logger.debug(
+                "compute_auto_pivots: manual_import blocks side(s)",
+                symbol=symbol,
+                sides_blocked=",".join(sorted(blocked)),
+            )
 
         # R0-adjacent — this DELETE must NEVER be broadened beyond
         # source='auto_pivot'. A wider WHERE here would destroy real
         # manual_import/user_created rows a user owns. Do not "simplify"
-        # this clause. See 09-sara-autopivot-crypto-spec.md §2.4 / risk R-2.
+        # this clause. See 09-sara-autopivot-crypto-spec.md §2.4 / risk R-2,
+        # and 13-tara-g1-guard-revision.md §3 (DELETE stays whole-symbol —
+        # filtering happens on the INSERT side via rows_to_write above, not
+        # by narrowing this WHERE).
         conn.execute(
             text("DELETE FROM sr_levels WHERE symbol = :s AND source = 'auto_pivot'"),
             {"s": symbol},
         )
 
-        for row in rows:
+        for row in rows_to_write:
             conn.execute(
                 text(
                     "INSERT INTO sr_levels (symbol, price, level_type, tag, color, source, user_id) "
@@ -288,4 +321,4 @@ def _compute_and_write_symbol(engine, symbol: str) -> int | None:
                 },
             )
 
-    return len(rows)
+    return len(rows_to_write)
