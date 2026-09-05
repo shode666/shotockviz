@@ -140,6 +140,9 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
   - 1D → 1 ปี, 1W → 3 ปี, 1M → 10 ปี
 
 #### FR-CHART-003: Drawing Tools (Logged-in Users only)
+
+> **Status: Deferred** — the drawing toolbar was removed from the shipped UI (`bd:ui-honesty-2026-09`, feature F1) because none of it persisted anything; it drew shapes that vanished on reload. Backend today exposes only `GET /api/v1/sr-levels/{symbol}` (`backend/api/routes/sr_levels.py`) for read-only support/resistance lines — there is no `POST`/`DELETE` and no drawing-CRUD engine (trend line, Fibonacci, rectangle, arrow, pitchfork below are not built). Tracked as `bd:shotockviz-474` (chart: user-drawn S/R lines (H-Line) — backend has GET /sr-levels only).
+
 - **Trend Line**: เส้นตรง 2 จุด
 - **Horizontal Line**: เส้นแนวนอนที่ราคาที่กำหนด
 - **Fibonacci Retracement**: 0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%
@@ -250,15 +253,18 @@ Drawing features:
 - สร้าง/แก้ไข/ลบ alert
 - เปิด/ปิด alert ได้ (toggle active/inactive)
 - สถานะ: Active, Triggered, Expired
+  > **Note**: `AlertStatus.EXPIRED` is declared in the backend (`backend/models/alert.py:29`) and the frontend maps it to "หมดอายุ" (`bd:ui-honesty-2026-09`, feature F11, verified) — but no backend code path currently sets an alert to `EXPIRED` (`grep -rn EXPIRED backend/` returns only the enum declaration itself, no assignment). The state is displayable but never emitted today; tracked as `bd:shotockviz-43x`.
 
 ---
 
 ### 2.8 Stock Screener
 
 #### FR-SCREEN-001: Filter Criteria
-- **Market**: SET, US, JP, HK, UK, DE, CN, FR, NL, KR, หรือทั้งหมด
-- **Price Range**: min-max
-- **P/E Ratio**: min-max
+
+> **Note**: Screener currently filters `SET` / `US` / `all` only (`ScreenerPage.tsx` `FILTER_MAP.market`, backend `Literal["SET","US","all"]`); the other 8 markets listed in FR-DATA-001 are viewable/tradeable elsewhere in the app (chart, watchlist, portfolio) but not yet screenable.
+
+- **Market**: SET, US, หรือทั้งหมด (SET + US) — see note above; JP/HK/UK/DE/CN/FR/NL/KR not yet screenable
+- **Price vs MA**: > MA200 / > MA50 / < MA200 / Any
 - **RSI**: min-max
 - **MACD Signal**: Buy / Sell / Neutral
 - **Volume**: X เท่าของค่าเฉลี่ย
@@ -267,6 +273,7 @@ Drawing features:
 - แสดงตาราง results พร้อม columns ที่กรอง
 - คลิกที่ row เปิดกราฟหุ้นนั้น
 - บันทึก filter preset ได้ per user
+  > **Status: Deferred** — the "Save Filter" button was removed from the UI (`bd:ui-honesty-2026-09`, feature F9) because no backend preset-storage endpoint exists. Intent kept for future work.
 
 ---
 
