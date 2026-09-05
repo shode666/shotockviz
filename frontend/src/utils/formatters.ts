@@ -116,6 +116,13 @@ export function parseSymbol(symbol: string | null | undefined, marketHint?: stri
         }
     }
 
+    // Yahoo crypto pair form (e.g. BTC-USD, ETH-USD) — keep full pair as display.
+    // Scoped to -USD only: Yahoo only serves BTC-USD/ETH-USD forms in this
+    // project; -THB/-USDT are speculative (bd:features-2026-09 Chris M-2).
+    if (/-USD$/i.test(symbol)) {
+        return { display: symbol, market: 'CRYPTO', suffix: '' };
+    }
+
     // No suffix — use marketHint if available
     return {
         display: symbol,
@@ -149,6 +156,7 @@ export const MARKET_COLORS: Record<string, { bg: string; text: string }> = {
     DE:   { bg: 'rgba(96,165,250,0.15)',   text: '#60a5fa' },
     FR:   { bg: 'rgba(96,165,250,0.15)',   text: '#60a5fa' },
     KR:   { bg: 'rgba(248,113,113,0.15)',  text: '#f87171' },
+    CRYPTO: { bg: 'rgba(45,212,191,0.15)', text: '#2dd4bf' },
 };
 
 /**
@@ -165,6 +173,7 @@ export const MARKET_CURRENCY: Record<string, { sign: string; code: string }> = {
     DE:   { sign: '€',  code: 'EUR' },
     FR:   { sign: '€',  code: 'EUR' },
     KR:   { sign: '₩',  code: 'KRW' },
+    CRYPTO: { sign: '$', code: 'USD' },
 };
 
 /**
