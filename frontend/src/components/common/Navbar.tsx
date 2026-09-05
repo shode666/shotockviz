@@ -108,7 +108,7 @@ export default function Navbar() {
                 <div className="flex items-center gap-6">
                     {/* Logo */}
                     <div className="flex items-center gap-2.5">
-                        <ShotockLogo className="w-8 h-8 rounded-[11px] shadow-[0_4px_16px_rgba(168,85,247,0.2)] dark:shadow-[0_4px_16px_rgba(168,85,247,0.15)]" />
+                        <ShotockLogo variant="navbar" className="w-8 h-8 rounded-[11px] shadow-[0_4px_16px_rgba(168,85,247,0.2)] dark:shadow-[0_4px_16px_rgba(168,85,247,0.15)]" />
                         <div className="text-4xl tracking-tight flex items-baseline select-none">
                             <div className="font-extrabold tracking-tight text-gray-900 dark:text-white">S</div>
                             <div

@@ -64,7 +64,7 @@ export default function LoginPage() {
                     style={{ background: 'linear-gradient(135deg, rgba(124,92,252,0.12), rgba(168,85,247,0.05))' }}
                 >
                     <div className="flex items-center gap-4 justify-center mb-6">
-                        <ShotockLogo className="w-[60px] h-[60px] rounded-[18px] shadow-[0_8px_24px_rgba(168,85,247,0.3)]" />
+                        <ShotockLogo variant="login" className="w-[60px] h-[60px] rounded-[18px] shadow-[0_8px_24px_rgba(168,85,247,0.3)]" />
                         <div className="text-4xl tracking-tight flex items-baseline select-none">
                             <span className="font-extrabold tracking-tight text-gray-900 dark:text-white">S</span>
                             <span
