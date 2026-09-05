@@ -233,27 +233,30 @@ Drawing features:
 ### 2.7 Alerts
 
 #### FR-ALERT-001: Alert Types
-| Type | Description | Example |
-|------|-------------|---------|
-| Price Above | ราคาขึ้นเกิน target | PTT.BK > ฿38.00 |
-| Price Below | ราคาลงต่ำกว่า target | AAPL < $170.00 |
-| RSI Overbought | RSI > threshold | NVDA RSI > 70 |
-| RSI Oversold | RSI < threshold | 7203.T RSI < 30 |
-| MACD Golden Cross | MACD line ตัดขึ้น | — |
-| MACD Death Cross | MACD line ตัดลง | — |
-| Volume Spike | Volume > X เท่าของค่าเฉลี่ย | Volume > 3x avg |
+| Type | Description | Example | Trigger definition (`backend/workers/alert_checker.py`) |
+|------|-------------|---------|-----------------------------------------------------------|
+| Price Above | ราคาขึ้นเกิน target | PTT.BK > ฿38.00 | Cached quote (`quote:{symbol}`) `price > value` |
+| Price Below | ราคาลงต่ำกว่า target | AAPL < $170.00 | Cached quote `price < value` |
+| RSI Overbought (UI: "RSI Above") | RSI > threshold | NVDA RSI > 70 | RSI(14) on daily closes `> value` — `value` is user-supplied, not a hardcoded 70 |
+| RSI Oversold (UI: "RSI Below") | RSI < threshold | 7203.T RSI < 30 | RSI(14) on daily closes `< value` — `value` is user-supplied, not a hardcoded 30 |
+| Golden Cross | SMA20 crosses above SMA50 | — | True cross (yesterday SMA20 ≤ SMA50, today SMA20 > SMA50), not "is currently above" |
+| Death Cross | SMA20 crosses below SMA50 | — | True cross (yesterday SMA20 ≥ SMA50, today SMA20 < SMA50) |
+| Volume Spike | Volume > X เท่าของค่าเฉลี่ย | Volume > 3x avg | Today's volume ÷ 20-day average `>= value` — `value` is the user-supplied multiplier |
+
+> **bd:shotockviz-06e (implemented 2026-09-05)** — the 5 non-price types above were accepted by the API and displayed as "ทำงานอยู่" but `alert_checker.py` only ever evaluated Price Above/Below; the rest silently never fired. All 7 are now evaluated. RSI/Golden-Death-Cross/Volume-Spike read the daily OHLCV cache (`ohlcv:{symbol}:1D`, kept warm by `history_prefetcher`) rather than the quote cache, and require ≥26 cached daily bars (Golden/Death Cross need ≥51) — an alert on a symbol without enough history is skipped (logged), not guessed at. "Golden Cross"/"Death Cross" here means an SMA(20)/SMA(50) cross, matching this project's own existing convention in `services/backtesting_engine.py`'s `_strategy_golden_cross` and `backend/tests/test_next_features.py`'s docstring — **not** a MACD-line cross, correcting this table's earlier "MACD Golden/Death Cross" wording, which conflated two different indicators. RSI/MACD/SMA/volume-ratio math is a single shared implementation (`backend/services/indicators.py`) used by both the screener and the alert checker, so the two cannot silently drift from each other.
 
 #### FR-ALERT-002: Notification Channels
-- **Telegram Bot**: primary channel (ฟรี, ไม่จำกัด)
-- **In-App Notification**: แสดงใน alerts panel
+- **Telegram Bot**: the only channel (ฟรี, ไม่จำกัด)
+  > **bd:shotockviz-675 (implemented 2026-09-05)** — "In-App Notification" is removed. It was the UI's default channel, but no notification store ever existed; the only delivery was a best-effort 5s toast over a WebSocket, so a default-channel alert firing while the tab was closed left no trace anywhere. Telegram is now the only option and the default. Alerts already stored with `channel='IN_APP'` were coerced to `TELEGRAM` by migration `20260905_0006_coerce_in_app_alert_channel` — same graceful "logs and returns" no-op as any Telegram alert without a `telegram_chat_id`, never worse than before.
 
 #### FR-ALERT-003: Alert Management
 - Symbol autocomplete พร้อม market badge + currency display
 - Currency prefix บน value input (฿, $, ¥, £, €, ₩)
 - สร้าง/แก้ไข/ลบ alert
 - เปิด/ปิด alert ได้ (toggle active/inactive)
-- สถานะ: Active, Triggered, Expired
-  > **Note**: `AlertStatus.EXPIRED` is declared in the backend (`backend/models/alert.py:29`) and the frontend maps it to "หมดอายุ" (`bd:ui-honesty-2026-09`, feature F11, verified) — but no backend code path currently sets an alert to `EXPIRED` (`grep -rn EXPIRED backend/` returns only the enum declaration itself, no assignment). The state is displayable but never emitted today; tracked as `bd:shotockviz-43x`.
+- สถานะที่ backend เคยกำหนดจริง: **Active**, **Triggered**
+  > **bd:shotockviz-43x (struck 2026-09-05)** — `AlertStatus.EXPIRED` was declared in the backend (`backend/models/alert.py`) and the frontend mapped it to "หมดอายุ" (`bd:ui-honesty-2026-09` F11), but no backend code path ever assigned it (`grep -rn EXPIRED backend/` returned only the enum declaration). Removed from the enum and from the frontend mapping rather than building an expiry rule nobody asked for. Note for completeness, not part of this fix: `AlertStatus.INACTIVE` has the identical problem (declared, never assigned — the UI's "หยุดชั่วคราว"/paused state actually comes from the separate `is_active` boolean, not from `status`); out of scope here, flagged for Oliver to triage.
+  > **Sampling honesty (`bd:shotockviz-cm3`)**: Price Above/Below alerts compare against a cached quote refreshed roughly every 1 minute for symbols that have an active alert (`workers/alert_symbol_refresher.py`, on top of the existing ~4-6 min slot rotation for everything else); a level crossed and retraced faster than that is not observed. The Alerts page states this.
 
 ---
 
