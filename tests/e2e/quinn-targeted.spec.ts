@@ -35,7 +35,7 @@ test('watchlist row: loading -> priced, WS data_ready pushed via routeWebSocket'
     return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(map) });
   });
 
-  await page.routeWebSocket('**/api/ws/prices', (ws) => {
+  await page.routeWebSocket('**/api/ws/prices**', (ws) => {
     sendDataReady = (msg: string) => ws.send(msg);
   });
 
