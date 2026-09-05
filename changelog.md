@@ -8,6 +8,29 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### ops — prod rebuilt on a fresh droplet 68.183.182.190 (2026-09-05)
+
+The 1 vCPU / 961 MB droplet (188.166.234.146) could not run API + celery
+worker + beat: once beat started `fetch_prices` every 60s the worker pinned
+its 256 MiB limit and one core, gunicorn hit `WORKER TIMEOUT`/SIGKILL loops
+and `/api/health` went unhealthy. User destroyed it (no .env/DB backup —
+nothing irreplaceable) and rebuilt on **2 vCPU / 2 GB / 60 GB, swap 1 GB**.
+Bootstrap via `scripts/bootstrap-server.sh`, fresh `.env`, GH vars re-pointed
+(`DEPLOY_HOST`, `DEPLOY_KNOWN_HOSTS`, `DOMAIN=stock.shode.dev`,
+`VITE_GOOGLE_CLIENT_ID`), DNS A record moved, deploy workflow run
+(fresh DB via `init_db.py`), S/R re-imported (8,251 rows). Soak 22 min with
+beat running: backend healthy, `WORKER TIMEOUT` = 0, worker 251/256 MiB,
+RAM available ~820 MB.
+
+Two GHCR-flow bugs surfaced and fixed: `celery-beat` lacked
+`JWT_SECRET_KEY`/`TELEGRAM_BOT_TOKEN` env (`d880f4f`) and could not write
+`celerybeat-schedule` in root-owned `/app` → `--schedule /tmp/...` (`2dd0776`).
+
+Follow-ups: raise celery-worker memory limit (256M is pinned even idle) now
+that RAM allows; `scripts/setup-gh-secrets.sh:16` + bootstrap message hardcode
+the old IP; `/api/health` takes 2-3s (celery ping) — decouple or shorten;
+Dockerfile `chown /app` + home dir for `stockviz` user.
+
 ### bd:features-2026-09 — S/R levels, Telegram digest, crypto/gold, brand logo, 401 fix (2026-09-05)
 
 Merged `feat/features-2026-09` → `main` (`5fa8c83`, 14 commits) and deployed
