@@ -8,6 +8,65 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### ui — UI honesty pass: removed controls that did nothing, fixed 15 small lies (2026-09-05)
+
+`bd:shotockviz-bct` · `34136c2` → `7f8a7d6` · full record in
+`docs/engagements/ui-honesty-2026-09.md`.
+
+An audit found 28 places where the UI looked functional and was not.
+This pass closed 12 of them (F1–F12), one commit per feature:
+
+- **F1** drawing toolbar removed — it drew shapes that vanished on reload
+  and had no persistence backend (`bd:shotockviz-474` carries real
+  user-drawn S/R lines).
+- **F2** Settings dropped Timezone / Default Timeframe / Chart Type
+  (nothing persisted them); the side-nav `aria-current` now follows the
+  scroll instead of being hardcoded to the first item.
+- **F3** StatusBar tells the truth: `● Live` / `○ Offline` from the real
+  WS state, the timestamp from a real `data_ready` for the symbol on
+  screen (never a wall clock), `—` when there is none, and the unmeasured
+  "Delayed 15min" claim is gone. Guests see neither indicator.
+- **F4** Dashboard market badges use `utils/marketStatus.ts` — they had
+  their own heuristic that closed SET at 16:00 and ignored the lunch
+  break, disagreeing with the Navbar for half an hour a day.
+- **F5** VWAP pill is disabled on 1D/1W/1M where the chart draws nothing,
+  with the reason in its title.
+- **F6** logged-out visitors see real prices in the demo watchlist, on the
+  rows *and* after clicking one.
+- **F7** empty Create Alert / Add Transaction submits show per-field
+  errors instead of returning silently; errors are linked to their inputs
+  via `aria-describedby`.
+- **F8** stock notes can be deleted — `DELETE /notes/{symbol}` existed
+  with no control to call it.
+- **F9** "Save Filter" removed (no backend); "Export CSV" actually exports,
+  with a UTF-8 BOM so Thai headers survive Excel on Windows and a guard
+  against CSV formula injection.
+- **F10** news items with no url are no longer dead `#` links; they render
+  as plain content with an sr-only "ไม่มีลิงก์บทความ" marker.
+- **F11** an expired alert says "หมดอายุ" instead of claiming to be paused.
+- **F12** 374 lines of unimported components deleted.
+
+Plus `tests/e2e/ui-honesty-2026-09.spec.ts` (15 tests, all green) and 5
+REQUIREMENTS.md corrections where the spec claimed more than the product
+delivered. Unit suite 60 → 76.
+
+Known limitation shipped knowingly: F3's timestamp reads `—` almost always,
+because the 1-minute quote refresh publishes `price_update`, not
+`data_ready`. Showing true price age from the server `ts` is
+`bd:shotockviz-09j`.
+
+### ops — Caddy `/api/ws/*` proxy broke every WebSocket (2026-09-05)
+
+`bd:shotockviz-suc` · `2a1774e`. `header_up Connection {>Connection}` +
+`header_up Upgrade {>Upgrade}` on the WS route made Caddy 2.11.4 forward a
+plain HTTP request; FastAPI answered 404, so `price_update`, `data_ready`
+and `alert_triggered` reached no browser at all. Through Caddy: 404;
+straight to `backend:8000`: `101 Switching Protocols`; after removing the
+two lines: 101 through Caddy. Production confirmed affected
+(`https://stock.shode.dev/api/health` 200, WS handshake 404).
+**Committed, not deployed** — prod stays broken until a deploy runs.
+
+
 ### ops — prod rebuilt on a fresh droplet 68.183.182.190 (2026-09-05)
 
 The 1 vCPU / 961 MB droplet (188.166.234.146) could not run API + celery

@@ -162,7 +162,7 @@ ShotockViz/
 │   │   ├── components/          ← UI components
 │   │   │   ├── chart/           ← TradingChart, ChartToolbar, RightPanel
 │   │   │   ├── common/          ← Sidebar, WatchlistSearch, Navbar
-│   │   │   ├── modals/          ← SearchModal, SettingsModal, DrawingModal
+│   │   │   ├── modals/          ← SearchModal, SettingsModal
 │   │   │   ├── pages/           ← AlertsPage, ScreenerPage, NewsPage
 │   │   │   ├── portfolio/       ← HoldingsTable, AddTransactionModal
 │   │   │   ├── dashboard/       ← IndexCards, TopMovers, AlertsNearTarget

@@ -41,7 +41,7 @@ docker-compose -f docker-compose.dev.yml down            # Stop all
 
 ## Production Deployment
 
-> **New standalone droplet (188.166.234.146) via GitHub Actions → GHCR → server pull** —
+> **New standalone droplet (68.183.182.190) via GitHub Actions → GHCR → server pull** —
 > see `docs/deploy-gha.md`, `.github/workflows/deploy.yml`, `docker-compose.ghcr.yml`.
 > The section below still describes the OLD shared-droplet flow (`docs/deploy.md`,
 > `scripts/deploy.sh`, `docker-compose.prod.yml`) — unchanged, kept for that droplet.
@@ -107,12 +107,12 @@ ShotockViz/
 │   └── main.py              # FastAPI app + WebSocket manager
 ├── frontend/
 │   ├── src/routes/          # 8 pages (__root.tsx, chart, dashboard, portfolio, alerts, screener, news, login)
-│   ├── src/components/      # 33 React components (chart/, common/, modals/, pages/)
+│   ├── src/components/      # 29 React components (chart/, common/, modals/, pages/)
 │   ├── src/store/           # Zustand: appStore.js, authStore.js
 │   ├── src/services/        # api.js
 │   └── src/styles/          # Tailwind + glassmorphism CSS
 ├── docker-compose.dev.yml   # 8-service dev stack
-├── caddy/                   # Caddyfile.dev, Caddyfile.prod
+├── caddy/                   # Caddyfile (prod, baked into the GHCR image), Caddyfile.dev
 ├── REQUIREMENTS.md          # Canonical SRS (functional + non-functional specs)
 ├── INSTRUCTIONS.md          # Developer workflow guide
 ├── master_plan.md           # Strategic roadmap (Phase 1-6)
@@ -134,6 +134,8 @@ ShotockViz/
 | `changelog.md` | Version history | After every change |
 | `trade-prompt.md` | Pine Script strategy library | When adding new strategies |
 | `ShotockViz_Development_Plan.docx` | Stakeholder-reviewed dev plan | Major planning milestones |
+| `docs/engagements/<bd-id>.md` | Durable record of one engagement: ADRs, verification evidence, review outcome, follow-ups | When an engagement closes — process trail lives in gitignored `outputs/` and is consolidated here before that folder is removed |
+| `bd` (beads) | **Single source of truth for open work.** `bd list` / `bd show <id>` | Every task — do not keep TODO lists in markdown |
 
 ## Current Status & Priorities
 
@@ -201,7 +203,7 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 
 - **CQRS refactor (2026-03-03)** — API endpoints no longer call external APIs. All data from cache/DB. Celery workers are sole data ingesters. 5 new workers created.
 - **Fast-response pattern (2026-03-02)** — All API endpoints respond < 5s. Background fetch + WS `data_ready` notification.
-- **Cache key mismatch** — Fixed: all endpoints now use `cache_keys.*()` functions (was using hardcoded f-strings).
+- **Cache key mismatch** — Fixed for API endpoints: they now use `cache_keys.*()` functions (was hardcoded f-strings). **That pass missed `workers/alert_checker.py:70`, which still builds `cache:quote:{sym}` by hand while the cache writes `quote:{sym}` — so price alerts never fire at all.** Measured on the dev stack: 0 keys match `cache:quote:*`, 31 match `quote:*`. Tracked as `bd:shotockviz-983` (P0).
 - **Memory leaks** — Fixed in source: setInterval leaks in Sidebar, Dashboard, TradingChart
 - **Race condition** — Fixed: AbortController in RightPanel for stale XHR after symbol change
 - **PTT.BK empty data** — Fixed: explicit `data_received` flag in retry loop

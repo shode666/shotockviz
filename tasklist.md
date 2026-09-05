@@ -18,7 +18,7 @@
 frontend/src/
 ├── routes/          # TanStack Start pages: __root.tsx, index.tsx, dashboard.tsx, alerts.tsx, portfolio.tsx, screener.tsx, news.tsx, login.tsx
 ├── components/
-│   ├── chart/       # TradingChart.tsx, ChartToolbar.tsx, DrawingToolbar.tsx, RightPanel.tsx, BottomPanel.tsx
+│   ├── chart/       # TradingChart.tsx, ChartToolbar.tsx, RightPanel.tsx, BottomPanel.tsx
 │   ├── common/      # Navbar.tsx, Sidebar.tsx, StatusBar.tsx
 │   ├── pages/       # DashboardPage.tsx, ChartPage.tsx, AlertsPage.tsx, PortfolioPage.tsx, ScreenerPage.tsx, NewsPage.tsx
 │   └── modals/      # SearchModal.tsx, SettingsModal.tsx
@@ -349,8 +349,8 @@ backend/
 - [x] Data Retention UI — `api/routes/admin.py` with GET/PUT/POST retention-policy endpoints, `housekeeping.py` reads policy from Redis config
 
 ## Phase 2.5 — Professional Tools
-- [x] Volume Profile (VPVR) — `VolumeProfile.tsx` canvas overlay with POC + Value Area (70%)
-- [x] Multi-Chart Layout — `MultiChartLayout.tsx` split view (1x1, 2x1, 1x2, 2x2) with independent chart instances
+- [ ] Volume Profile (VPVR) — **removed 2026-09-05** (`bd:shotockviz-bct` F12): `VolumeProfile.tsx` had zero importers, it was never wired into any chart. Re-do from scratch if wanted.
+- [ ] Multi-Chart Layout — **removed 2026-09-05** (`bd:shotockviz-bct` F12): `MultiChartLayout.tsx` had zero importers, no route ever rendered it. Re-do from scratch if wanted.
 - [x] Strategy Backtesting — `backtesting_engine.py` (Golden Cross, RSI Reversal, MACD Crossover, BB Bounce) + `api/routes/backtesting.py` (GET strategies, POST run)
 
 ---
@@ -453,6 +453,7 @@ backend/
   - 📁 **Files:** `frontend/src/components/chart/TradingChart.tsx` (add line series), `frontend/src/components/chart/ChartToolbar.tsx` (add Compare button), `frontend/src/services/stockService.js` (fetch 2nd symbol data)
   - ⚠️ **Pitfalls:** Normalize ด้วย % change (ไม่ใช่ raw price) — NVDA $180 vs AAPL $150 เทียบไม่ได้ ต้อง normalize from start, ใช้ right price scale (`priceScaleId: 'right'`) สำหรับ 2nd symbol
 - [ ] Drawing tools: verify all 6 tools work (Trend, H-Line, Fib, Rect, Arrow, Pitchfork)
+  - ⛔ **Blocked / superseded 2026-09-05** — `DrawingToolbar.tsx` was removed (`bd:shotockviz-bct` F1): none of the 6 tools persisted anything, so there is nothing to verify. Real user-drawn S/R lines are tracked as `bd:shotockviz-474`.
   - **Steps:**
     - [ ] Test each tool on NVDA 1D chart: draw → save → reload page → verify persistence
     - [ ] Fix any tool that doesn't render or save correctly
@@ -463,6 +464,7 @@ backend/
   - 📁 **Files:** `frontend/src/components/chart/DrawingToolbar.tsx` (tools), `frontend/src/components/chart/TradingChart.tsx` (render drawings), `backend/api/routes/drawings.py` (CRUD API), `backend/models/drawing.py` (DB model)
   - 🔗 **Reference:** `drawings.py` API มีอยู่แล้ว — GET/POST/DELETE per user per symbol, ดูว่า frontend เรียกถูก endpoint ไหม
 - [ ] Drawing save/load: verify per-user per-symbol persistence via `/api/drawings`
+  - ⛔ **Blocked 2026-09-05** — no UI produces a drawing to save since `bd:shotockviz-bct` F1. See `bd:shotockviz-474`.
   - **Steps:**
     - [ ] Test: create drawing → `GET /api/drawings?symbol=NVDA` returns saved drawings
     - [ ] Test: different user doesn't see other user's drawings
@@ -647,6 +649,7 @@ backend/
   - **Acceptance:** Table renders ≤100 results, sortable, click navigates to chart
   - **Effort:** 3 hours
 - [ ] Save preset filters per user
+  - ⛔ **Blocked 2026-09-05** — the "Save Filter" button was removed (`bd:shotockviz-bct` F9) because no `screener_presets` table or endpoint exists. REQUIREMENTS.md FR-SCREEN-002 marked Deferred. Build the backend first, then restore the button.
   - **Steps:**
     - [ ] "Save Filter" button → name the preset → store in `screener_presets` table
     - [ ] Dropdown to load saved presets
