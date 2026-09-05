@@ -13,7 +13,7 @@ from models.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics, HoldingResponse,
 )
 from api.middleware.auth import get_current_user
-from services import stock_service
+from services import portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
@@ -77,26 +77,14 @@ async def get_analytics(
             holdings=[],
         )
 
-    # Calculate holdings: net qty and avg cost per symbol
-    holdings: dict[str, dict] = {}
-    for t in txns:
-        if t.symbol not in holdings:
-            holdings[t.symbol] = {"qty": 0.0, "total_cost": 0.0, "currency": getattr(t, "currency", "THB") or "THB"}
-        if t.type.value == "BUY":
-            holdings[t.symbol]["qty"] += t.qty
-            holdings[t.symbol]["total_cost"] += t.qty * t.price
-        else:  # SELL
-            # Compute avg cost BEFORE reducing qty, then reduce cost basis proportionally
-            avg = holdings[t.symbol]["total_cost"] / holdings[t.symbol]["qty"] if holdings[t.symbol]["qty"] else 0
-            holdings[t.symbol]["qty"] -= t.qty
-            holdings[t.symbol]["total_cost"] -= t.qty * avg
-            # Guard against float drift leaving tiny residual qty
-            if abs(holdings[t.symbol]["qty"]) < 1e-6:
-                holdings[t.symbol]["qty"] = 0.0
-                holdings[t.symbol]["total_cost"] = 0.0
+    # Calculate holdings: net qty and avg cost per symbol.
+    # bd:shotockviz-msg — one shared computation with dashboard.py (commission
+    # in cost basis on BUY, realized on SELL: bd:shotockviz-fww). See
+    # services/portfolio_service.py for the accounting rules.
+    holdings = portfolio_service.build_holdings(txns)
 
     # Filter out sold positions
-    active = {s: h for s, h in holdings.items() if h["qty"] > 0}
+    active = portfolio_service.active_holdings(holdings)
 
     # Enrich with current prices.
     # Three-stage strategy:
@@ -167,45 +155,39 @@ async def get_analytics(
         for sym in fetchable_misses:
             await stock_service.request_data_fetch(sym, "quote")
 
-    holding_responses = []
-    total_value = 0.0
-    total_cost = 0.0
+    # bd:shotockviz-2w8 — an unpriced position is excluded from BOTH sides of the
+    # total (never valued at zero against a full cost basis, which fabricated a
+    # loss equal to the whole position). It still returns as a row with
+    # current_price=None, and has_pending_prices flags it.
+    valued = portfolio_service.value_holdings(active, quote_map)
+    totals = portfolio_service.summarize(valued)
 
-    for symbol, h in active.items():
-        avg_cost = h["total_cost"] / h["qty"] if h["qty"] else 0
-        quote = quote_map.get(symbol)
-        current_price = float(quote["price"]) if quote and quote.get("price") is not None else None
-        current_value = current_price * h["qty"] if current_price else None
-        cost_basis = h["total_cost"]
-
-        unrealized_pl = (current_value - cost_basis) if current_value is not None else None
-        unrealized_pl_pct = (unrealized_pl / cost_basis * 100) if (unrealized_pl is not None and cost_basis) else None
-
-        holding_responses.append(HoldingResponse(
-            symbol=symbol,
-            qty=h["qty"],
-            avg_cost=round(avg_cost, 4),
-            currency=h.get("currency", "THB"),
-            current_price=current_price,
-            current_value=round(current_value, 2) if current_value else None,
-            unrealized_pl=round(unrealized_pl, 2) if unrealized_pl else None,
-            unrealized_pl_pct=round(unrealized_pl_pct, 2) if unrealized_pl_pct else None,
-        ))
-
-        if current_value:
-            total_value += current_value
-        total_cost += cost_basis
-
-    unrealized_pl = total_value - total_cost
-    unrealized_pl_pct = round(unrealized_pl / total_cost * 100, 2) if total_cost else 0.0
+    holding_responses = [
+        HoldingResponse(
+            symbol=v.symbol,
+            qty=v.qty,
+            avg_cost=round(v.avg_cost, 4),
+            currency=v.currency,
+            current_price=v.current_price,
+            # `is not None`, not truthiness: a legitimate 0.0 P&L is a real
+            # answer, not a missing one.
+            current_value=round(v.current_value, 2) if v.current_value is not None else None,
+            unrealized_pl=round(v.unrealized_pl, 2) if v.unrealized_pl is not None else None,
+            unrealized_pl_pct=round(v.unrealized_pl_pct, 2) if v.unrealized_pl_pct is not None else None,
+        )
+        for v in valued
+    ]
 
     return PortfolioAnalytics(
-        total_value=round(total_value, 2),
-        total_cost=round(total_cost, 2),
-        unrealized_pl=round(unrealized_pl, 2),
-        unrealized_pl_pct=unrealized_pl_pct,
+        total_value=round(totals.total_value, 2),
+        total_cost=round(totals.total_cost, 2),
+        unrealized_pl=round(totals.unrealized_pl, 2),
+        unrealized_pl_pct=round(totals.unrealized_pl_pct, 2),
         holdings=holding_responses,
-        has_pending_prices=len(misses) > 0,
+        # Derived from the positions actually left unpriced (a cache "miss" that
+        # the fund stage then resolved is not pending; a cached but unusable
+        # price is).
+        has_pending_prices=bool(totals.unpriced_symbols),
     )
 
 

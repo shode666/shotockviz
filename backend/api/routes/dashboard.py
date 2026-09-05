@@ -19,7 +19,7 @@ from models.user import User
 from models.portfolio import Transaction
 from models.alert import Alert
 from api.middleware.auth import get_current_user_optional
-from services import stock_service
+from services import portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/dashboard -> /dashboard,
@@ -115,29 +115,15 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         if not txns:
             return None, []
 
-        # Calculate holdings from transactions
-        holdings: dict[str, dict] = {}
-        for t in txns:
-            if t.symbol not in holdings:
-                holdings[t.symbol] = {
-                    "qty": 0.0,
-                    "total_cost": 0.0,
-                    "currency": getattr(t, "currency", "THB") or "THB",
-                }
+        # Calculate holdings from transactions.
+        # bd:shotockviz-msg — this used to be a second, subtly different copy of
+        # portfolio.py's fold: it divided by `max(qty, 1)` on a SELL (a
+        # divide-by-zero guard that silently halved avg cost for any fractional
+        # position) and used a 0.001 "active" threshold instead of 1e-6. Both
+        # screens now share services/portfolio_service.py.
+        holdings = portfolio_service.build_holdings(txns)
 
-            if t.type.value == "BUY":
-                holdings[t.symbol]["qty"] += t.qty
-                holdings[t.symbol]["total_cost"] += t.qty * t.price
-            else:
-                avg = holdings[t.symbol]["total_cost"] / max(holdings[t.symbol]["qty"], 1)
-                holdings[t.symbol]["qty"] -= t.qty
-                holdings[t.symbol]["total_cost"] -= t.qty * avg
-                # Guard float drift
-                if abs(holdings[t.symbol]["qty"]) < 1e-6:
-                    holdings[t.symbol]["qty"] = 0.0
-                    holdings[t.symbol]["total_cost"] = 0.0
-
-        active = {s: h for s, h in holdings.items() if h["qty"] > 0.001}
+        active = portfolio_service.active_holdings(holdings)
         if not active:
             return None, []
 
@@ -148,36 +134,33 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         if thb_quote and thb_quote.get("price") and thb_quote["price"] > 0:
             usd_to_thb = 1.0 / thb_quote["price"]  # e.g. 1/0.0317 ≈ 31.5
 
-        # Aggregate values using cache-only quotes
-        total_value_thb = 0.0
-        total_cost_thb = 0.0
+        # Aggregate values using cache-only quotes.
+        # bd:shotockviz-2w8 — unpriced positions are excluded from BOTH sides
+        # here too (this route already did that; portfolio.py did not), so the
+        # two screens now state the same number for the same book.
+        quotes: dict[str, dict | None] = {}
+        for sym in active:
+            quotes[sym] = await _fast_quote(sym)
+
+        def _fx(currency: str) -> float:
+            return usd_to_thb if currency.upper() == "USD" else 1.0
+
+        valued = portfolio_service.value_holdings(active, quotes)
+        totals = portfolio_service.summarize(valued, fx=_fx)
+        portfolio_misses = totals.unpriced_symbols
+
         top_holdings = []
-        portfolio_misses = []
-
-        for sym, h in active.items():
-            cached = await _fast_quote(sym)
-            if not cached:
-                portfolio_misses.append(sym)
+        for v in valued:
+            if not v.priced:
                 continue
-
-            val = cached.get("price", 0) * h["qty"]
-            cost = h["total_cost"]
-            currency = h.get("currency", "THB").upper()
-
-            # Normalize to THB for sorting and totals
-            fx = usd_to_thb if currency == "USD" else 1.0
-            val_thb = val * fx
-            cost_thb = cost * fx
-
-            total_value_thb += val_thb
-            total_cost_thb += cost_thb
+            fx = _fx(v.currency)
             top_holdings.append({
-                "symbol": sym,
-                "value": round(val, 2),
-                "value_thb": round(val_thb, 2),
-                "currency": currency,
-                "change_pct": cached.get("change_pct"),
-                "unrealized_pct": round((val - cost) / cost * 100, 2) if cost else 0,
+                "symbol": v.symbol,
+                "value": round(v.current_value, 2),
+                "value_thb": round(v.current_value * fx, 2),
+                "currency": v.currency.upper(),
+                "change_pct": (quotes.get(v.symbol) or {}).get("change_pct"),
+                "unrealized_pct": round(v.unrealized_pl_pct, 2) if v.unrealized_pl_pct is not None else 0,
             })
 
         if not top_holdings:
@@ -185,16 +168,15 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
 
         # Sort by THB-normalized value so USD holdings rank correctly
         top_holdings.sort(key=lambda x: x["value_thb"], reverse=True)
-        unrealized_pl_thb = total_value_thb - total_cost_thb
 
         return {
-            "total_value": round(total_value_thb, 2),
-            "total_cost": round(total_cost_thb, 2),
-            "unrealized_pl": round(unrealized_pl_thb, 2),
-            "unrealized_pl_pct": round(unrealized_pl_thb / total_cost_thb * 100, 2) if total_cost_thb else 0,
+            "total_value": round(totals.total_value, 2),
+            "total_cost": round(totals.total_cost, 2),
+            "unrealized_pl": round(totals.unrealized_pl, 2),
+            "unrealized_pl_pct": round(totals.unrealized_pl_pct, 2),
             "position_count": len(active),
             "top_holdings": top_holdings[:5],
-            "has_pending_prices": len(portfolio_misses) > 0,
+            "has_pending_prices": bool(portfolio_misses),
         }, portfolio_misses
     except Exception as e:
         logger.warning("portfolio summary error", error=str(e))
