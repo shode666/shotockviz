@@ -1,14 +1,20 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Bell, BellPlus, X, Search, Loader2, CheckCircle2, Timer } from 'lucide-react';
+import { Bell, BellPlus, Pencil, X, Search, Loader2, CheckCircle2, Timer } from 'lucide-react';
 import alertService from '@/services/alertService';
 import stockService from '@/services/stockService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
 import { validateAlertForm } from '@/utils/formValidation';
 import { getAlertStatusKey } from '@/utils/alertStatus';
+import { extractErrorMessage } from '@/services/apiErrorHandler';
 
 const ALERT_TYPES = ['Price Above', 'Price Below', 'RSI Below', 'RSI Above', 'Golden Cross', 'Death Cross', 'Volume Spike'];
-const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
+
+// bd:shotockviz-d09 — used for both the create-form <select> (labels like
+// "Price Above") and an editing alert's stored DB value ("PRICE_ABOVE",
+// models/alert.py's AlertType) — a set of exact labels can't match both, so
+// this checks the substring either form shares.
+const isPriceAlertType = (t: string) => t.toUpperCase().includes('PRICE');
 
 // label has no glyph prefix — the status dot (rendered separately, see the
 // `<div className="w-2 h-2 rounded-full" ...>` toggle button) already carries
@@ -47,6 +53,12 @@ export default function AlertsPage() {
     const [form, setForm] = useState(EMPTY_FORM);
     const [saving, setSaving] = useState(false);
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+    // bd:shotockviz-d09 — null = create mode, set = editing this alert. The
+    // same modal renders both; PUT only accepts condition/value/channel
+    // (backend/models/schemas.py AlertUpdate), so symbol + alert_type render
+    // read-only in edit mode rather than pretending to be changeable.
+    const [editingAlert, setEditingAlert] = useState<any>(null);
+    const isEditMode = editingAlert !== null;
 
     // ─── Symbol autocomplete state ───
     const [searchQuery, setSearchQuery] = useState('');
@@ -98,7 +110,7 @@ export default function AlertsPage() {
         setShowDropdown(false);
     };
 
-    const isPriceAlert = PRICE_ALERT_TYPES.has(form.alert_type);
+    const isPriceAlert = isPriceAlertType(form.alert_type || '');
     const currency = MARKET_CURRENCY[selectedMarket] || MARKET_CURRENCY.US;
     const mktColors = MARKET_COLORS[selectedMarket] || MARKET_COLORS.US;
 
@@ -136,11 +148,39 @@ export default function AlertsPage() {
                 value: parseFloat(form.value),
                 channel: form.channel,
             });
-            setShowModal(false);
-            setForm(EMPTY_FORM);
-            setSearchQuery('');
-            setSelectedMarket('');
+            closeModal();
             loadAlerts();
+        } catch (err: any) {
+            setFormErrors({ submit: extractErrorMessage(err) });
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    // bd:shotockviz-d09 — PUT /alerts/{id} only accepts condition/value/channel
+    // (AlertUpdate, backend/models/schemas.py:274-277). `condition` is left out
+    // here too: it is derived from alert_type ("above"/"below"), which cannot
+    // change in this form, so resending it independently could desync a
+    // "Price Above" alert's label from a hand-edited "below" condition — a new
+    // dishonest-looking state this engagement exists to avoid creating.
+    const handleUpdate = async () => {
+        if (!editingAlert) return;
+        const errors = validateAlertForm({ symbol: form.symbol, value: form.value });
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            return;
+        }
+        setFormErrors({});
+        setSaving(true);
+        try {
+            const res = await alertService.update(editingAlert.id, {
+                value: parseFloat(form.value),
+                channel: form.channel,
+            });
+            setAlerts((prev) => prev.map((a) => (a.id === editingAlert.id ? res.data : a)));
+            closeModal();
+        } catch (err: any) {
+            setFormErrors({ submit: extractErrorMessage(err) });
         } finally {
             setSaving(false);
         }
@@ -161,7 +201,34 @@ export default function AlertsPage() {
     };
 
     const openModal = () => {
+        setEditingAlert(null);
         setShowModal(true);
+        setForm(EMPTY_FORM);
+        setFormErrors({});
+        setSearchQuery('');
+        setSelectedMarket('');
+        setSearchResults([]);
+    };
+
+    const openEditModal = (alert: any) => {
+        setEditingAlert(alert);
+        setShowModal(true);
+        setForm({
+            symbol: alert.symbol,
+            alert_type: alert.alert_type,
+            condition: alert.condition,
+            value: alert.value != null ? String(alert.value) : '',
+            channel: (alert.channel || 'TELEGRAM').toLowerCase(),
+        });
+        setFormErrors({});
+        setSearchQuery('');
+        setSelectedMarket(parseSymbol(alert.symbol).market);
+        setSearchResults([]);
+    };
+
+    const closeModal = () => {
+        setShowModal(false);
+        setEditingAlert(null);
         setForm(EMPTY_FORM);
         setFormErrors({});
         setSearchQuery('');
@@ -251,6 +318,9 @@ export default function AlertsPage() {
                                             {statusKey === 'triggered' && a.triggered_at && ` ${formatTriggeredTime(a.triggered_at)}`}
                                         </div>
                                     </div>
+                                    <button onClick={() => openEditModal(a)} aria-label={`แก้ไข alert ${displaySymbol(a.symbol)}`} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-hover)'; e.currentTarget.style.color = 'var(--color-accent-text)' }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-sub)' }}><Pencil size={12} /></button>
                                     <button onClick={() => handleDelete(a.id)} aria-label={`ลบ alert ${displaySymbol(a.symbol)}`} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
                                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-down-muted)'; e.currentTarget.style.color = 'var(--color-down)' }}
                                         onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--color-text-sub)' }}><X size={12} /></button>
@@ -261,17 +331,32 @@ export default function AlertsPage() {
                 )}
             </div>
 
-            {/* ─── Create Alert Modal ─── */}
+            {/* ─── Create / Edit Alert Modal ─── */}
             {showModal && (
-                <div className="glass-overlay fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => e.target === e.currentTarget && setShowModal(false)}>
+                <div className="glass-overlay fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => e.target === e.currentTarget && closeModal()}>
                     <div className="glass-panel rounded-2xl p-6 w-96 animate-slide-up">
                         <div className="flex items-center justify-between mb-5">
-                            <h3 className="font-bold">สร้าง Alert ใหม่</h3>
-                            <button onClick={() => setShowModal(false)} style={{ color: 'var(--color-text-sub)' }}><X size={14} /></button>
+                            <h3 className="font-bold">{isEditMode ? 'แก้ไข Alert' : 'สร้าง Alert ใหม่'}</h3>
+                            <button onClick={closeModal} style={{ color: 'var(--color-text-sub)' }}><X size={14} /></button>
                         </div>
                         <div className="flex flex-col gap-3">
 
-                            {/* Symbol with Autocomplete */}
+                            {/* Symbol — bd:shotockviz-d09: PUT /alerts/{id} cannot change
+                                symbol (AlertUpdate has no symbol field), so edit mode shows
+                                it read-only instead of the create form's search box. */}
+                            {isEditMode ? (
+                                <div>
+                                    <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>Symbol</div>
+                                    <div className="input-field flex items-center gap-2 py-2 px-3">
+                                        <span className="text-sm font-semibold" style={{ color: 'var(--color-accent-text)' }}>{displaySymbol(form.symbol)}</span>
+                                        {selectedMarket && (
+                                            <span className="badge text-[9px] px-1.5 py-0.5" style={{ background: mktColors.bg, color: mktColors.text }}>
+                                                {selectedMarket} · {currency.code}
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
                             <div ref={dropdownRef} className="relative">
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5 flex items-center gap-2" style={{ color: 'var(--color-text-sub)' }}>
                                     Symbol
@@ -362,13 +447,27 @@ export default function AlertsPage() {
                                     </div>
                                 )}
                             </div>
+                            )}
 
-                            {/* Alert Type */}
+                            {/* Alert Type — bd:shotockviz-d09: PUT cannot change alert_type
+                                either, so edit mode shows it read-only and says so, rather
+                                than offering a select whose choice silently does nothing. */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ประเภท Alert</div>
-                                <select className="input-field glass-select" value={form.alert_type} onChange={(e) => setForm((f) => ({ ...f, alert_type: e.target.value, condition: e.target.value.includes('Above') ? 'above' : 'below' }))}>
-                                    {ALERT_TYPES.map((t) => <option key={t}>{t}</option>)}
-                                </select>
+                                {isEditMode ? (
+                                    <>
+                                        <div className="input-field flex items-center px-3 py-2">
+                                            <span className="badge badge-violet text-[11px]">{form.alert_type}</span>
+                                        </div>
+                                        <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-sub)' }}>
+                                            เปลี่ยน symbol หรือประเภทไม่ได้ — ลบแล้วสร้างใหม่หากต้องการเปลี่ยน
+                                        </p>
+                                    </>
+                                ) : (
+                                    <select className="input-field glass-select" value={form.alert_type} onChange={(e) => setForm((f) => ({ ...f, alert_type: e.target.value, condition: e.target.value.includes('Above') ? 'above' : 'below' }))}>
+                                        {ALERT_TYPES.map((t) => <option key={t}>{t}</option>)}
+                                    </select>
+                                )}
                             </div>
 
                             {/* Value with currency prefix for price alerts */}
@@ -419,9 +518,15 @@ export default function AlertsPage() {
                                 </select>
                             </div>
 
+                            {formErrors.submit && (
+                                <p role="alert" className="text-[10px]" style={{ color: 'var(--color-red)' }}>{formErrors.submit}</p>
+                            )}
+
                             <div className="flex gap-2 mt-2">
-                                <button onClick={() => setShowModal(false)} className="btn-outline flex-1 py-2">ยกเลิก</button>
-                                <button onClick={handleCreate} disabled={saving} className="btn-accent flex-1 py-2">{saving ? 'กำลังบันทึก…' : 'สร้าง Alert'}</button>
+                                <button onClick={closeModal} className="btn-outline flex-1 py-2">ยกเลิก</button>
+                                <button onClick={isEditMode ? handleUpdate : handleCreate} disabled={saving} className="btn-accent flex-1 py-2">
+                                    {saving ? 'กำลังบันทึก…' : (isEditMode ? 'บันทึกการแก้ไข' : 'สร้าง Alert')}
+                                </button>
                             </div>
                         </div>
                     </div>

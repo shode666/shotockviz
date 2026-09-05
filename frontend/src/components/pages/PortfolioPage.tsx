@@ -1,10 +1,11 @@
 import { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Briefcase, Trash2, History, BarChart2, FilterX, Timer, AlertTriangle, Hourglass, Info } from 'lucide-react';
+import { Briefcase, Trash2, Pencil, History, BarChart2, FilterX, Timer, AlertTriangle, Hourglass, Info } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, formatPriceTH } from '@/utils/formatters';
-import { AddTransactionModal } from '@/components/portfolio/AddTransactionModal';
+import { extractErrorMessage } from '@/services/apiErrorHandler';
+import { AddTransactionModal, type EditableTransaction } from '@/components/portfolio/AddTransactionModal';
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable';
 import { usePortfolioData } from '@/hooks/usePortfolioData';
 import { buildQualifications, hasQualifications, type QualificationTone } from '@/utils/portfolioQualifications';
@@ -125,6 +126,9 @@ export default function PortfolioPage() {
     const { isAuthenticated } = useAuthStore();
     const { analytics, txns, loading, timedOut, reload } = usePortfolioData();
     const [showModal, setShowModal] = useState(false);
+    // bd:shotockviz-gij — null = "add new" (existing button), set = editing
+    // this row. AddTransactionModal renders both from the same JSX.
+    const [editingTxn, setEditingTxn] = useState<EditableTransaction | null>(null);
     const [deletingId, setDeletingId] = useState<number | null>(null);
     const [activeTab, setActiveTab] = useState<'holdings' | 'history'>('holdings');
     const [historyFilter, setHistoryFilter] = useState<'ALL' | 'BUY' | 'SELL'>('ALL');
@@ -139,10 +143,29 @@ export default function PortfolioPage() {
             toast.success('ลบธุรกรรมสำเร็จ');
             await reload();
         } catch (err: any) {
-            const msg = err?.response?.data?.detail || err?.message || 'ลบธุรกรรมไม่สำเร็จ';
-            toast.error(msg);
-            console.error('[Portfolio] Delete failed:', err);
+            // bd:shotockviz-gij — was reading `err.response.data.detail`, which
+            // /api/v1's error envelope (schemas/envelope.py) no longer carries
+            // (message moved to meta.error.message); this silently fell back to
+            // axios's generic "Request failed with status code NNN". Same
+            // extraction api.ts's global interceptor uses, so this toast and
+            // that one always agree.
+            toast.error(extractErrorMessage(err));
         } finally { setDeletingId(null); }
+    };
+
+    const openAddTxnModal = () => {
+        setEditingTxn(null);
+        setShowModal(true);
+    };
+
+    const openEditTxnModal = (t: EditableTransaction) => {
+        setEditingTxn(t);
+        setShowModal(true);
+    };
+
+    const closeTxnModal = () => {
+        setShowModal(false);
+        setEditingTxn(null);
     };
 
     const fmtQty = (n) => n != null ? parseFloat(n.toFixed(8)).toString() : '—';
@@ -178,7 +201,7 @@ export default function PortfolioPage() {
                         <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-sub)' }}>ติดตามพอร์ตการลงทุนของคุณ</p>
                     </div>
                     {isAuthenticated && (
-                        <button onClick={() => setShowModal(true)} className="btn-accent">+ เพิ่มธุรกรรม</button>
+                        <button onClick={openAddTxnModal} className="btn-accent">+ เพิ่มธุรกรรม</button>
                     )}
                 </div>
 
@@ -350,7 +373,7 @@ export default function PortfolioPage() {
                                         <div className="mb-3 flex justify-center"><History size={32} style={{ color: 'var(--color-text-sub)' }} /></div>
                                         <p className="text-sm font-medium mb-1">ยังไม่มีธุรกรรม</p>
                                         <p className="text-xs mb-4" style={{ color: 'var(--color-text-sub)' }}>เพิ่มธุรกรรมซื้อ/ขายเพื่อดูประวัติ</p>
-                                        <button onClick={() => setShowModal(true)} className="btn-accent">+ เพิ่มธุรกรรม</button>
+                                        <button onClick={openAddTxnModal} className="btn-accent">+ เพิ่มธุรกรรม</button>
                                     </div>
                                 ) : (
                                     <div className="overflow-x-auto">
@@ -394,19 +417,34 @@ export default function PortfolioPage() {
                                                             <td className="px-4 py-3 tabular-nums font-medium">{cs}{formatPriceTH(total)}</td>
                                                             <td className="px-4 py-3 max-w-[120px] truncate" style={{ color: 'var(--color-text-sub)' }} title={t.note}>{t.note || '—'}</td>
                                                             <td className="px-4 py-3">
-                                                                <button
-                                                                    onClick={() => handleDelete(t.id)}
-                                                                    disabled={deletingId === t.id}
-                                                                    className="p-1.5 rounded-lg transition-colors"
-                                                                    style={{ color: 'var(--color-text-sub)' }}
-                                                                    onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-red)')}
-                                                                    onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text-sub)')}
-                                                                    title="ลบธุรกรรม"
-                                                                >
-                                                                    {deletingId === t.id
-                                                                        ? <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.65s linear infinite' }} />
-                                                                        : <Trash2 size={12} />}
-                                                                </button>
+                                                                <div className="flex items-center gap-1">
+                                                                    <button
+                                                                        onClick={() => openEditTxnModal(t)}
+                                                                        disabled={deletingId === t.id}
+                                                                        className="p-1.5 rounded-lg transition-colors"
+                                                                        style={{ color: 'var(--color-text-sub)' }}
+                                                                        onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-accent-text)')}
+                                                                        onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text-sub)')}
+                                                                        title="แก้ไขธุรกรรม"
+                                                                        aria-label={`แก้ไขธุรกรรม ${displaySymbol(t.symbol)}`}
+                                                                    >
+                                                                        <Pencil size={12} />
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleDelete(t.id)}
+                                                                        disabled={deletingId === t.id}
+                                                                        className="p-1.5 rounded-lg transition-colors"
+                                                                        style={{ color: 'var(--color-text-sub)' }}
+                                                                        onMouseEnter={e => (e.currentTarget.style.color = 'var(--color-red)')}
+                                                                        onMouseLeave={e => (e.currentTarget.style.color = 'var(--color-text-sub)')}
+                                                                        title="ลบธุรกรรม"
+                                                                        aria-label={`ลบธุรกรรม ${displaySymbol(t.symbol)}`}
+                                                                    >
+                                                                        {deletingId === t.id
+                                                                            ? <span style={{ display: 'inline-block', width: 12, height: 12, border: '2px solid currentColor', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 0.65s linear infinite' }} />
+                                                                            : <Trash2 size={12} />}
+                                                                    </button>
+                                                                </div>
                                                             </td>
                                                         </tr>
                                                     );
@@ -427,7 +465,7 @@ export default function PortfolioPage() {
             </div>
 
             {/* Add Transaction Modal */}
-            <AddTransactionModal isOpen={showModal} onClose={() => setShowModal(false)} onSuccess={reload} />
+            <AddTransactionModal isOpen={showModal} onClose={closeTxnModal} onSuccess={reload} transaction={editingTxn} />
         </div>
     );
 }

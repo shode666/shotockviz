@@ -1,15 +1,35 @@
 import { useState, useEffect, useRef } from 'react';
-import toast from 'react-hot-toast';
 import { TrendingUp, TrendingDown, X, Search, Loader2 } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import stockService from '@/services/stockService';
-import { parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
+import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
 import { validateTransactionForm } from '@/utils/formValidation';
+import { extractErrorMessage } from '@/services/apiErrorHandler';
+import { buildTransactionUpdatePatch } from '@/utils/transactionEditDiff';
+
+// bd:shotockviz-gij — the saved row this modal is editing, or undefined/null
+// for "add new". Matches what portfolioService.getTransactions() rows carry
+// (PortfolioPage.tsx's `txns`) and what TransactionUpdate (backend/models/
+// schemas.py:167-175) can actually persist: qty/price/fee/currency/date/note.
+// `type` (BUY/SELL) is NOT in TransactionUpdate — symbol and type render
+// read-only in edit mode rather than offering controls the PUT would ignore.
+export interface EditableTransaction {
+    id: number | string;
+    symbol: string;
+    type: 'BUY' | 'SELL';
+    qty: number;
+    price: number;
+    fee?: number | null;
+    currency?: string | null;
+    date: string;
+    note?: string | null;
+}
 
 interface AddTransactionModalProps {
     isOpen: boolean;
     onClose: () => void;
     onSuccess: () => void;
+    transaction?: EditableTransaction | null;
 }
 
 interface TransactionForm {
@@ -40,10 +60,16 @@ const toCurrencyType = (code: string): 'THB' | 'USD' => {
     return 'USD'; // Default to USD for all non-THB markets
 };
 
-export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransactionModalProps) {
+export function AddTransactionModal({ isOpen, onClose, onSuccess, transaction }: AddTransactionModalProps) {
+    const isEditMode = !!transaction;
     const [form, setForm] = useState<TransactionForm>(TXN_FORM_INIT);
     const [saving, setSaving] = useState(false);
     const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+    // bd:shotockviz-gij — surfaces the 409 currency-conflict rejection (and
+    // any other PUT failure) inline, in addition to the global toast api.ts
+    // already fires for any non-silent-path error — so the failure is never
+    // silent AND the modal stays open with the reason visible next to Save.
+    const [submitError, setSubmitError] = useState('');
 
     // ─── Symbol autocomplete state ───
     const [searchQuery, setSearchQuery] = useState('');
@@ -54,17 +80,32 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
     const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
 
-    // Reset form when modal opens
+    // Reset / prefill form whenever the modal opens — for either mode.
     useEffect(() => {
         if (isOpen) {
-            setForm(TXN_FORM_INIT);
+            if (transaction) {
+                setForm({
+                    symbol: transaction.symbol,
+                    type: transaction.type,
+                    qty: String(transaction.qty),
+                    price: String(transaction.price),
+                    fee: String(transaction.fee ?? 0),
+                    currency: transaction.currency === 'USD' ? 'USD' : 'THB',
+                    date: transaction.date,
+                    note: transaction.note || '',
+                });
+                setSelectedMarket(parseSymbol(transaction.symbol).market);
+            } else {
+                setForm(TXN_FORM_INIT);
+                setSelectedMarket('');
+            }
             setFormErrors({});
+            setSubmitError('');
             setSearchQuery('');
-            setSelectedMarket('');
             setSearchResults([]);
             setShowDropdown(false);
         }
-    }, [isOpen]);
+    }, [isOpen, transaction]);
 
     // Close dropdown on outside click
     useEffect(() => {
@@ -117,34 +158,49 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
     const currency = MARKET_CURRENCY[selectedMarket] || MARKET_CURRENCY[form.currency === 'THB' ? 'SET' : 'US'];
     const currSign = currency.sign;
 
-    const handleAdd = async () => {
+    // bd:shotockviz-gij — one handler, two backend calls. Edit mode never
+    // sends `fx_rate`: TransactionUpdate treats it as an explicit correction,
+    // never a recomputed side effect of editing qty/price/date
+    // (backend/api/routes/portfolio.py:399-402) — omitting the key entirely
+    // (not resending the old value) is what keeps that promise from this
+    // side, since `model_dump(exclude_unset=True)` only touches keys present
+    // in the request body.
+    const handleSubmit = async () => {
         const errors = validateTransactionForm({ symbol: form.symbol, qty: form.qty, price: form.price });
         if (Object.keys(errors).length > 0) {
             setFormErrors(errors);
             return;
         }
         setFormErrors({});
+        setSubmitError('');
         setSaving(true);
         try {
-            await portfolioService.addTransaction({
-                symbol: form.symbol.toUpperCase(),
-                type: form.type,
-                qty: parseFloat(form.qty),
-                price: parseFloat(form.price),
-                fee: parseFloat(form.fee) || 0,
-                currency: form.currency,
-                date: form.date,
-                note: form.note,
-            });
+            if (isEditMode && transaction) {
+                const patch = buildTransactionUpdatePatch(transaction, form);
+                if (Object.keys(patch).length > 0) {
+                    await portfolioService.updateTransaction(transaction.id, patch);
+                }
+            } else {
+                await portfolioService.addTransaction({
+                    symbol: form.symbol.toUpperCase(),
+                    type: form.type,
+                    qty: parseFloat(form.qty),
+                    price: parseFloat(form.price),
+                    fee: parseFloat(form.fee) || 0,
+                    currency: form.currency,
+                    date: form.date,
+                    note: form.note,
+                });
+            }
             onClose();
-            setForm(TXN_FORM_INIT);
-            setSearchQuery('');
-            setSelectedMarket('');
             onSuccess();
         } catch (err: any) {
-            const msg = err?.response?.data?.detail || err?.message || 'เพิ่มธุรกรรมไม่สำเร็จ';
-            toast.error(msg);
-            console.error('[AddTransactionModal] Add failed:', err);
+            // bd:shotockviz-7ju — this is where a currency-conflict 409 on
+            // update surfaces: extractErrorMessage reads the enveloped
+            // {data:null, meta:{error:{message}}} body (schemas/envelope.py),
+            // the same extraction api.ts's global interceptor already uses
+            // for the toast, so the two never disagree.
+            setSubmitError(extractErrorMessage(err));
         } finally {
             setSaving(false);
         }
@@ -156,25 +212,32 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
         <div className="glass-overlay fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => e.target === e.currentTarget && onClose()}>
             <div className="glass-panel rounded-2xl p-6 w-96 animate-slide-up">
                 <div className="flex items-center justify-between mb-5">
-                    <h3 className="font-bold">เพิ่มธุรกรรม</h3>
+                    <h3 className="font-bold">{isEditMode ? 'แก้ไขธุรกรรม' : 'เพิ่มธุรกรรม'}</h3>
                     <button onClick={onClose} style={{ color: 'var(--color-text-sub)' }}>
                         <X size={14} />
                     </button>
                 </div>
 
                 <div className="flex flex-col gap-3">
-                    {/* Type Toggle */}
-                    <div className="flex rounded-xl overflow-hidden" style={{ background: 'var(--color-input-bg)' }}>
+                    {/* Type Toggle — bd:shotockviz-gij: TransactionUpdate has no `type`
+                        field (backend/models/schemas.py:167-175), so editing can't
+                        change BUY/SELL. Disabled + labelled rather than silently
+                        accepting a click that would never be sent to the server. */}
+                    <div className="flex rounded-xl overflow-hidden" style={{ background: 'var(--color-input-bg)', opacity: isEditMode ? 0.6 : 1 }}>
                         {(['BUY', 'SELL'] as const).map((t) => (
                             <button
                                 key={t}
-                                onClick={() => setForm((f) => ({ ...f, type: t }))}
+                                onClick={() => !isEditMode && setForm((f) => ({ ...f, type: t }))}
+                                disabled={isEditMode}
+                                aria-disabled={isEditMode}
+                                title={isEditMode ? 'เปลี่ยนประเภทซื้อ/ขายไม่ได้ — ลบแล้วสร้างใหม่หากต้องการเปลี่ยน' : undefined}
                                 className="flex-1 py-2 text-xs font-semibold transition-all flex items-center justify-center gap-1.5"
                                 style={{
                                     background: form.type === t
                                         ? (t === 'BUY' ? 'var(--color-green)' : 'var(--color-red)')
                                         : 'transparent',
                                     color: form.type === t ? '#fff' : 'var(--color-text-sub)',
+                                    cursor: isEditMode ? 'not-allowed' : 'pointer',
                                 }}
                             >
                                 {t === 'BUY' ? (
@@ -185,8 +248,29 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                             </button>
                         ))}
                     </div>
+                    {isEditMode && (
+                        <p className="text-[10px] -mt-2" style={{ color: 'var(--color-text-sub)' }}>
+                            เปลี่ยน symbol หรือประเภทซื้อ/ขายไม่ได้ — ลบแล้วสร้างใหม่หากต้องการเปลี่ยน
+                        </p>
+                    )}
 
-                    {/* Symbol with Autocomplete */}
+                    {/* Symbol — bd:shotockviz-gij: same reason as Type above, read-only
+                        in edit mode instead of the create form's search box. */}
+                    {isEditMode ? (
+                        <div>
+                            <div className="text-[10px] uppercase tracking-wider mb-1.5 flex items-center gap-2" style={{ color: 'var(--color-text-sub)' }}>
+                                Symbol
+                                {selectedMarket && (
+                                    <span className="badge text-[9px] px-1.5 py-0.5" style={{ background: mktColors.bg, color: mktColors.text }}>
+                                        {selectedMarket}
+                                    </span>
+                                )}
+                            </div>
+                            <div className="input-field flex items-center gap-2 py-2 px-3">
+                                <span className="text-sm font-semibold" style={{ color: 'var(--color-text)' }}>{displaySymbol(form.symbol)}</span>
+                            </div>
+                        </div>
+                    ) : (
                     <div ref={dropdownRef} className="relative">
                         <div className="text-[10px] uppercase tracking-wider mb-1.5 flex items-center gap-2" style={{ color: 'var(--color-text-sub)' }}>
                             Symbol
@@ -277,13 +361,18 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                             </div>
                         )}
                     </div>
+                    )}
 
-                    {/* Currency Toggle (auto-detected from symbol) */}
+                    {/* Currency Toggle — bd:shotockviz-gij: TransactionUpdate DOES accept
+                        `currency`, and the backend re-runs the same rule-5 consistency
+                        check on update (backend/api/routes/portfolio.py:405-414), so this
+                        stays editable and can 409 in edit mode too (surfaced below the
+                        Save button via submitError). */}
                     <div>
                         <div className="text-[10px] uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
                             สกุลเงิน
                             <span className="text-[9px] px-1.5 py-0.5 rounded" style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
-                                auto-detect จาก symbol
+                                {isEditMode ? 'ต้องตรงกับรายการอื่นของ symbol นี้' : 'auto-detect จาก symbol'}
                             </span>
                         </div>
                         <div className="flex rounded-xl overflow-hidden" style={{ background: 'var(--color-input-bg)' }}>
@@ -365,7 +454,12 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                         </div>
                     </div>
 
-                    {/* วันที่ */}
+                    {/* วันที่ — bd:shotockviz-gij: disabled in edit mode, not silently
+                        broken. TransactionUpdate.date (backend/models/schemas.py) resolves
+                        its own annotation to NoneType — a PUT body with any `date` key
+                        422s regardless of value (bd:shotockviz-qml, backend-owned, out of
+                        scope here). Offering an editable date that always fails on submit
+                        would be exactly the dishonest control this engagement removes. */}
                     <div>
                         <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>
                             วันที่
@@ -374,8 +468,16 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                             type="date"
                             className="input-field"
                             value={form.date}
+                            disabled={isEditMode}
+                            aria-disabled={isEditMode}
+                            style={isEditMode ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
                             onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
                         />
+                        {isEditMode && (
+                            <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-sub)' }}>
+                                แก้ไขวันที่ยังไม่รองรับ (ข้อจำกัดฝั่งเซิร์ฟเวอร์) — ลบแล้วสร้างใหม่หากต้องการเปลี่ยนวันที่
+                            </p>
+                        )}
                     </div>
 
                     {/* หมายเหตุ */}
@@ -392,16 +494,20 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                         />
                     </div>
 
+                    {submitError && (
+                        <p role="alert" className="text-[10px]" style={{ color: 'var(--color-red)' }}>{submitError}</p>
+                    )}
+
                     <div className="flex gap-2 mt-2">
                         <button onClick={onClose} className="btn-outline flex-1 py-2">
                             ยกเลิก
                         </button>
                         <button
-                            onClick={handleAdd}
+                            onClick={handleSubmit}
                             disabled={saving}
                             className="btn-accent flex-1 py-2"
                         >
-                            {saving ? 'กำลังบันทึก…' : 'บันทึก'}
+                            {saving ? 'กำลังบันทึก…' : (isEditMode ? 'บันทึกการแก้ไข' : 'บันทึก')}
                         </button>
                     </div>
                 </div>

@@ -5,7 +5,7 @@
  */
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2, ArrowRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw, Briefcase, Activity, BarChart2, ArrowRight, AlertTriangle, Info } from 'lucide-react';
 import dashboardService from '@/services/dashboardService';
 import portfolioService from '@/services/portfolioService';
 import useAppStore from '@/store/appStore';
@@ -18,6 +18,18 @@ import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { formatPrice, formatPct, upColor, displaySymbol } from '@/utils/formatters';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
+import { buildCurveQualifications, type CurveQualificationTone } from '@/utils/curveQualifications';
+
+const CURVE_TONE_ICON: Record<CurveQualificationTone, typeof AlertTriangle> = {
+    error: AlertTriangle,
+    warn: AlertTriangle,
+    info: Info,
+};
+const CURVE_TONE_COLOR: Record<CurveQualificationTone, string> = {
+    error: 'var(--color-red)',
+    warn: 'var(--color-yellow)',
+    info: 'var(--color-text-sub)',
+};
 
 /* ── SparkLine ─────────────────────────────────────────────────────────── */
 
@@ -219,12 +231,34 @@ export default function DashboardPage() {
                                             </div>
                                         </div>
                                     )}
-                                    {/* Sparkline */}
-                                    {perfData?.points?.length > 1 && (
-                                        <div className="mt-2">
-                                            <SparkLine points={perfData.points} />
-                                        </div>
-                                    )}
+                                    {/* Sparkline — bd:shotockviz-a6p: the curve's FX basis
+                                        (bd:shotockviz-la4) rendered ABOVE the line it
+                                        qualifies, never after. A THB-only book (fx_basis
+                                        "single_currency", nothing excluded) renders none of
+                                        this — see utils/curveQualifications.ts. */}
+                                    {perfData?.points?.length > 1 && (() => {
+                                        const curveQuals = buildCurveQualifications(perfData);
+                                        return (
+                                            <div className="mt-2">
+                                                {curveQuals.length > 0 && (
+                                                    <div className="flex flex-col gap-0.5 mb-1" role="note" data-testid="curve-qualifications">
+                                                        {curveQuals.map((q) => {
+                                                            const Icon = CURVE_TONE_ICON[q.tone];
+                                                            return (
+                                                                <div key={q.key} className="flex items-start gap-1 text-[9px] leading-snug"
+                                                                    style={{ color: q.tone === 'error' ? 'var(--color-red)' : 'var(--color-text-sub)' }}>
+                                                                    <Icon size={9} strokeWidth={2} aria-hidden="true"
+                                                                        className="mt-[1px] shrink-0" style={{ color: CURVE_TONE_COLOR[q.tone] }} />
+                                                                    <span>{q.text}</span>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
+                                                <SparkLine points={perfData.points} />
+                                            </div>
+                                        );
+                                    })()}
                                 </div>
                                 {/* Right: top holdings */}
                                 {portfolio.top_holdings?.length > 0 && (
