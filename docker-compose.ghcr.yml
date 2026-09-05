@@ -108,7 +108,12 @@ services:
       resources:
         limits:
           cpus: '0.5'
-          memory: 256M
+          # Raised 256M -> 512M 2026-09-05 (bd:shotockviz-3tr) — the 2026-09-05
+          # soak (changelog.md) showed this pinned at 251/256 MiB even at idle
+          # once celery-beat started firing fetch_prices every 60s. Box is now
+          # 2 vCPU / 2 GB / 1 GB swap with ~820M free observed at the old limits;
+          # see CLAUDE.md § Production Deployment for the full budget arithmetic.
+          memory: 512M
     networks:
       - stockviz-net
 

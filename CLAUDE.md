@@ -45,6 +45,17 @@ docker-compose -f docker-compose.dev.yml down            # Stop all
 > see `docs/deploy-gha.md`, `.github/workflows/deploy.yml`, `docker-compose.ghcr.yml`.
 > The section below still describes the OLD shared-droplet flow (`docs/deploy.md`,
 > `scripts/deploy.sh`, `docker-compose.prod.yml`) — unchanged, kept for that droplet.
+>
+> **Resource limits on this droplet** (`docker-compose.ghcr.yml`, 2 vCPU / 2 GB / 1 GB
+> swap box): backend 1 CPU/512M, celery-worker 0.5 CPU/**512M** (raised from 256M
+> 2026-09-05, bd:shotockviz-3tr — the 2026-09-05 rebuild soak in `changelog.md` showed
+> it pinned at 251/256 MiB even at idle once `celery-beat` started firing
+> `fetch_prices` every 60s), celery-beat 0.5 CPU/256M, telegram-bot 0.25 CPU/128M,
+> frontend 0.5 CPU/256M. Sum of hard limits = 1664M, leaving ~384M of the 2048M for
+> db/redis/caddy/OS (uncapped); the soak observed ~820M free at the old 256M
+> celery-worker limit, so ~564M free is the conservative expectation post-bump.
+> **Pending until the next deploy runs** — this is a compose-file change only; the
+> containers actually running on the droplet still have the old 256M limit.
 
 **Server:** DigitalOcean droplet shared with ShoDe Town (`town.shode.dev`). Caddy is managed by ShoDe Town — ShotockViz does NOT run its own Caddy.
 
