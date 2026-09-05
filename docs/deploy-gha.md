@@ -83,9 +83,22 @@ the existing `environment:` entries) for whoever picks up that follow-up.
    gh workflow run deploy.yml --repo shode666/shotockviz -f run_migrations=false -f image_tag=<sha>
    ```
    This builds+pushes `backend`, `frontend`, `caddy` to
-   `ghcr.io/shode666/shotockviz-<service>:<sha>` (+ `:latest`), then SSHes to the droplet,
-   pulls, `up -d --remove-orphans`, runs `python scripts/init_db.py` (unless disabled), and
-   polls `/api/health` for up to 90s before declaring success.
+   `ghcr.io/shode666/shotockviz-<service>:<sha>` (+ `:latest`), then SSHes to the droplet and
+   runs `down --remove-orphans` → `pull --quiet` → `up -d` (see "Downtime window" below),
+   runs `python scripts/init_db.py` (unless disabled), and polls `/api/health` for up to 180s
+   before declaring success.
+
+   **Downtime window (~1-3 min).** The droplet is a single 1 vCPU / 961 MB RAM / swap-0
+   box — there is no headroom to run the old and new stack at once. A 2026-09-05 incident
+   (deploy of sha `a37c414`) ran `pull` while the old stack was still up: the pull's CPU/mem
+   spike OOM-killed the box mid-deploy (SSH dropped with "Broken pipe", then "Connection
+   reset by peer"; the stack came back on the old image tag after a manual power-cycle from
+   the DO console). The workflow now stops the old stack (`down`, keeping volumes — no `-v`)
+   *before* `pull`, so only one stack's containers ever hold memory at a time. The cost is a
+   real gap between `down` and the new containers passing their health check — typically
+   1-3 minutes, budgeted at up to 180s in the health-check step (bumped from 90s since `up`
+   now cold-starts instead of overlapping with a warm container). No app-level mitigation
+   (e.g. a maintenance page) is in place for this window.
 
    > **First deploy on a fresh DB** runs `backend/scripts/init_db.py`, not a bare
    > `alembic upgrade head` — the migration history alone can't create the base schema
@@ -107,6 +120,9 @@ gh workflow run deploy.yml --repo shode666/shotockviz -f image_tag=<old-sha>
 ```
 The previous image tag is still in GHCR (images aren't deleted on deploy — only
 `docker image prune -f` removes untagged/dangling local layers on the server after each run).
+
+Rollback goes through the same `down` → `pull` → `up -d` sequence as a normal deploy (see
+"Downtime window" in §4 above) — it is not a hot-swap, so expect the same ~1-3 min gap.
 
 ## Open questions
 

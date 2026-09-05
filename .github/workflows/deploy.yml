@@ -121,15 +121,24 @@ jobs:
           printf '%s' "${{ secrets.GITHUB_TOKEN }}" | ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" \
             "docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin"
 
-      - name: Pull + up
+      - name: Stop old stack, pull, up (1 GB droplet — no headroom for two stacks)
+        # 2026-09-05 incident (sha a37c414): old stack was left running while `pull` ran
+        # concurrently on this 1 vCPU / 961 MB / swap-0 droplet (mem already ~93-95% idle) —
+        # pull's CPU/mem spike (load1 to 18) OOM-killed the box, SSH dropped mid-step
+        # ("Broken pipe" then "Connection reset by peer"), and the stack came back on the
+        # OLD tag after a manual power-cycle. Fix: stop the old stack BEFORE pulling so only
+        # one stack's containers ever occupy memory at once. Trade-off: a real downtime
+        # window (~1-3 min) between `down` and the new `up -d` becoming healthy — see
+        # docs/deploy-gha.md §4.
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s -- "${{ env.IMAGE_TAG }}" <<'REMOTE'
             set -euo pipefail
             cd /opt/shotockviz
             export IMAGE_TAG="$1"
-            docker compose -f docker-compose.ghcr.yml pull
-            docker compose -f docker-compose.ghcr.yml up -d --remove-orphans
+            docker compose -f docker-compose.ghcr.yml down --remove-orphans
+            docker compose -f docker-compose.ghcr.yml pull --quiet
+            docker compose -f docker-compose.ghcr.yml up -d
           REMOTE
 
       - name: Run migrations
@@ -147,14 +156,16 @@ jobs:
             docker compose -f docker-compose.ghcr.yml run --rm backend python scripts/init_db.py
           REMOTE
 
-      - name: Health check (90s budget)
+      - name: Health check (180s budget)
+        # Bumped from 90s: after down->pull->up the backend does a cold start (no warm
+        # container to overlap with, per the down-before-pull fix above) — give it more room.
         run: |
           set -euo pipefail
           ssh -i ~/.ssh/deploy_key "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s <<'REMOTE'
             set -euo pipefail
             cd /opt/shotockviz
             ok=0
-            for i in $(seq 1 18); do
+            for i in $(seq 1 36); do
               if docker compose -f docker-compose.ghcr.yml exec -T backend curl -sf http://localhost:8000/api/health; then
                 ok=1
                 break
@@ -163,7 +174,7 @@ jobs:
             done
             docker compose -f docker-compose.ghcr.yml ps
             if [ "$ok" -ne 1 ]; then
-              echo "::error::backend /api/health did not become healthy within 90s"
+              echo "::error::backend /api/health did not become healthy within 180s"
               exit 1
             fi
           REMOTE
