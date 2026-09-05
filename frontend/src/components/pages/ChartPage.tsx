@@ -3,7 +3,6 @@ import { PanelRight } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import TradingChart from '@/components/chart/TradingChart';
 import ChartToolbar from '@/components/chart/ChartToolbar';
-import DrawingToolbar from '@/components/chart/DrawingToolbar';
 import RightPanel from '@/components/chart/RightPanel';
 
 interface CrosshairData {
@@ -71,7 +70,6 @@ export default function ChartPage() {
                     showSrLevels={showSrLevels}
                     onToggleSrLevels={() => setShowSrLevels((v) => !v)}
                 />
-                <DrawingToolbar />
 
                 {/* Chart area */}
                 <div className="flex-1 overflow-hidden relative">
