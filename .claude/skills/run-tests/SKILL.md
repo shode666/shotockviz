@@ -7,7 +7,7 @@ argument-hint: "[api|e2e|all]"
 
 # ShotockViz Test Runner
 
-Tests are in `/Users/shode/development/ShotockViz/tests/` — NOT in frontend/ or backend/.
+Tests are in `/Users/shode/workspace/shotockviz/tests/` — NOT in frontend/ or backend/.
 
 ## Test locations
 - API tests: `tests/api/` — pytest with in-memory SQLite
@@ -17,12 +17,12 @@ Tests are in `/Users/shode/development/ShotockViz/tests/` — NOT in frontend/ o
 
 ### If "api" or blank:
 ```bash
-cd /Users/shode/development/ShotockViz/tests/api && pip install -q -r requirements.txt 2>/dev/null && pytest -v --tb=short 2>&1
+cd /Users/shode/workspace/shotockviz/tests/api && pip install -q -r requirements.txt 2>/dev/null && pytest -v --tb=short 2>&1
 ```
 
 ### If "e2e":
 ```bash
-cd /Users/shode/development/ShotockViz/tests/e2e
+cd /Users/shode/workspace/shotockviz/tests/e2e
 # Install deps if needed
 [ -d node_modules ] || npm install 2>&1
 # Run tests (requires Docker stack at https://localhost)
