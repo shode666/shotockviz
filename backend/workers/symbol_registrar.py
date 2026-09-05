@@ -16,7 +16,12 @@ from datetime import datetime, timezone
 
 from celery import shared_task
 from core.logger import get_logger
-from core.symbol_utils import is_crypto, is_ambiguous_bare_thai_symbol
+from core.symbol_utils import (
+    is_crypto,
+    is_ambiguous_bare_thai_symbol,
+    is_thai_stock,
+    THAI_FUND_PREFIXES,
+)
 
 logger = get_logger(__name__)
 
@@ -40,9 +45,19 @@ def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
     fund-house prefix (SCB, TISCO, K-, B-, ASP, ...) used to fall straight
     through to 'FUND' whenever yfinance had no confirmed live price for it.
     That silently mis-served real SET equities typed without ".BK" (SCB,
-    TISCO are themselves real tickers) — see is_ambiguous_bare_thai_symbol's
-    docstring for why neither a local symbol list nor yfinance can resolve
-    this reliably. 'AMBIGUOUS' tells the caller to refuse to guess.
+    TISCO are themselves real tickers).
+
+    bd:shotockviz-3p6 — the m6q fix over-corrected: it made *every* prefix
+    match (not just the handful of strings that are actually real SET
+    tickers) return 'AMBIGUOUS', which wrongly refused genuine fund codes
+    like TISCOGF/SCBLT1/KFLTFDIV. This function now keeps the two questions
+    separate: `is_ambiguous_bare_thai_symbol` (exact match against
+    `THAI_FUND_HOUSE_TICKER_COLLISIONS` — see symbol_utils.py for the
+    verified list) answers "is this bare symbol unresolvable between a real
+    ticker and a fund house", while the broader `THAI_FUND_PREFIXES`
+    startswith check below answers the separate question "does this
+    unclassified bare symbol look like a fund code" and returns 'FUND'
+    directly — it is not asked to also gate on ambiguity.
     """
     sym_upper = symbol.upper()
 
@@ -59,13 +74,28 @@ def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
     # ticker, so they stay a direct FUND classification.
     if any(p.search(sym_upper) for p in _THAI_FUND_PATTERNS):
         return "FUND"
+
+    has_confirmed_market_price = bool(yf_info and yf_info.get("regularMarketPrice"))
+
     if is_ambiguous_bare_thai_symbol(sym_upper):
-        # Check if it's a known non-fund (e.g., SCBS could be confused)
-        # If yfinance returned valid stock data, trust that
-        if yf_info and yf_info.get("regularMarketPrice"):
+        # Exact collision (SCB, TISCO, ASP, MFC, ...). If yfinance returned
+        # valid live stock data, trust that over the collision guess.
+        if has_confirmed_market_price:
             pass  # let it fall through to SET/US detection
         else:
             return "AMBIGUOUS"
+    elif not is_thai_stock(sym_upper) and any(
+        sym_upper.startswith(prefix) for prefix in THAI_FUND_PREFIXES
+    ):
+        # Not an exact-ticker collision, but shaped like a fund-house code
+        # (TISCOGF, SCBLT1, KFLTFDIV, ...) — a confident, non-ambiguous FUND
+        # guess, same as it was before m6q. Still deferred to a confirmed
+        # live price if one exists (mirrors the collision branch above).
+        # `is_thai_stock` guard: a real ".BK"/".MAI" ticker like "SCB.BK"
+        # also starts with a prefix string ("SCB") but must fall straight
+        # through to the SET branch below, never get relabeled FUND.
+        if not has_confirmed_market_price:
+            return "FUND"
 
     # SET stocks end with .BK
     if sym_upper.endswith(".BK"):

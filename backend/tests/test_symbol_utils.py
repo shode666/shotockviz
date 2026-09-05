@@ -13,6 +13,7 @@ from core.symbol_utils import (
     YAHOO_SYMBOL_MAP,
     SUFFIX_TO_MARKET,
     THAI_FUND_PREFIXES,
+    THAI_FUND_HOUSE_TICKER_COLLISIONS,
 )
 
 
@@ -166,34 +167,61 @@ class TestIsCrypto:
         assert is_crypto(symbol) is expected
 
 
-# ── is_ambiguous_bare_thai_symbol (bd:shotockviz-m6q) ─────────────────────────
+# ── is_ambiguous_bare_thai_symbol (bd:shotockviz-m6q, tightened bd:shotockviz-3p6) ─
+#
+# bd:shotockviz-3p6 — the original m6q version used `startswith` against the
+# whole THAI_FUND_PREFIXES list, which flagged every genuine fund code
+# (TISCOGF, SCBLT1, KFLTFDIV, K-CHINA, B-INNOTECH, ...) as ambiguous too.
+# Ambiguity is real only for the small set of strings that are *exactly*
+# both a live SET ticker and a fund-house name — see
+# THAI_FUND_HOUSE_TICKER_COLLISIONS in symbol_utils.py for how each of
+# SCB/TISCO/ASP/MFC was verified against live Yahoo Finance data, and why
+# TMB/DAOL/PHATRA were checked and excluded.
 
 class TestIsAmbiguousBareThaiSymbol:
     @pytest.mark.parametrize("symbol", [
         "SCB",       # Siam Commercial Bank ticker AND a fund-house prefix
         "scb",       # case-insensitive
         "TISCO",     # Tisco Financial Group ticker AND a fund-house prefix
-        "ASP",       # Asia Plus AND a fund-house prefix
-        "K-",        # bare prefix itself
-        "B-",
-        "SCBX",      # anything starting with the prefix, not just an exact match
+        "ASP",       # Asia Plus Group Holdings AND a fund-house prefix
+        "MFC",       # MFC Asset Management (itself SET-listed) AND a fund-house prefix
     ])
-    def test_bare_prefix_collision_is_ambiguous(self, symbol):
+    def test_exact_ticker_collision_is_ambiguous(self, symbol):
         assert is_ambiguous_bare_thai_symbol(symbol) is True
 
     @pytest.mark.parametrize("symbol", [
         "SCB.BK",    # explicit suffix disambiguates — never ambiguous
         "TISCO.BK",
-        "AAPL",      # no prefix collision at all
+        "AAPL",      # no collision at all
         "PTT.BK",
         "BTC-USD",
+        "K-",        # bare prefix fragment — never a whole ticker, not ambiguous
+        "B-",
+        "SCBX",      # starts with a prefix but is not an exact collision
+        "TISCOGF",   # real fund code (SCB.. Tisco Global Equity Fund) — not ambiguous
+        "SCBLT1",    # real fund code (SCB Long-Term Equity Fund 1) — not ambiguous
+        "KFLTFDIV",  # real fund code (Krungsri LTF Dividend) — not ambiguous
+        "K-CHINA",   # real fund code — not ambiguous
+        "B-INNOTECH",  # real fund code — not ambiguous
+        "TMB",       # verified NOT a live SET ticker on Yahoo — excluded from collisions
+        "DAOL",      # verified no Yahoo data at all — excluded from collisions
+        "PHATRA",    # verified no Yahoo data at all — excluded from collisions
     ])
-    def test_suffixed_or_unrelated_symbol_is_not_ambiguous(self, symbol):
+    def test_fund_codes_and_unrelated_symbols_are_not_ambiguous(self, symbol):
         assert is_ambiguous_bare_thai_symbol(symbol) is False
 
     def test_prefix_list_is_nonempty_and_uppercase(self):
         assert THAI_FUND_PREFIXES
         assert all(p == p.upper() for p in THAI_FUND_PREFIXES)
+
+    def test_collision_set_is_small_exact_subset_of_prefixes(self):
+        """Every verified collision must itself be one of the fund-house
+        prefixes (it's a stricter subset, not an unrelated list) — and the
+        set must stay small/explicit, never a blanket 'all prefixes'."""
+        assert THAI_FUND_HOUSE_TICKER_COLLISIONS
+        assert THAI_FUND_HOUSE_TICKER_COLLISIONS == {"SCB", "TISCO", "ASP", "MFC"}
+        for ticker in THAI_FUND_HOUSE_TICKER_COLLISIONS:
+            assert any(ticker.startswith(p) or p == ticker for p in THAI_FUND_PREFIXES)
 
 
 # ── deduplicate ───────────────────────────────────────────────────────────────

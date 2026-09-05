@@ -69,8 +69,8 @@ class TestClassifyMarketNoRegression:
 
 
 # ── bd:shotockviz-m6q — bare Thai fund-prefix collisions must not become
-# a confident FUND guess. SCB/TISCO/ASP are real SET tickers too; the app
-# requires an explicit ".BK" (accepted convention) so a bare form is
+# a confident FUND guess. SCB/TISCO/ASP/MFC are real SET tickers too; the
+# app requires an explicit ".BK" (accepted convention) so a bare form is
 # ambiguous, not FUND. ─────────────────────────────────────────────────────
 
 class TestClassifyMarketAmbiguousBareThaiPrefix:
@@ -82,6 +82,13 @@ class TestClassifyMarketAmbiguousBareThaiPrefix:
 
     def test_bare_asp_is_ambiguous_not_fund(self):
         assert _classify_market("ASP") == "AMBIGUOUS"
+
+    def test_bare_mfc_is_ambiguous_not_fund(self):
+        """MFC.BK is itself a real SET-listed company (MFC Asset
+        Management) and "MFC" bare also resolves to an unrelated real US
+        stock (Manulife Financial Corp, NYQ) — verified via live yfinance
+        2026-09-05, see symbol_utils.py THAI_FUND_HOUSE_TICKER_COLLISIONS."""
+        assert _classify_market("MFC") == "AMBIGUOUS"
 
     def test_scb_with_bk_suffix_is_set_unaffected(self):
         """The suffixed form is unambiguous and must be completely
@@ -102,6 +109,28 @@ class TestClassifyMarketAmbiguousBareThaiPrefix:
         check, so must still classify FUND exactly as before."""
         assert _classify_market("K-CHINA") == "FUND"
         assert _classify_market("B-INCOME") == "FUND"
+
+
+# ── bd:shotockviz-3p6 — the m6q fix over-corrected: prefix *matches* that
+# are not exact ticker collisions are real fund codes and must classify as
+# FUND (the pre-m6q, and correct, behavior), not AMBIGUOUS. ─────────────────
+
+class TestClassifyMarketFundPrefixNotAmbiguous:
+    @pytest.mark.parametrize("symbol,expected", [
+        ("TISCOGF", "FUND"),    # Tisco Global Equity Fund — real fund code
+        ("SCBLT1", "FUND"),     # SCB Long-Term Equity Fund 1 — real fund code
+        ("KFLTFDIV", "FUND"),   # Krungsri LTF Dividend — real fund code
+        ("K-CHINA", "FUND"),    # real fund code (dash-regex path, unaffected)
+        ("B-INNOTECH", "FUND"),  # real fund code (dash-regex path, unaffected)
+    ])
+    def test_fund_codes_classify_as_fund_not_ambiguous(self, symbol, expected):
+        assert _classify_market(symbol) == expected
+
+    def test_fund_prefix_still_defers_to_confirmed_live_price(self):
+        """Mirrors the exact-collision branch: a confirmed live yfinance
+        price for a prefix-shaped symbol still wins over the FUND guess."""
+        yf_info = {"regularMarketPrice": 42.0, "exchange": "NMS"}
+        assert _classify_market("KFLTFDIV", yf_info) == "US"
 
 
 class TestShouldRegister:

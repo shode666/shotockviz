@@ -116,37 +116,90 @@ def is_crypto(symbol: str) -> bool:
     return symbol.upper().endswith("-USD")
 
 
-# ── Thai fund-prefix ambiguity (bd:shotockviz-m6q) ────────────────────────────
-# Known Thai fund-house (บลจ.) prefixes. Several of these — SCB, TISCO, K-,
-# B-, ASP — are simultaneously real SET equity tickers (Siam Commercial Bank,
-# Tisco Financial Group, ...) and fund-code prefixes (SCBLT1, TISCOGF,
-# K-GINCOME, B-INCOME, ...). The app's accepted convention is that SET
-# tickers always carry an explicit ".BK" suffix; a bare symbol that merely
-# *starts with* one of these prefixes cannot be told apart from the real
-# stock without that suffix.
-#
-# NO MAGIC evidence for why this can't be resolved by guessing instead:
-#   - No comprehensive local SET symbol list exists to check against —
-#     `backend/scripts/seed_stocks.py` hardcodes 15 SET names only.
-#   - Live yfinance lookup is not a reliable disambiguator either: bare
-#     "SCB" resolves to Yahoo's own shortName "1249" / quoteType
-#     MUTUALFUND / regularMarketPrice None (a generic Yahoo-Data
-#     placeholder, not real SCB.BK or a real Thai fund) — same for "ASP" ->
-#     "4507". Verified via `docker-compose exec backend python3 -c
-#     "yfinance..."` on 2026-09-05; the data yfinance returns for a bare
-#     ambiguous symbol is itself untrustworthy signal.
-# Given both potential sources of truth are absent/unreliable, treat the
-# bare form as ambiguous rather than silently picking a market.
+# ── Thai fund-house prefixes (classification signal, NOT ambiguity) ──────────
+# Known Thai fund-house (บลจ.) prefixes used purely as a *fund-code shape*
+# heuristic — see `symbol_registrar._classify_market`, which uses this list
+# to guess that an unknown bare symbol (e.g. "TISCOGF", "SCBLT1", "KFLTFDIV")
+# is a Thai mutual fund code, not a SET equity. This is a *different
+# question* from "is this bare symbol ambiguous with a real ticker" (that
+# question is answered by `THAI_FUND_HOUSE_TICKER_COLLISIONS` /
+# `is_ambiguous_bare_thai_symbol` below) — the two must not be collapsed
+# into one constant again (bd:shotockviz-3p6 fixed exactly that overload:
+# `startswith` on this whole list was being used as the ambiguity check,
+# which flags every genuine fund code — TISCOGF, SCBLT1, KFLTFDIV, K-CHINA,
+# B-INNOTECH — as if it were an unresolvable stock/fund collision, when none
+# of those strings are also SET tickers).
 THAI_FUND_PREFIXES: tuple[str, ...] = (
     "SCB", "SCBS", "PRINCIPAL", "KFIN", "KF", "KTAM", "KT-", "K-",
     "B-", "BBLAM", "TISCO", "TMB", "UOBAM", "ONE-", "ASP", "PHATRA",
     "MFC", "LHFUND", "KRUNGSRI", "WE-", "MEGA", "DAOL",
 )
 
+# ── Thai fund-house / SET-ticker exact collisions (bd:shotockviz-3p6) ────────
+# Ambiguity is real only when the *entire bare symbol* is simultaneously a
+# genuine SET-listed ticker AND a fund-house name — not merely a prefix of
+# one. Prefix fragments like "K-", "B-", "WE-", "ONE-", "KT-" are never
+# whole tickers by construction (SET tickers don't contain "-" as their
+# first/only token per `seed_stocks.py`'s 15 hardcoded names), so they
+# cannot collide with anything and must never appear here.
+#
+# NO MAGIC evidence — each candidate below was checked against live Yahoo
+# Finance from inside the backend container on 2026-09-05
+# (`docker-compose -f docker-compose.dev.yml exec -T backend python3 -c
+# "import yfinance as yf; ..."`), querying both the bare symbol and the
+# `.BK`-suffixed form:
+#
+#   SCB    -> SCB.BK resolves: shortName "SCB_SCB X", quoteType EQUITY,
+#             exchange SET, regularMarketPrice 151.5 (real, live SET
+#             equity — SCB X Public Company Limited). Bare "SCB" resolves
+#             to Yahoo's own placeholder (shortName "1249", quoteType
+#             MUTUALFUND, exchange "YHD", regularMarketPrice None) —
+#             confirmed collision.
+#   TISCO  -> TISCO.BK resolves: "TISCO Financial Group Public Company
+#             Limited", quoteType EQUITY, exchange SET, price 127.0 (real).
+#             Bare "TISCO" returns nothing from Yahoo at all — still a
+#             genuine SET ticker per the suffixed lookup, so the bare form
+#             is a real collision risk with TISCOGF/TISCOEGF fund codes
+#             (`seed_stocks.py` THAI_FUNDS section) — confirmed collision.
+#   ASP    -> ASP.BK resolves: "Asia Plus Group Holdings Public Company
+#             Limited", quoteType EQUITY, exchange SET, price 2.34 (real).
+#             Bare "ASP" returns the same kind of Yahoo MUTUALFUND
+#             placeholder as bare SCB (shortName "4507") — confirmed
+#             collision.
+#   MFC    -> MFC.BK resolves: "MFC Asset Management Public Company
+#             Limited", quoteType EQUITY, exchange SET, price 23.5 (real —
+#             MFC is itself both the fund house AND a SET-listed company).
+#             Bare "MFC" resolves to an unrelated real US stock (Manulife
+#             Financial Corporation, exchange NYQ, price 44.34) — still a
+#             genuine ambiguity: a bare "MFC" cannot be safely assumed to
+#             mean the Thai company — confirmed collision.
+#   TMB    -> TMB.BK returns no data at all (quoteType "NONE", every field
+#             None) — TMB Bank merged into ttb (Thanachart) in 2021 and no
+#             longer trades under this ticker on Yahoo. Not a live SET
+#             ticker today -> EXCLUDED, left as a plain THAI_FUND_PREFIXES
+#             entry only.
+#   DAOL   -> DAOL.BK and bare "DAOL" both return no data at all -> not a
+#             resolvable SET ticker via this project's only disambiguation
+#             source -> EXCLUDED.
+#   PHATRA -> PHATRA.BK and bare "PHATRA" both return no data at all ->
+#             EXCLUDED, same reasoning as DAOL.
+THAI_FUND_HOUSE_TICKER_COLLISIONS: frozenset[str] = frozenset({
+    "SCB", "TISCO", "ASP", "MFC",
+})
+
 
 def is_ambiguous_bare_thai_symbol(symbol: str) -> bool:
-    """True if `symbol` collides with a Thai fund-house prefix but carries
-    no `.BK`/`.MAI` suffix to disambiguate it from a real SET equity.
+    """True only if `symbol` (bare, no `.BK`/`.MAI` suffix) is *exactly* one
+    of the small set of strings that are simultaneously a real SET-listed
+    ticker and a Thai fund-house name (see
+    `THAI_FUND_HOUSE_TICKER_COLLISIONS` for the verified list and how each
+    entry was checked).
+
+    A symbol that merely *starts with* a fund-house prefix (e.g. "TISCOGF",
+    "SCBLT1", "KFLTFDIV") is not ambiguous — it is unmistakably a fund code,
+    not a stock ticker typed without its suffix. That broader prefix check
+    was the bd:shotockviz-3p6 bug: it flagged every genuine fund code as if
+    it collided with a real ticker.
 
     Symbols already carrying the market suffix (e.g. "SCB.BK") are never
     ambiguous — the suffix is the app's accepted disambiguation signal.
@@ -154,4 +207,20 @@ def is_ambiguous_bare_thai_symbol(symbol: str) -> bool:
     sym_upper = symbol.upper()
     if is_thai_stock(sym_upper):
         return False
-    return any(sym_upper.startswith(prefix) for prefix in THAI_FUND_PREFIXES)
+    return sym_upper in THAI_FUND_HOUSE_TICKER_COLLISIONS
+
+
+def ambiguous_bare_symbol_detail(symbol: str) -> str:
+    """The one wording for a refused bare symbol (bd:shotockviz-3p6).
+
+    `watchlist.py` and `portfolio.py` both refuse these now. The message lives
+    here so the two routes cannot drift into telling the user two different
+    stories about the same symbol — which is the shape of the bug 3p6 reports
+    (the watchlist explained itself; the portfolio said nothing at all and the
+    registrar silently declined behind it).
+    """
+    sym = symbol.upper()
+    return (
+        f"'{sym}' is ambiguous. For the SET stock, type '{sym}.BK'. "
+        f"For a Thai mutual fund, use its exact fund code."
+    )
