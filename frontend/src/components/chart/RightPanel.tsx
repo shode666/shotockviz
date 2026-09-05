@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { BellPlus, Timer, Newspaper, Briefcase, BarChart2, StickyNote, Save, Check, X, Info } from 'lucide-react';
+import { BellPlus, Timer, Newspaper, Briefcase, BarChart2, StickyNote, Save, Check, X, Info, Trash2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
 import stockService from '@/services/stockService';
@@ -148,6 +148,20 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
         } catch { /* ignore */ }
         finally { setNoteSaving(false); }
     }, [isAuthenticated, selectedStock?.sym, noteContent]);
+
+    // bd:ui-honesty-2026-09 F8 — DELETE /notes/{symbol} already exists
+    // (notesService.ts:6), no control to trigger it existed before this.
+    const deleteNote = useCallback(async () => {
+        if (!isAuthenticated || !selectedStock?.sym) return;
+        if (!window.confirm('ลบบันทึกนี้?')) return;
+        clearTimeout(saveTimer.current);
+        try {
+            await notesService.delete(selectedStock.sym);
+            setNoteContent('');
+        } catch {
+            toast.error('ลบบันทึกไม่สำเร็จ');
+        }
+    }, [isAuthenticated, selectedStock?.sym]);
 
     const handleNoteChange = (v: string) => {
         setNoteContent(v);
@@ -430,6 +444,11 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                                                                 className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg transition-colors"
                                                                 style={{ background: 'var(--color-accent-glow, rgba(124,92,252,0.15))', color: 'var(--color-accent)' }}>
                                                                 <Save size={9} /> {noteSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+                                                            </button>
+                                                            <button onClick={deleteNote} disabled={!noteContent} aria-label="ลบบันทึก"
+                                                                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg transition-colors disabled:opacity-40"
+                                                                style={{ background: 'var(--color-down-muted)', color: 'var(--color-down)' }}>
+                                                                <Trash2 size={9} />
                                                             </button>
                                                         </div>
                                                     </div>
