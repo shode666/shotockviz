@@ -17,6 +17,7 @@ import { AlertsNearTarget } from '@/components/dashboard/AlertsNearTarget';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { formatPrice, formatPct, upColor, displaySymbol } from '@/utils/formatters';
+import { getSetStatus, getUsStatus } from '@/utils/marketStatus';
 
 /* ── SparkLine ─────────────────────────────────────────────────────────── */
 
@@ -52,6 +53,18 @@ export default function DashboardPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+    // Market status — single source of truth shared with Navbar (utils/marketStatus.ts),
+    // refreshed every 60s the same way (F4 — was a separate, wrong inline heuristic).
+    const [setStatus, setSetStatus] = useState(getSetStatus);
+    const [usStatus, setUsStatus] = useState(getUsStatus);
+    useEffect(() => {
+        const t = setInterval(() => {
+            setSetStatus(getSetStatus());
+            setUsStatus(getUsStatus());
+        }, 60_000);
+        return () => clearInterval(t);
+    }, []);
 
     const load = useCallback(async () => {
         setLoading(true);
@@ -232,12 +245,12 @@ export default function DashboardPage() {
                         <div className="grid grid-cols-2 gap-4">
                             <div>
                                 <div className="text-[10px] mb-1" style={{ color: 'var(--color-text-sub)' }}>SET (Thailand)</div>
-                                <MarketStatusBadge isOpen={new Date().getHours() >= 10 && new Date().getHours() < 16} />
+                                <MarketStatusBadge isOpen={setStatus.open} />
                                 <div className="text-[10px] mt-1" style={{ color: 'var(--color-text-sub)' }}>10:00 – 16:30 ICT</div>
                             </div>
                             <div>
                                 <div className="text-[10px] mb-1" style={{ color: 'var(--color-text-sub)' }}>US Market</div>
-                                <MarketStatusBadge isOpen={new Date().getHours() >= 21 || new Date().getHours() < 4} />
+                                <MarketStatusBadge isOpen={usStatus.open} />
                                 <div className="text-[10px] mt-1" style={{ color: 'var(--color-text-sub)' }}>21:30 – 04:00 ICT</div>
                             </div>
                         </div>
