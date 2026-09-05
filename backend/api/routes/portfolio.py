@@ -1,6 +1,8 @@
 import asyncio
 import json as _json
 import re
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -10,7 +12,8 @@ from core import cache_keys
 from models.user import User
 from models.portfolio import Transaction
 from models.schemas import (
-    TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics, HoldingResponse,
+    TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics,
+    HoldingResponse, FxRateInfo,
 )
 from api.middleware.auth import get_current_user
 from services import portfolio_service, stock_service
@@ -40,6 +43,52 @@ _YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
 def _is_yahoo_fetchable(symbol: str) -> bool:
     """Return True if the symbol looks like a real Yahoo Finance ticker."""
     return bool(_YAHOO_SYMBOL_RE.match(symbol.upper()))
+
+
+async def _fx_quote_cached() -> dict | None:
+    """Cache-only read of the FX quote (`THBUSD=X`). None on miss — never fetch.
+
+    Its own pipeline round-trip so a cold/absent FX rate can never disturb the
+    holdings pipelines above it.
+    """
+    try:
+        r = await stock_service.get_redis()
+        pipe = r.pipeline()
+        pipe.get(cache_keys.quote(portfolio_service.FX_QUOTE_SYMBOL))
+        raw = (await pipe.execute())[0]
+        return _json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+async def _record_fx_rate(currency: str, txn_date, explicit: float | None) -> float | None:
+    """The rate to stamp on a new transaction (bd:shotockviz-fnn, rule FX-1).
+
+    Order:
+      1. THB -> 1.0 by definition; the base currency has no exchange rate and a
+         client cannot override that;
+      2. an explicit client-supplied rate (the user knows their fill rate) — kept
+         even for a back-dated trade, because it is an observation, not a guess;
+      3. the live cached rate, but ONLY for a contemporaneous trade;
+      4. otherwise None.
+
+    (3)'s date guard is the point. Stamping today's rate onto a trade dated six
+    months ago would look like a recorded historical rate and would silently
+    poison the FX return — the same class of bug as the 33.0 constant. The
+    tolerance is one day because a US fill at 02:00 ICT belongs to the previous
+    US session date. ICT is `utc + 7h`, the convention already used in
+    `workers/fund_fetcher.py:146`.
+    """
+    if currency.upper() == portfolio_service.BASE_CURRENCY:
+        return 1.0
+    if explicit is not None:
+        return float(explicit)
+
+    today_ict = (datetime.now(timezone.utc) + timedelta(hours=7)).date()
+    if txn_date is None or abs((today_ict - txn_date).days) > 1:
+        return None  # back-dated: no observed rate exists, and none is invented
+
+    return portfolio_service.live_rate_from_thbusd(await _fx_quote_cached())
 
 
 @router.get("", response_model=list[TransactionResponse])
@@ -155,11 +204,32 @@ async def get_analytics(
         for sym in fetchable_misses:
             await stock_service.request_data_fetch(sym, "quote")
 
+    # Stage 4: the FX rate itself (bd:shotockviz-fnn). Cache-only, like every
+    # other read on this route; a cold THBUSD=X is normal off-hours and is what
+    # used to silently become the hardcoded 33.0 on the dashboard.
+    fx_quote = await _fx_quote_cached()
+    fx_rates = portfolio_service.build_fx_rates(txns, fx_quote)
+    if any(r.source != "live" for r in fx_rates.values()):
+        # Warm it for the next load. Bypasses _is_yahoo_fetchable on purpose:
+        # "THBUSD=X" contains '=' and would never pass that ticker regex, but it
+        # is the symbol dashboard.py already fetches through the same path.
+        try:
+            await stock_service.request_data_fetch(portfolio_service.FX_QUOTE_SYMBOL, "quote")
+        except Exception:
+            pass
+
     # bd:shotockviz-2w8 — an unpriced position is excluded from BOTH sides of the
     # total (never valued at zero against a full cost basis, which fabricated a
     # loss equal to the whole position). It still returns as a row with
     # current_price=None, and has_pending_prices flags it.
-    valued = portfolio_service.value_holdings(active, quote_map)
+    #
+    # bd:shotockviz-sbe — the totals below used to be a raw sum of THB and USD
+    # amounts while the dashboard normalised to THB, so the two screens stated
+    # different numbers for the same book and the header total of a mixed book
+    # meant nothing. Both now go through the same `fx` resolver.
+    valued = portfolio_service.value_holdings(
+        active, quote_map, fx=portfolio_service.fx_resolver(fx_rates)
+    )
     totals = portfolio_service.summarize(valued)
 
     holding_responses = [
@@ -174,15 +244,41 @@ async def get_analytics(
             current_value=round(v.current_value, 2) if v.current_value is not None else None,
             unrealized_pl=round(v.unrealized_pl, 2) if v.unrealized_pl is not None else None,
             unrealized_pl_pct=round(v.unrealized_pl_pct, 2) if v.unrealized_pl_pct is not None else None,
+            base_currency=v.base_currency,
+            fx_rate=round(v.fx_rate, 6) if v.fx_rate is not None else None,
+            fx_source=v.fx_source,
+            fx_estimated=v.fx_estimated,
+            cost_basis_base=round(v.cost_basis_base, 2) if v.cost_basis_base is not None else None,
+            cost_basis_source=v.cost_basis_source,
+            current_value_base=round(v.current_value_base, 2) if v.current_value_base is not None else None,
+            unrealized_pl_base=round(v.unrealized_pl_base, 2) if v.unrealized_pl_base is not None else None,
+            unrealized_pl_pct_base=round(v.unrealized_pl_pct_base, 2) if v.unrealized_pl_pct_base is not None else None,
+            market_pl_base=round(v.market_pl_base, 2) if v.market_pl_base is not None else None,
+            # None stays None: "we cannot separate the currency move for this
+            # position", which is not the same statement as "it was zero".
+            fx_pl_base=round(v.fx_pl_base, 2) if v.fx_pl_base is not None else None,
         )
         for v in valued
     ]
 
     return PortfolioAnalytics(
+        base_currency=totals.base_currency,
         total_value=round(totals.total_value, 2),
         total_cost=round(totals.total_cost, 2),
         unrealized_pl=round(totals.unrealized_pl, 2),
         unrealized_pl_pct=round(totals.unrealized_pl_pct, 2),
+        market_pl=round(totals.market_pl, 2),
+        fx_pl=round(totals.fx_pl, 2) if totals.fx_pl is not None else None,
+        fx_estimated=totals.fx_estimated,
+        cost_basis_estimated=totals.cost_basis_estimated,
+        fx_rates=[
+            FxRateInfo(
+                currency=r.currency, base=r.base, rate=round(r.rate, 6),
+                source=r.source, as_of=r.as_of, estimated=r.estimated,
+            )
+            for r in totals.fx_rates.values()
+        ],
+        fx_unavailable_symbols=totals.fx_unavailable_symbols,
         holdings=holding_responses,
         # Derived from the positions actually left unpriced (a cache "miss" that
         # the fund stage then resolved is not pending; a cached but unusable
@@ -198,6 +294,7 @@ async def add_transaction(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a buy or sell transaction."""
+    currency = body.currency.upper() if body.currency else "THB"
     txn = Transaction(
         user_id=user.id,
         symbol=body.symbol.upper(),
@@ -205,7 +302,10 @@ async def add_transaction(
         qty=body.qty,
         price=body.price,
         fee=body.fee,
-        currency=body.currency.upper() if body.currency else "THB",
+        currency=currency,
+        # bd:shotockviz-fnn — record the rate now; NULL when none can honestly
+        # be observed for this trade date. See _record_fx_rate.
+        fx_rate=await _record_fx_rate(currency, body.date, body.fx_rate),
         date=body.date,
         note=body.note,
     )
@@ -238,7 +338,11 @@ async def update_transaction(
     if not txn:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
-    _ALLOWED_UPDATE_FIELDS = {"qty", "price", "fee", "currency", "date", "note"}
+    # `fx_rate` is settable here so a user can correct/supply the real fill rate
+    # of an older trade — the only route by which a back-dated foreign position
+    # ever regains its FX return. It is never *recomputed* as a side effect of
+    # editing qty/price/date: a rate is an observation, not a derived field.
+    _ALLOWED_UPDATE_FIELDS = {"qty", "price", "fee", "currency", "date", "note", "fx_rate"}
     for field, val in body.model_dump(exclude_unset=True).items():
         if field not in _ALLOWED_UPDATE_FIELDS:
             continue

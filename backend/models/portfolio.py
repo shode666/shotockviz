@@ -34,6 +34,14 @@ class Transaction(Base):
     price: Mapped[float] = mapped_column(Float, nullable=False)
     fee: Mapped[float] = mapped_column(Float, default=0.0)
     currency: Mapped[Currency] = mapped_column(Enum(Currency), nullable=False, server_default="THB")
+    # bd:shotockviz-fnn — THB per 1 unit of `currency`, observed when the row was
+    # recorded. NULLABLE on purpose and never backfilled: a row created before
+    # this column existed has no observed rate, and inventing one would be the
+    # same silent guess as the 33.0 constant this bead removes. NULL therefore
+    # means "FX return unavailable for this lot", which the API reports as such
+    # (services/portfolio_service.py rule 4 / FX-1). A THB row needs no rate —
+    # it is 1.0 by definition — so the whole pre-existing book stays complete.
+    fx_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     date: Mapped[date] = mapped_column(Date, nullable=False)
     note: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

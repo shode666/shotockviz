@@ -10,6 +10,62 @@ import { usePortfolioData } from '@/hooks/usePortfolioData';
 
 const CURR_SIGN: Record<string, string> = { THB: '฿', USD: '$' };
 
+// bd:shotockviz-fnn — how an FX rate got here, in the user's words.
+const FX_SOURCE_TH: Record<string, string> = {
+    live: 'อัตราล่าสุดจากตลาด',
+    last_known: 'ประมาณการ — ใช้อัตราที่คุณเคยบันทึกไว้ล่าสุด',
+    fallback: 'ประมาณการ — ค่าเริ่มต้นของระบบ (ยังไม่เคยมีอัตราจริง)',
+};
+
+interface FxRateInfo {
+    currency: string;
+    base?: string;
+    rate: number;
+    source: string;
+    as_of?: string | null;
+    estimated?: boolean;
+}
+
+/**
+ * bd:shotockviz-fnn — the FX disclosure the totals above depend on.
+ * Never renders a rate without saying where it came from, and says "ไม่ทราบ"
+ * for the currency return rather than printing a 0 the data cannot support.
+ */
+function FxDisclosure({ rates, fxPl, costEstimated }: {
+    rates: FxRateInfo[]; fxPl: number | null | undefined; costEstimated: boolean;
+}) {
+    if (!rates || rates.length === 0) return null;   // THB-only book — no FX to disclose
+    return (
+        <div className="text-[11px] mb-4 px-3 py-2 rounded-xl flex flex-col gap-1"
+            style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+            {rates.map((r) => (
+                <div key={r.currency} className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-semibold">{r.currency}/{r.base ?? 'THB'} {formatPriceTH(r.rate, 4)}</span>
+                    <span>· {FX_SOURCE_TH[r.source] ?? r.source}{r.as_of ? ` (${r.as_of})` : ''}</span>
+                    {r.estimated && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold"
+                            style={{ background: 'var(--color-yellow)', color: '#000' }}>ประมาณการ</span>
+                    )}
+                </div>
+            ))}
+            <div>
+                ผลตอบแทนจากค่าเงิน:{' '}
+                {fxPl == null ? (
+                    <span style={{ color: 'var(--color-yellow)' }}>
+                        ไม่ทราบ — บางรายการซื้อไม่ได้บันทึกอัตราแลกเปลี่ยนไว้ และระบบไม่ย้อนหลังอัตราเก่าให้
+                    </span>
+                ) : (
+                    <span className="font-semibold tabular-nums"
+                        style={{ color: fxPl >= 0 ? 'var(--color-green)' : 'var(--color-red)' }}>
+                        {fxPl >= 0 ? '+' : '-'}฿{formatPriceTH(Math.abs(fxPl))}
+                    </span>
+                )}
+                {costEstimated && ' · ต้นทุนบางรายการแปลงด้วยอัตราปัจจุบัน'}
+            </div>
+        </div>
+    );
+}
+
 function StatCard({ label, value, sub, up }: { label: string; value: string | number; sub?: string; up?: boolean }) {
     return (
         <div className="panel border rounded-2xl p-4" style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}>
@@ -48,6 +104,10 @@ export default function PortfolioPage() {
 
     const fmtQty = (n) => n != null ? parseFloat(n.toFixed(8)).toString() : '—';
     const pnlUp = analytics ? analytics.unrealized_pl >= 0 : true;
+    const baseCurrency: string = analytics?.base_currency ?? 'THB';
+    // bd:shotockviz-fnn — an estimated rate must be visible on the figure
+    // itself, not only in the note below it.
+    const fxApprox = (analytics?.fx_estimated || analytics?.cost_basis_estimated) ? '≈' : '';
 
     const THAI_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
     const fmtMonth = (ym: string) => {
@@ -108,18 +168,26 @@ export default function PortfolioPage() {
                     </div>
                 ) : (
                     <>
-                        {/* Stats */}
+                        {/* Stats — bd:shotockviz-sbe: these are a THB-normalised
+                            book total now (they used to be THB and USD added raw).
+                            `≈` marks a total that leans on an estimated FX rate. */}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
-                            <StatCard label="มูลค่ารวม" value={`฿${formatPriceTH(analytics?.total_value)}`} />
-                            <StatCard label="ต้นทุนรวม" value={`฿${formatPriceTH(analytics?.total_cost)}`} />
+                            <StatCard label={`มูลค่ารวม (${baseCurrency})`} value={`${fxApprox}฿${formatPriceTH(analytics?.total_value)}`} />
+                            <StatCard label={`ต้นทุนรวม (${baseCurrency})`} value={`${fxApprox}฿${formatPriceTH(analytics?.total_cost)}`} />
                             <StatCard
                                 label="กำไร/ขาดทุน"
-                                value={`${pnlUp ? '+' : '-'}฿${formatPriceTH(analytics?.unrealized_pl != null ? Math.abs(analytics.unrealized_pl) : null)}`}
+                                value={`${fxApprox}${pnlUp ? '+' : '-'}฿${formatPriceTH(analytics?.unrealized_pl != null ? Math.abs(analytics.unrealized_pl) : null)}`}
                                 sub={`${pnlUp ? '+' : '-'}${formatPriceTH(analytics?.unrealized_pl_pct != null ? Math.abs(analytics.unrealized_pl_pct) : null)}%`}
                                 up={pnlUp}
                             />
                             <StatCard label="จำนวนหุ้น" value={analytics?.holdings?.length ?? 0} />
                         </div>
+
+                        <FxDisclosure
+                            rates={analytics?.fx_rates ?? []}
+                            fxPl={analytics?.fx_pl}
+                            costEstimated={!!analytics?.cost_basis_estimated}
+                        />
 
                         {/* Tab Bar */}
                         <div className="flex items-center gap-1 mb-4 border-b" style={{ borderColor: 'var(--color-border)' }}>

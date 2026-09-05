@@ -154,6 +154,14 @@ class TransactionCreate(BaseModel):
     currency: str = "THB"  # THB or USD
     date: date
     note: Optional[str] = None
+    # bd:shotockviz-fnn — THB per 1 unit of `currency` at the time of the trade.
+    # Optional: leave it out and the server records the rate it can actually
+    # observe *today* (and records nothing for a back-dated trade, rather than
+    # stamping today's rate onto a trade from six months ago). Supply it when
+    # you know the real fill rate — that is the only way a back-dated foreign
+    # trade can ever report an FX return, since historical rates are not
+    # backfilled.
+    fx_rate: Optional[float] = Field(default=None, gt=0)
 
 
 class TransactionUpdate(BaseModel):
@@ -163,6 +171,8 @@ class TransactionUpdate(BaseModel):
     currency: Optional[str] = None
     date: Optional[date] = None
     note: Optional[str] = None
+    # Explicit correction only — never recomputed silently on any other edit.
+    fx_rate: Optional[float] = Field(default=None, gt=0)
 
 
 class TransactionResponse(BaseModel):
@@ -176,8 +186,20 @@ class TransactionResponse(BaseModel):
     date: date
     note: Optional[str] = None
     created_at: datetime
+    # None = no rate was recorded for this row (pre-existing or back-dated).
+    fx_rate: Optional[float] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class FxRateInfo(BaseModel):
+    """Which rate was used, and how much it can be trusted (bd:shotockviz-fnn)."""
+    currency: str
+    base: str = "THB"
+    rate: float
+    source: str  # identity | live | last_known | fallback
+    as_of: Optional[str] = None
+    estimated: bool = False
 
 
 class HoldingResponse(BaseModel):
@@ -189,13 +211,38 @@ class HoldingResponse(BaseModel):
     current_value: Optional[float] = None
     unrealized_pl: Optional[float] = None
     unrealized_pl_pct: Optional[float] = None
+    # ── base-currency view (bd:shotockviz-fnn / -sbe) ─────────────────────────
+    base_currency: str = "THB"
+    fx_rate: Optional[float] = None          # current rate used for the value
+    fx_source: Optional[str] = None
+    fx_estimated: bool = False
+    cost_basis_base: Optional[float] = None
+    # identity = same currency as the book; historical = every lot converted at
+    # its own recorded rate; current_rate = at least one lot had no recorded
+    # rate, so cost was converted at today's rate and fx_pl is unknowable.
+    cost_basis_source: Optional[str] = None
+    current_value_base: Optional[float] = None
+    unrealized_pl_base: Optional[float] = None
+    unrealized_pl_pct_base: Optional[float] = None
+    market_pl_base: Optional[float] = None
+    fx_pl_base: Optional[float] = None       # None = unavailable, NOT zero
 
 
 class PortfolioAnalytics(BaseModel):
+    # bd:shotockviz-sbe — these four are now unambiguously in `base_currency`.
+    # They used to be a raw sum of THB and USD amounts.
+    base_currency: str = "THB"
     total_value: float
     total_cost: float
     unrealized_pl: float
     unrealized_pl_pct: float
+    # unrealized_pl == market_pl + fx_pl whenever fx_pl is not None.
+    market_pl: Optional[float] = None
+    fx_pl: Optional[float] = None
+    fx_estimated: bool = False          # a rate in use is not a live quote
+    cost_basis_estimated: bool = False  # some cost converted at today's rate
+    fx_rates: List[FxRateInfo] = []
+    fx_unavailable_symbols: List[str] = []
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
     has_pending_prices: bool = False

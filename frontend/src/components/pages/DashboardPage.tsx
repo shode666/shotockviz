@@ -182,8 +182,13 @@ export default function DashboardPage() {
                             <div className="flex gap-4">
                                 {/* Left: value + PnL */}
                                 <div className="flex-1 min-w-0">
-                                    <div className="text-[10px] mb-0.5" style={{ color: 'var(--color-text-sub)' }}>มูลค่าพอร์ต</div>
+                                    {/* bd:shotockviz-sbe — always the THB-normalised book total;
+                                        bd:shotockviz-fnn — `≈` when an estimated FX rate is in it. */}
+                                    <div className="text-[10px] mb-0.5" style={{ color: 'var(--color-text-sub)' }}>
+                                        มูลค่าพอร์ต ({portfolio.base_currency ?? 'THB'})
+                                    </div>
                                     <div className="text-2xl font-bold tabular-nums leading-tight">
+                                        {(portfolio.fx_estimated || portfolio.cost_basis_estimated) ? '≈' : ''}
                                         {formatPrice(portfolio.total_value)}
                                     </div>
                                     <div className="flex items-center gap-2 mt-1.5">
@@ -198,6 +203,28 @@ export default function DashboardPage() {
                                     <div className="text-[10px] mt-3" style={{ color: 'var(--color-text-sub)' }}>
                                         {portfolio.position_count} หลักทรัพย์
                                     </div>
+                                    {/* bd:shotockviz-fnn — one honest line about the rate behind
+                                        the number above. Rendered only when the book has FX at all. */}
+                                    {portfolio.fx_rates?.length > 0 && (
+                                        <div className="text-[10px] mt-1 leading-snug" style={{ color: 'var(--color-text-sub)' }}>
+                                            {portfolio.fx_rates.map((r: any) => (
+                                                <div key={r.currency}>
+                                                    {r.currency}/{r.base ?? 'THB'} {formatPrice(r.rate, 4)}
+                                                    {r.estimated && (
+                                                        <span style={{ color: 'var(--color-yellow)' }}> · ประมาณการ</span>
+                                                    )}
+                                                </div>
+                                            ))}
+                                            <div>
+                                                ผลตอบแทนจากค่าเงิน:{' '}
+                                                {portfolio.fx_pl == null
+                                                    ? <span style={{ color: 'var(--color-yellow)' }}>ไม่ทราบ</span>
+                                                    : <span style={{ color: upColor(portfolio.fx_pl) }}>
+                                                        {portfolio.fx_pl >= 0 ? '+' : '-'}{formatPrice(Math.abs(portfolio.fx_pl), 0)}
+                                                    </span>}
+                                            </div>
+                                        </div>
+                                    )}
                                     {/* Sparkline */}
                                     {perfData?.points?.length > 1 && (
                                         <div className="mt-2">

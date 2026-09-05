@@ -127,12 +127,15 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         if not active:
             return None, []
 
-        # Get USD→THB exchange rate for cross-currency comparison.
-        # THBUSD=X gives "1 THB in USD" (e.g. 0.0317), so invert it.
-        usd_to_thb = 33.0  # fallback rate
-        thb_quote = await _fast_quote("THBUSD=X")
-        if thb_quote and thb_quote.get("price") and thb_quote["price"] > 0:
-            usd_to_thb = 1.0 / thb_quote["price"]  # e.g. 1/0.0317 ≈ 31.5
+        # FX rate (bd:shotockviz-fnn). This block used to be
+        #     usd_to_thb = 33.0            # fallback rate
+        # — a constant that fires whenever THBUSD=X is uncached (120 s TTL, i.e.
+        # the normal off-hours state) and was then rendered to 2 decimals with
+        # nothing saying it was a guess. Now the chain is
+        # live quote -> the user's own last recorded rate -> the constant, and
+        # everything but the live quote is reported as `estimated`.
+        fx_rates = portfolio_service.build_fx_rates(txns, await _fast_quote(
+            portfolio_service.FX_QUOTE_SYMBOL))
 
         # Aggregate values using cache-only quotes.
         # bd:shotockviz-2w8 — unpriced positions are excluded from BOTH sides
@@ -142,42 +145,66 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         for sym in active:
             quotes[sym] = await _fast_quote(sym)
 
-        def _fx(currency: str) -> float:
-            return usd_to_thb if currency.upper() == "USD" else 1.0
-
-        valued = portfolio_service.value_holdings(active, quotes)
-        totals = portfolio_service.summarize(valued, fx=_fx)
-        portfolio_misses = totals.unpriced_symbols
+        valued = portfolio_service.value_holdings(
+            active, quotes, fx=portfolio_service.fx_resolver(fx_rates)
+        )
+        totals = portfolio_service.summarize(valued)
+        portfolio_misses = list(totals.unpriced_symbols)
 
         top_holdings = []
         for v in valued:
             if not v.priced:
                 continue
-            fx = _fx(v.currency)
             top_holdings.append({
                 "symbol": v.symbol,
                 "value": round(v.current_value, 2),
-                "value_thb": round(v.current_value * fx, 2),
+                "value_thb": round(v.current_value_base, 2) if v.current_value_base is not None else None,
                 "currency": v.currency.upper(),
                 "change_pct": (quotes.get(v.symbol) or {}).get("change_pct"),
                 "unrealized_pct": round(v.unrealized_pl_pct, 2) if v.unrealized_pl_pct is not None else 0,
+                "fx_estimated": v.fx_estimated,
             })
 
         if not top_holdings:
             return None, portfolio_misses
 
-        # Sort by THB-normalized value so USD holdings rank correctly
-        top_holdings.sort(key=lambda x: x["value_thb"], reverse=True)
+        # Sort by THB-normalized value so USD holdings rank correctly. A holding
+        # with no rate at all has no THB value — sort it last rather than
+        # inventing a 0.
+        top_holdings.sort(key=lambda x: (x["value_thb"] is not None, x["value_thb"] or 0.0), reverse=True)
+
+        # Warm THBUSD=X for the next load whenever we had to estimate.
+        fx_misses = (
+            [portfolio_service.FX_QUOTE_SYMBOL]
+            if any(r.source != "live" for r in fx_rates.values()) else []
+        )
 
         return {
+            "base_currency": totals.base_currency,
             "total_value": round(totals.total_value, 2),
             "total_cost": round(totals.total_cost, 2),
             "unrealized_pl": round(totals.unrealized_pl, 2),
             "unrealized_pl_pct": round(totals.unrealized_pl_pct, 2),
+            "market_pl": round(totals.market_pl, 2),
+            # None = the currency component cannot be separated for at least one
+            # position (no rate was recorded when it was bought). Not zero.
+            "fx_pl": round(totals.fx_pl, 2) if totals.fx_pl is not None else None,
+            "fx_estimated": totals.fx_estimated,
+            "cost_basis_estimated": totals.cost_basis_estimated,
+            "fx_rates": [
+                {
+                    "currency": r.currency, "base": r.base, "rate": round(r.rate, 6),
+                    "source": r.source, "as_of": r.as_of, "estimated": r.estimated,
+                }
+                for r in totals.fx_rates.values()
+            ],
+            "fx_unavailable_symbols": totals.fx_unavailable_symbols,
             "position_count": len(active),
             "top_holdings": top_holdings[:5],
-            "has_pending_prices": bool(portfolio_misses),
-        }, portfolio_misses
+            # Stays tied to unpriced POSITIONS only — a stale FX rate is reported
+            # through fx_estimated, not by claiming a price is still loading.
+            "has_pending_prices": bool(totals.unpriced_symbols),
+        }, portfolio_misses + fx_misses
     except Exception as e:
         logger.warning("portfolio summary error", error=str(e))
         return None, []
