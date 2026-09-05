@@ -106,9 +106,16 @@ export default function Sidebar() {
     // Price polling via shared hook
     const { prices } = usePriceUpdates(symbols, { enabled: isAuthenticated });
 
-    // Indices price polling via same hook (always enabled)
+    // Indices price polling via same hook (always enabled). When unauthenticated,
+    // GUEST_SYMBOLS is merged into this same call so the demo watchlist shows
+    // real prices too — reuses the existing poll interval, no new polling loop
+    // (F6, /stocks/quotes is public — Sara's HLD 1.4).
     const indicesSyms = INDICES_SYMS.map(i => i.key);
-    const { prices: indicesData } = usePriceUpdates(indicesSyms, { enabled: true });
+    const guestSyms = GUEST_SYMBOLS.map(s => s.sym);
+    const { prices: indicesData } = usePriceUpdates(
+        isAuthenticated ? indicesSyms : [...indicesSyms, ...guestSyms],
+        { enabled: true }
+    );
 
     // Fear & Greed Index
     const [fgi, setFgi] = useState<{ score: number | null; label: string | null; change: number | null }>({ score: null, label: null, change: null });
@@ -179,7 +186,12 @@ export default function Sidebar() {
 
     // ── Handlers ───────────────────────────────────────────────────────────────
     const handleSelect = (sym, name) => {
-        const p = prices[sym];
+        // bd:ui-honesty-2026-09 F6 fix — mirror the render path's source
+        // selection (:378). Guests have no watchlist symbols/prices
+        // (loadWatchlist early-returns unauthenticated), so `prices` is
+        // always empty for them; read from the merged indices+guest poll
+        // (indicesData) instead, same as the row already displays.
+        const p = isAuthenticated ? prices[sym] : indicesData[sym];
         setSelectedStock({
             sym, name,
             price: p?.price?.toFixed(2) ?? '—',
@@ -365,7 +377,10 @@ export default function Sidebar() {
                     </div>
                 )}
                 {displayList.map((s) => {
-                    const q = prices[s.sym];
+                    // Guest rows have no watchlist symbols/prices (loadWatchlist
+                    // early-returns for unauthenticated users) — read their quotes
+                    // from the merged indices+guest poll above instead (F6).
+                    const q = isAuthenticated ? prices[s.sym] : indicesData[s.sym];
                     const isActive = selectedStock?.sym === s.sym && isChart;
                     const isFund = s.market === 'FUND' || q?.type === 'fund_nav';
                     const isPending = pendingSyms.has(s.sym) && !q;
