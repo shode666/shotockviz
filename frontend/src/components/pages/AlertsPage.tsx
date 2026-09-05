@@ -5,6 +5,7 @@ import stockService from '@/services/stockService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
 import { validateAlertForm } from '@/utils/formValidation';
+import { getAlertStatusKey } from '@/utils/alertStatus';
 
 const ALERT_TYPES = ['Price Above', 'Price Below', 'RSI Below', 'RSI Above', 'Golden Cross', 'Death Cross', 'Volume Spike'];
 const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
@@ -19,6 +20,8 @@ const STATUS_STYLE = {
     active: { dot: 'var(--color-up)', label: 'ทำงานอยู่', color: 'var(--color-up)', Icon: null },
     triggered: { dot: 'var(--color-support)', label: 'แจ้งแล้ว', color: 'var(--color-support)', Icon: CheckCircle2 },
     inactive: { dot: 'var(--color-text-sub)', label: 'หยุดชั่วคราว', color: 'var(--color-text-sub)', Icon: null },
+    // bd:ui-honesty-2026-09 F11 — distinct from `inactive` (paused ≠ expired).
+    expired: { dot: 'var(--color-down)', label: 'หมดอายุ', color: 'var(--color-down)', Icon: null },
 };
 
 function formatTriggeredTime(iso?: string | null): string {
@@ -210,7 +213,7 @@ export default function AlertsPage() {
                 ) : (
                     <div className="flex flex-col gap-3">
                         {alerts.map((a) => {
-                            const statusKey = a.status === 'TRIGGERED' ? 'triggered' : a.is_active ? 'active' : 'inactive';
+                            const statusKey = getAlertStatusKey(a);
                             const s = STATUS_STYLE[statusKey] || STATUS_STYLE.active;
                             const alertCurr = getAlertCurrency(a.symbol);
                             const alertParsed = parseSymbol(a.symbol);
