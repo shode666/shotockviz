@@ -185,13 +185,17 @@ export default function Sidebar() {
     }, [symbols]);
 
     // ── Handlers ───────────────────────────────────────────────────────────────
+    // bd:shotockviz-2u7 — single source of the quote-source selection, used
+    // by both handleSelect and the row render below. Previously duplicated
+    // in both places; iter1 of bd:shotockviz-bct fixed only the render path
+    // and forgot this one, re-breaking F6. Guests have no watchlist
+    // symbols/prices (loadWatchlist early-returns unauthenticated), so
+    // `prices` is always empty for them — read from the merged
+    // indices+guest poll (indicesData) instead.
+    const getQuote = (sym: string) => (isAuthenticated ? prices[sym] : indicesData[sym]);
+
     const handleSelect = (sym, name) => {
-        // bd:ui-honesty-2026-09 F6 fix — mirror the render path's source
-        // selection (:378). Guests have no watchlist symbols/prices
-        // (loadWatchlist early-returns unauthenticated), so `prices` is
-        // always empty for them; read from the merged indices+guest poll
-        // (indicesData) instead, same as the row already displays.
-        const p = isAuthenticated ? prices[sym] : indicesData[sym];
+        const p = getQuote(sym);
         setSelectedStock({
             sym, name,
             price: p?.price?.toFixed(2) ?? '—',
@@ -377,10 +381,7 @@ export default function Sidebar() {
                     </div>
                 )}
                 {displayList.map((s) => {
-                    // Guest rows have no watchlist symbols/prices (loadWatchlist
-                    // early-returns for unauthenticated users) — read their quotes
-                    // from the merged indices+guest poll above instead (F6).
-                    const q = isAuthenticated ? prices[s.sym] : indicesData[s.sym];
+                    const q = getQuote(s.sym);
                     const isActive = selectedStock?.sym === s.sym && isChart;
                     const isFund = s.market === 'FUND' || q?.type === 'fund_nav';
                     const isPending = pendingSyms.has(s.sym) && !q;

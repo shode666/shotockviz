@@ -75,3 +75,20 @@ export function getUsStatus(): MarketStatusResult {
 
     return { open: false, label: 'US Closed', color: 'gray', pulse: false };
 }
+
+/** Combined snapshot — bd:shotockviz-pt8: Dashboard and Navbar each ran
+ *  their own `useState(getSetStatus) + useState(getUsStatus) + setInterval`
+ *  polling wrapper (F4 fixed Dashboard by copy-pasting Navbar's pattern
+ *  rather than sharing it). Bundling both reads into one call is what the
+ *  shared `useMarketStatus()` hook (hooks/useMarketStatus.ts) polls on a
+ *  single interval, so the two statuses can never drift out of sync again
+ *  by one consumer forgetting to also refresh the other.
+ */
+export interface BothMarketStatus {
+    setStatus: MarketStatusResult;
+    usStatus: MarketStatusResult;
+}
+
+export function getBothMarketStatus(): BothMarketStatus {
+    return { setStatus: getSetStatus(), usStatus: getUsStatus() };
+}

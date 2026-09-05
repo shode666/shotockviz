@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getSetStatus, getUsStatus } from './marketStatus.ts';
+import { getSetStatus, getUsStatus, getBothMarketStatus } from './marketStatus.ts';
 
 // All timestamps below are UTC; getSetStatus() converts to Bangkok (UTC+7)
 // internally, getUsStatus() converts to simplified ET (UTC-5).
@@ -46,4 +46,16 @@ test('getUsStatus: after-hours 16:00-20:00 ET is closed', (t) => {
     // 22:00 UTC = 17:00 ET
     t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-07T22:00:00Z').getTime() });
     assert.equal(getUsStatus().open, false);
+});
+
+// ── getBothMarketStatus (bd:shotockviz-pt8) ─────────────────────────────────
+// Bundles both reads so a single shared poller (useMarketStatus()) cannot
+// update one market's status without the other — the exact drift Dashboard
+// and Navbar's independent setInterval copies were at risk of.
+
+test('getBothMarketStatus: returns both statuses matching the individual getters at the same instant', (t) => {
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-09-07T09:15:00Z').getTime() });
+    const both = getBothMarketStatus();
+    assert.deepEqual(both.setStatus, getSetStatus());
+    assert.deepEqual(both.usStatus, getUsStatus());
 });

@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link, useMatches } from '@tanstack/react-router'
+import { Link, useMatches, useNavigate } from '@tanstack/react-router'
 import {
     LayoutDashboard, TrendingUp, SlidersHorizontal, Briefcase, Bell,
-    MoreHorizontal, Newspaper, Settings, LogIn,
+    MoreHorizontal, Newspaper, Settings, LogIn, LogOut,
 } from 'lucide-react'
 import useAuthStore from '@/store/authStore'
 import { isOverflowPath, getOverflowItems, type OverflowItem } from '@/utils/mobileNav'
@@ -20,7 +20,7 @@ const tabItems = [
     { to: '/alerts', label: 'Alerts', Icon: Bell },
 ]
 
-const SHEET_ICONS: Record<OverflowItem['to'], typeof Newspaper> = {
+const LINK_ICONS: Record<Extract<OverflowItem, { kind: 'link' }>['to'], typeof Newspaper> = {
     '/news': Newspaper,
     '/settings': Settings,
     '/login': LogIn,
@@ -29,11 +29,22 @@ const SHEET_ICONS: Record<OverflowItem['to'], typeof Newspaper> = {
 export default function MobileTabBar() {
     const matches = useMatches()
     const currentPath = matches[matches.length - 1]?.pathname || '/'
-    const { isAuthenticated } = useAuthStore()
+    const navigate = useNavigate()
+    const { isAuthenticated, logout } = useAuthStore()
 
     const [isMoreOpen, setIsMoreOpen] = useState(false)
     const moreButtonRef = useRef<HTMLButtonElement>(null)
     const firstItemRef = useRef<HTMLAnchorElement>(null)
+
+    // bd:shotockviz-g7k — mirrors Navbar's handleLogout: log out, close the
+    // sheet, send the now-guest user to /login. The route-change effect
+    // below would also close the sheet, but that only fires once the async
+    // logout + navigate actually lands a new route.
+    const handleLogout = async () => {
+        await logout()
+        setIsMoreOpen(false)
+        navigate({ to: '/login' })
+    }
 
     // Keyboard dismiss: Escape closes the sheet and returns focus to the
     // trigger. Focus is NOT trapped — Tab moves on naturally (disclosure
@@ -80,8 +91,36 @@ export default function MobileTabBar() {
                         className="glass-dropdown md:hidden fixed z-50"
                         style={{ left: 8, right: 8, bottom: 64 }}
                     >
-                        {overflowItems.map(({ to, label }, i) => {
-                            const Icon = SHEET_ICONS[to]
+                        {overflowItems.map((item, i) => {
+                            // bd:shotockviz-g7k — Logout is an action, not a
+                            // route: no <Link> to navigate to, so it renders
+                            // as a <button> with the same 48px target/style,
+                            // wired to authStore's logout() instead of `to`.
+                            if (item.kind === 'logout') {
+                                // Always the last sheet entry (appended after
+                                // News/Settings) — never index 0, so it never
+                                // needs firstItemRef (typed for <a>, not
+                                // <button>; see getOverflowItems ordering).
+                                return (
+                                    <button
+                                        key="logout"
+                                        type="button"
+                                        onClick={handleLogout}
+                                        className="flex items-center gap-3 px-4 text-[13px] font-semibold transition-colors w-full text-left"
+                                        style={{
+                                            minHeight: 48,
+                                            color: 'var(--color-text)',
+                                            background: 'transparent',
+                                        }}
+                                    >
+                                        <LogOut size={16} aria-hidden="true" />
+                                        {item.label}
+                                    </button>
+                                )
+                            }
+
+                            const { to, label } = item
+                            const Icon = LINK_ICONS[to]
                             const isActive = currentPath === to
                             return (
                                 <Link

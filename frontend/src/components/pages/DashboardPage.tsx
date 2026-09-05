@@ -17,7 +17,7 @@ import { AlertsNearTarget } from '@/components/dashboard/AlertsNearTarget';
 import { LoadingState } from '@/components/ui/LoadingState';
 import { ErrorState } from '@/components/ui/ErrorState';
 import { formatPrice, formatPct, upColor, displaySymbol } from '@/utils/formatters';
-import { getSetStatus, getUsStatus } from '@/utils/marketStatus';
+import { useMarketStatus } from '@/hooks/useMarketStatus';
 
 /* ── SparkLine ─────────────────────────────────────────────────────────── */
 
@@ -54,17 +54,11 @@ export default function DashboardPage() {
     const [error, setError] = useState<string | null>(null);
     const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-    // Market status — single source of truth shared with Navbar (utils/marketStatus.ts),
-    // refreshed every 60s the same way (F4 — was a separate, wrong inline heuristic).
-    const [setStatus, setSetStatus] = useState(getSetStatus);
-    const [usStatus, setUsStatus] = useState(getUsStatus);
-    useEffect(() => {
-        const t = setInterval(() => {
-            setSetStatus(getSetStatus());
-            setUsStatus(getUsStatus());
-        }, 60_000);
-        return () => clearInterval(t);
-    }, []);
+    // Market status — single source of truth shared with Navbar, via the
+    // shared useMarketStatus() poll (bd:shotockviz-pt8 — was a second,
+    // independent useState+setInterval copy of Navbar's wrapper; ADR-UH-004's
+    // client-side decision is unchanged, only the polling code is shared now).
+    const { setStatus, usStatus } = useMarketStatus();
 
     const load = useCallback(async () => {
         setLoading(true);

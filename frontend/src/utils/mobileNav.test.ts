@@ -14,15 +14,21 @@ test('isOverflowPath: false for core tab routes and unknowns', () => {
     }
 })
 
-test('getOverflowItems: guest sees News, Settings, Login in that order', () => {
+test('getOverflowItems: guest sees News, Settings, Login (link) in that order — no Logout', () => {
+    const items = getOverflowItems(false)
+    assert.deepEqual(items.map((i) => i.kind), ['link', 'link', 'link'])
     assert.deepEqual(
-        getOverflowItems(false).map((i) => i.to),
+        items.map((i) => (i.kind === 'link' ? i.to : null)),
         ['/news', '/settings', '/login'],
     )
+    assert.equal(items.some((i) => i.kind === 'logout'), false)
 })
 
-test('getOverflowItems: authenticated user sees no Login entry', () => {
+// bd:shotockviz-g7k — mirror of the guest-Login check above: an
+// authenticated mobile user sees Logout in Login's slot, and never Login.
+test('getOverflowItems: authenticated user sees Logout instead of Login', () => {
     const items = getOverflowItems(true)
-    assert.deepEqual(items.map((i) => i.to), ['/news', '/settings'])
-    assert.equal(items.some((i) => i.to === '/login'), false)
+    assert.deepEqual(items.map((i) => i.kind), ['link', 'link', 'logout'])
+    assert.equal(items.some((i) => i.kind === 'link' && i.to === '/login'), false)
+    assert.equal(items[2].label, 'Logout')
 })

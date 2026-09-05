@@ -7,7 +7,8 @@ import {
 import useAppStore from '@/store/appStore'
 import useAuthStore from '@/store/authStore'
 import ShotockLogo from './ShotockLogo'
-import { getSetStatus, getUsStatus, type MarketStatusResult } from '@/utils/marketStatus'
+import { type MarketStatusResult } from '@/utils/marketStatus'
+import { useMarketStatus } from '@/hooks/useMarketStatus'
 
 const navItems = [
     { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
@@ -47,17 +48,9 @@ export default function Navbar() {
     const [isDropdownOpen, setIsDropdownOpen] = useState(false)
     const dropdownRef = useRef<HTMLDivElement>(null)
 
-    const [setStatus, setSetStatus] = useState<MarketStatusResult>(getSetStatus)
-    const [usStatus, setUsStatus] = useState<MarketStatusResult>(getUsStatus)
-
-    // Refresh market status every 60 s
-    useEffect(() => {
-        const t = setInterval(() => {
-            setSetStatus(getSetStatus())
-            setUsStatus(getUsStatus())
-        }, 60_000)
-        return () => clearInterval(t)
-    }, [])
+    // bd:shotockviz-pt8 — shared with DashboardPage via useMarketStatus()
+    // instead of a duplicate useState+setInterval polling wrapper.
+    const { setStatus, usStatus } = useMarketStatus()
 
     useEffect(() => {
         const handleClickOutside = (event: MouseEvent) => {
