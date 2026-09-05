@@ -7,13 +7,18 @@ import { shouldBumpDataVersion } from './wsDataReady';
 /**
  * WebSocket hook for real-time updates.
  *
- * Handles 3 message types from backend:
+ * Handles message types from backend:
  *   - 'alert_triggered' → show toast notification
- *   - 'price_update'    → update live prices in sidebar
  *   - 'data_ready'      → backend finished fetching external data,
  *                          bump dataVersion so React components re-fetch
  *                          (quote data_type bumps immediately — see
- *                          shouldBumpDataVersion)
+ *                          shouldBumpDataVersion); also stamps
+ *                          appStore.dataReadyPayload for StatusBar's
+ *                          "last update" display (bd:ui-honesty-2026-09 F3).
+ *
+ * Any other message type (e.g. a stray 'price_update', which had no handler
+ * here before this bd — audit finding F12) is ignored: no matching branch,
+ * no throw.
  */
 export default function useWebSocket() {
     const { token, user } = useAuthStore();
@@ -76,9 +81,6 @@ export default function useWebSocket() {
                         if (shouldBumpDataVersion(data)) {
                             useAppStore.getState().bumpDataVersion();
                         }
-                    } else if (data.type === 'price_update') {
-                        // Live price push from Celery worker
-                        // Components can listen to appStore.dataVersion for refresh
                     }
                 } catch (e) {
                     console.error('Failed to parse WS message', e);
