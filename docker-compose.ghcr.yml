@@ -138,6 +138,30 @@ services:
     networks:
       - stockviz-net
 
+  telegram-bot:
+    # Long-polling Telegram bot (`/start` replies with chat id) — stateless,
+    # no DB/Redis use, but core.config validates JWT_SECRET_KEY under
+    # APP_ENV=production so the same env block as celery-beat is passed.
+    # Was dev-only (docker-compose.dev.yml) until 2026-09-05 — prod never ran it.
+    image: ghcr.io/shode666/shotockviz-backend:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      REDIS_URL: ${REDIS_URL}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      APP_ENV: production
+      LOG_LEVEL: info
+      TZ: ${TZ:-Asia/Bangkok}
+    restart: unless-stopped
+    command: python -m workers.telegram_bot
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 128M
+    networks:
+      - stockviz-net
+
   frontend:
     container_name: stockviz-frontend
     # VITE_* vars are baked in at GHA build time (frontend/Dockerfile:11-16) — no build args here
