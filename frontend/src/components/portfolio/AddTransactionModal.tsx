@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, X, Search, Loader2 } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import stockService from '@/services/stockService';
 import { parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
+import { validateTransactionForm } from '@/utils/formValidation';
 
 interface AddTransactionModalProps {
     isOpen: boolean;
@@ -42,6 +43,7 @@ const toCurrencyType = (code: string): 'THB' | 'USD' => {
 export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransactionModalProps) {
     const [form, setForm] = useState<TransactionForm>(TXN_FORM_INIT);
     const [saving, setSaving] = useState(false);
+    const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
     // ─── Symbol autocomplete state ───
     const [searchQuery, setSearchQuery] = useState('');
@@ -56,6 +58,7 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
     useEffect(() => {
         if (isOpen) {
             setForm(TXN_FORM_INIT);
+            setFormErrors({});
             setSearchQuery('');
             setSelectedMarket('');
             setSearchResults([]);
@@ -115,7 +118,12 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
     const currSign = currency.sign;
 
     const handleAdd = async () => {
-        if (!form.symbol || !form.qty || !form.price) return;
+        const errors = validateTransactionForm({ symbol: form.symbol, qty: form.qty, price: form.price });
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            return;
+        }
+        setFormErrors({});
         setSaving(true);
         try {
             await portfolioService.addTransaction({
@@ -195,6 +203,8 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                                 className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm"
                                 placeholder="ค้นหา เช่น PTT, AAPL, 7203.T..."
                                 value={searchQuery}
+                                aria-invalid={!!formErrors.symbol}
+                                aria-describedby={formErrors.symbol ? 'txn-symbol-error' : undefined}
                                 onChange={(e) => {
                                     setSearchQuery(e.target.value);
                                     if (!e.target.value.trim()) {
@@ -213,6 +223,9 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                                 <Loader2 size={12} className="mr-3 shrink-0 animate-spin" style={{ color: 'var(--color-text-sub)' }} />
                             )}
                         </div>
+                        {formErrors.symbol && (
+                            <p id="txn-symbol-error" role="alert" className="text-[10px] mt-1" style={{ color: 'var(--color-red)' }}>{formErrors.symbol}</p>
+                        )}
 
                         {/* Autocomplete Dropdown */}
                         {showDropdown && searchResults.length > 0 && (
@@ -300,8 +313,13 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                             className="input-field"
                             placeholder="100"
                             value={form.qty}
+                            aria-invalid={!!formErrors.qty}
+                            aria-describedby={formErrors.qty ? 'txn-qty-error' : undefined}
                             onChange={(e) => setForm((f) => ({ ...f, qty: e.target.value }))}
                         />
+                        {formErrors.qty && (
+                            <p id="txn-qty-error" role="alert" className="text-[10px] mt-1" style={{ color: 'var(--color-red)' }}>{formErrors.qty}</p>
+                        )}
                     </div>
 
                     {/* ราคาต่อหุ้น พร้อม currency prefix */}
@@ -318,9 +336,14 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess }: AddTransacti
                                 className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm"
                                 placeholder="38.00"
                                 value={form.price}
+                                aria-invalid={!!formErrors.price}
+                                aria-describedby={formErrors.price ? 'txn-price-error' : undefined}
                                 onChange={(e) => setForm((f) => ({ ...f, price: e.target.value }))}
                             />
                         </div>
+                        {formErrors.price && (
+                            <p id="txn-price-error" role="alert" className="text-[10px] mt-1" style={{ color: 'var(--color-red)' }}>{formErrors.price}</p>
+                        )}
                     </div>
 
                     {/* ค่าคอมมิชชั่น */}

@@ -4,6 +4,7 @@ import alertService from '@/services/alertService';
 import stockService from '@/services/stockService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, parseSymbol, MARKET_COLORS, MARKET_CURRENCY } from '@/utils/formatters';
+import { validateAlertForm } from '@/utils/formValidation';
 
 const ALERT_TYPES = ['Price Above', 'Price Below', 'RSI Below', 'RSI Above', 'Golden Cross', 'Death Cross', 'Volume Spike'];
 const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
@@ -37,6 +38,7 @@ export default function AlertsPage() {
     const [showModal, setShowModal] = useState(false);
     const [form, setForm] = useState(EMPTY_FORM);
     const [saving, setSaving] = useState(false);
+    const [formErrors, setFormErrors] = useState<Record<string, string>>({});
 
     // ─── Symbol autocomplete state ───
     const [searchQuery, setSearchQuery] = useState('');
@@ -111,7 +113,12 @@ export default function AlertsPage() {
     useEffect(() => { loadAlerts(); }, [loadAlerts]);
 
     const handleCreate = async () => {
-        if (!form.symbol || !form.value) return;
+        const errors = validateAlertForm({ symbol: form.symbol, value: form.value });
+        if (Object.keys(errors).length > 0) {
+            setFormErrors(errors);
+            return;
+        }
+        setFormErrors({});
         setSaving(true);
         try {
             await alertService.create({
@@ -148,6 +155,7 @@ export default function AlertsPage() {
     const openModal = () => {
         setShowModal(true);
         setForm(EMPTY_FORM);
+        setFormErrors({});
         setSearchQuery('');
         setSelectedMarket('');
         setSearchResults([]);
@@ -268,6 +276,8 @@ export default function AlertsPage() {
                                         className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm"
                                         placeholder="ค้นหา เช่น PTT, AAPL, 7203.T..."
                                         value={searchQuery}
+                                        aria-invalid={!!formErrors.symbol}
+                                        aria-describedby={formErrors.symbol ? 'alert-symbol-error' : undefined}
                                         onChange={(e) => {
                                             setSearchQuery(e.target.value);
                                             if (!e.target.value.trim()) {
@@ -286,6 +296,9 @@ export default function AlertsPage() {
                                         <Loader2 size={12} className="mr-3 shrink-0 animate-spin" style={{ color: 'var(--color-text-sub)' }} />
                                     )}
                                 </div>
+                                {formErrors.symbol && (
+                                    <p id="alert-symbol-error" role="alert" className="text-[10px] mt-1" style={{ color: 'var(--color-red)' }}>{formErrors.symbol}</p>
+                                )}
 
                                 {/* Autocomplete Dropdown */}
                                 {showDropdown && searchResults.length > 0 && (
@@ -361,6 +374,8 @@ export default function AlertsPage() {
                                             className="flex-1 bg-transparent outline-none pr-3 py-2 text-sm"
                                             placeholder="เช่น 40.00"
                                             value={form.value}
+                                            aria-invalid={!!formErrors.value}
+                                            aria-describedby={formErrors.value ? 'alert-value-error' : undefined}
                                             onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
                                         />
                                     </div>
@@ -370,8 +385,13 @@ export default function AlertsPage() {
                                         className="input-field"
                                         placeholder={isPriceAlert ? 'เช่น 40.00' : 'เช่น 30 (RSI)'}
                                         value={form.value}
+                                        aria-invalid={!!formErrors.value}
+                                        aria-describedby={formErrors.value ? 'alert-value-error' : undefined}
                                         onChange={(e) => setForm((f) => ({ ...f, value: e.target.value }))}
                                     />
+                                )}
+                                {formErrors.value && (
+                                    <p id="alert-value-error" role="alert" className="text-[10px] mt-1" style={{ color: 'var(--color-red)' }}>{formErrors.value}</p>
                                 )}
                             </div>
 
