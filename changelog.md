@@ -8,6 +8,46 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### bd:features-2026-09 — S/R levels, Telegram digest, crypto/gold, brand logo, 401 fix (2026-09-05)
+
+Merged `feat/features-2026-09` → `main` (`5fa8c83`, 14 commits) and deployed
+to the standalone droplet (`stock.shode.dev`) at `0a1b34b`. Verified on the
+dev stack via browser: logo swap, 401 interceptor flips auth without reload,
+S/R toggle, BTC-USD/ETH-USD/GLD data, S/R proximity digest delivered to
+Telegram. Verified on prod: `/api/health` ok, CSP header, Google login,
+S/R import (8,251 rows / 1,044 symbols from `buy-sale-line.json`), S/R lines
+on chart, BTC-USD/ETH-USD 185 daily bars (24/7 asset class, `markettype`
+enum gained `CRYPTO` via migration `20260904_0005`).
+
+- **S/R levels** — `sr_levels` table + `scripts/import_sr_levels.py`
+  (idempotent, `source=manual_import`), auto-pivot worker, per-user lines,
+  chart toggle (`syncSrPriceLines.ts`), S/R proximity Telegram digest
+  (`workers/sr_proximity_digest.py`, beat 09:30/19:30 ICT, Redis per-day
+  lock, idempotent send).
+- **Telegram** — per-user chat_id + real Bot API send; `claim_alert()`
+  mark-then-send.
+- **Crypto/gold** — `symbol_registrar._classify_market` → `CRYPTO`;
+  `parseSymbol()` maps Yahoo `-USD` pairs → `CRYPTO` badge (`a37c414`,
+  fixes header showing `US`; 7 `node --test` cases incl. BRK-B/GLD).
+- **Auth** — global 401 interceptor (`apiErrorHandler.ts`) flips
+  `isAuthenticated` immediately (`a1f28b6`).
+- **Brand** — Navbar/LoginPage use `/icon-rounded-32|64.png` (`6ddf1f6`).
+- **Deploy (incident)** — first deploy OOM-hung the 1 vCPU / 961 MB / swap-0
+  droplet during `pull` with the old stack still up (power-cycled from DO
+  console). Workflow now runs `down → pull --quiet → up -d`, health budget
+  180s (`4db0f4e`); ~1-3 min downtime per deploy, see `docs/deploy-gha.md` §4.
+- **Prod CSP** — `caddy/Caddyfile` CSP had no Google origins since init
+  (masked on the old shared droplet); added `accounts.google.com` /
+  `apis.google.com` / `lh3.googleusercontent.com` (`0a1b34b`). Login also
+  needed `GOOGLE_CLIENT_ID` in the droplet `.env` (was `CHANGE_ME`).
+
+Follow-ups (not started): digest dedupe for manual+auto same price (one
+line, both sources); fill remaining prod `.env` keys (JWT_SECRET_KEY,
+TELEGRAM_BOT_TOKEN, ACCESS_TOKEN_EXPIRE_MINUTES, …); CSP hardening
+(`'unsafe-inline'`/`'unsafe-eval'`); bump GHA actions to Node 24 majors;
+stale `styles-<hash>.css` `<link>` 404 on prod; search can't find crypto
+until registered; BRK-B/BF-B misclassified as Thai fund.
+
 ### bd:deps-2026-09 — remove AI chat / Ollama feature entirely (2026-09-04)
 
 User decision (Phase 2, scope add): the AI chat feature was removed

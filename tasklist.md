@@ -612,7 +612,7 @@ backend/
   - **Effort:** 3 hours
   - 📁 **Files:** `frontend/src/components/common/Navbar.tsx` (badge UI), `frontend/src/hooks/useWebSocket.ts` (receive event), `frontend/src/store/appStore.js` (badge count state), `backend/main.py` (`broadcast_all` sends alert_triggered)
   - 🔗 **Reference:** WebSocket alert_triggered event ส่งอยู่แล้วจาก `main.py` → ดู `useWebSocket.ts` ว่า handle message type ยังไง
-- [ ] Telegram alert delivery: store user chat_id, send on trigger
+- [x] Telegram alert delivery: store user chat_id, send on trigger — ✅ bd:features-2026-09 (2026-09-05; prod needs TELEGRAM_BOT_TOKEN in .env)
   - **Why:** ไม่ได้เปิดเว็บตลอด — Telegram notification เข้ามือถือทันที
   - **Steps:**
     - [ ] Settings page: "Connect Telegram" → show bot link + instruction to send `/start`
@@ -805,7 +805,7 @@ backend/
   - **Effort:** 16 hours (complex algorithm + UI)
   - 📁 **Files:** สร้าง `backend/services/pattern_detector.py` (new), `frontend/src/components/chart/TradingChart.tsx` (draw highlights)
   - ⚠️ **Pitfalls:** Pattern detection เป็น advanced topic — เริ่มจาก pivot point detection (local min/max) ก่อน แล้วค่อย match patterns, อาจใช้ library `ta-lib` หรือ implement custom, ระวัง false positive — ควร require minimum confidence threshold
-- [ ] Support/Resistance level auto-draw
+- [x] Support/Resistance level auto-draw — ✅ bd:features-2026-09 (2026-09-05: auto-pivot + manual import + user lines + toggle; touch-count strength not implemented)
   - **Steps:**
     - [ ] Algorithm: find price levels where price touched ≥3 times (within 0.5% tolerance)
     - [ ] Draw horizontal lines at S/R levels with strength indicator (more touches = stronger)
@@ -986,7 +986,7 @@ backend/
 # Phase 6: Future Expansion
 
 ## New Markets
-- [ ] Crypto: BTC, ETH, BNB via Binance API (no auth required for public data)
+- [x] Crypto: BTC-USD, ETH-USD via yfinance (Binance not used) — ✅ bd:features-2026-09 (2026-09-05; CRYPTO market enum, 24/7 bars)
   - **Steps:**
     - [ ] Add `binance` data source in `stock_service.py` alongside yfinance
     - [ ] Binance public API: `GET /api/v3/klines` for OHLCV, `/api/v3/ticker/price` for quotes
