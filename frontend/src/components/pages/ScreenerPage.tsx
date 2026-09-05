@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { SlidersHorizontal, Save, Play, Loader2, Download } from 'lucide-react';
+import { SlidersHorizontal, Play, Loader2, Download } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
+import { resultsToCsv } from '@/utils/csv';
 
 const FILTER_OPTIONS = {
     market: ['SET + US', 'SET', 'US'],
@@ -65,6 +66,24 @@ export default function ScreenerPage() {
         }
     };
 
+    const handleExportCsv = () => {
+        const csv = resultsToCsv(results);
+        // UTF-8 BOM: Excel's CSV importer on Windows ignores the Blob's
+        // charset MIME hint and falls back to the system code page, mangling
+        // Thai headers/company names unless the file itself starts with a
+        // BOM. Kept here (not in resultsToCsv) so the pure fn's exact-string
+        // assertions stay clean (bd:ui-honesty-2026-09 Chris Medium #3).
+        const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `screener-results-${new Date().toISOString().slice(0, 10)}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
     const handleRowClick = (r) => {
         // Fix: format pct field as percentage string, not duplicate r.chg
         const pctStr = typeof r.pct === 'number' ? `${r.pct >= 0 ? '+' : ''}${r.pct.toFixed(2)}%` : r.pct ?? '—';
@@ -86,10 +105,6 @@ export default function ScreenerPage() {
                         <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-sub)' }}>กรองหุ้นด้วยเงื่อนไขที่ต้องการ</p>
                     </div>
                     <div className="flex gap-2">
-                        <button className="btn-outline flex items-center gap-1.5">
-                            <Save size={12} />
-                            Save Filter
-                        </button>
                         <button className="btn-accent flex items-center gap-1.5" onClick={handleRunScreen} disabled={loading}>
                             {loading
                                 ? <><Loader2 size={12} className="animate-spin" /> กำลังค้นหา…</>
@@ -130,7 +145,7 @@ export default function ScreenerPage() {
                                     ? `ผลลัพธ์ ${results.length} หุ้น`
                                     : <>กด <Play size={12} strokeWidth={2} aria-hidden="true" /> Run Screen เพื่อเริ่มค้นหา</>}
                         </span>
-                        <button className="btn-outline py-1 flex items-center gap-1.5"><Download size={12} /> Export CSV</button>
+                        <button className="btn-outline py-1 flex items-center gap-1.5 disabled:opacity-40" onClick={handleExportCsv} disabled={results.length === 0}><Download size={12} /> Export CSV</button>
                     </div>
                     <div className="overflow-x-auto">
                     <table className="w-full">
