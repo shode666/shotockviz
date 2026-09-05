@@ -3,8 +3,111 @@ from datetime import datetime, timezone
 from celery import shared_task
 from core import cache_keys
 from core.logger import get_logger
+from services import indicators
 
 logger = get_logger(__name__)
+
+# bd:shotockviz-06e — alert types that read the OHLCV daily-bar cache
+# (`ohlcv:{symbol}:1D`, kept warm by workers/history_prefetcher.py) instead
+# of the quote cache. Same minimum-bars guard the screener already uses
+# (api/routes/screener.py::_evaluate_symbol) — insufficient history means
+# "skip, don't guess" rather than falling back to a neutral/zero value that
+# could accidentally satisfy a threshold.
+_INDICATOR_ALERT_TYPES = frozenset({
+    "RSI_OVERBOUGHT", "RSI_OVERSOLD", "GOLDEN_CROSS", "DEATH_CROSS", "VOLUME_SPIKE",
+})
+_MIN_BARS_FOR_INDICATORS = 26
+
+
+def _load_daily_bars(r, symbol: str) -> list[dict] | None:
+    """Read the cached 1D OHLCV bars for `symbol`, or None on miss/short history.
+
+    Mirrors the quote-cache-miss handling below: a miss here means every
+    indicator-based alert for this symbol silently never fires until
+    history_prefetcher warms the cache again — visible via the warning
+    log, no retry/backfill added (same scope decision as the 983 fix).
+    """
+    import json
+
+    cache_key = cache_keys.ohlcv(symbol, "1D")
+    cached = r.get(cache_key)
+    if not cached:
+        return None
+    try:
+        bars = json.loads(cached)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(bars, list) or len(bars) < _MIN_BARS_FOR_INDICATORS:
+        return None
+    return bars
+
+
+def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
+    """Evaluate one of the 5 non-price alert types against cached daily bars.
+
+    Returns (triggered, display_value) — display_value is whatever number
+    is most useful in the Telegram/WS payload (RSI value, SMA-20, or
+    volume ratio); it is NOT the raw close price, unlike the PRICE_ABOVE/
+    PRICE_BELOW path, since "current price" is not what these types react to.
+
+    Trigger definitions (bd:shotockviz-06e, put in code per Oliver's ask,
+    not just in a report):
+      - RSI_OVERBOUGHT ("RSI Above" in the UI): RSI(14) > alert.value.
+        alert.value is the user-supplied threshold — NOT a hardcoded 70.
+      - RSI_OVERSOLD ("RSI Below" in the UI): RSI(14) < alert.value.
+        alert.value is the user-supplied threshold — NOT a hardcoded 30.
+      - GOLDEN_CROSS: SMA(20) crosses from <= SMA(50) to > SMA(50) between
+        yesterday's close and today's — a true cross event (not merely
+        "SMA20 is currently above SMA50", which would re-fire every tick
+        once above). 20/50 matches this project's own existing precedent
+        for "Golden/Death Cross" — services/backtesting_engine.py's
+        `_strategy_golden_cross` (fast=20, slow=50) and the docstring in
+        tests/test_next_features.py ("Golden Cross (20-SMA > 50-SMA)") —
+        reused rather than inventing a second convention (e.g. 50/200).
+      - DEATH_CROSS: SMA(20) crosses from >= SMA(50) to < SMA(50), same
+        pair, opposite direction.
+      - VOLUME_SPIKE: today's volume ÷ 20-day average volume >= alert.value.
+        alert.value is the user-supplied multiplier (REQUIREMENTS.md
+        FR-ALERT-001 example: "Volume > 3x avg") — NOT a hardcoded ratio.
+        Same ratio the screener's Volume filter uses
+        (services/indicators.compute_volume_ratio).
+    """
+    closes = [float(b["close"]) for b in bars]
+    volumes = [float(b["volume"]) for b in bars]
+    t = alert.alert_type.value
+
+    if t == "RSI_OVERBOUGHT":
+        if alert.value is None:
+            return False, 0.0
+        rsi = indicators.compute_rsi(closes)
+        return rsi > alert.value, rsi
+
+    if t == "RSI_OVERSOLD":
+        if alert.value is None:
+            return False, 0.0
+        rsi = indicators.compute_rsi(closes)
+        return rsi < alert.value, rsi
+
+    if t in ("GOLDEN_CROSS", "DEATH_CROSS"):
+        if len(closes) < 51:
+            return False, 0.0
+        fast_prev = indicators.compute_sma(closes[:-1], 20)
+        slow_prev = indicators.compute_sma(closes[:-1], 50)
+        fast_now = indicators.compute_sma(closes, 20)
+        slow_now = indicators.compute_sma(closes, 50)
+        if t == "GOLDEN_CROSS":
+            triggered = fast_prev <= slow_prev and fast_now > slow_now
+        else:
+            triggered = fast_prev >= slow_prev and fast_now < slow_now
+        return triggered, fast_now
+
+    if t == "VOLUME_SPIKE":
+        if alert.value is None:
+            return False, 0.0
+        ratio = indicators.compute_volume_ratio(volumes)
+        return ratio >= alert.value, ratio
+
+    return False, 0.0
 
 
 def claim_alert(db, alert_id: int) -> bool:
@@ -66,40 +169,62 @@ def check_all_alerts(self):
 
             for alert in alerts:
                 try:
-                    # bd:shotockviz-983 — must go through cache_keys.quote()
-                    # (single source of truth, core/cache_keys.py) so this
-                    # always matches whatever key price_fetcher's
-                    # cache_and_publish_quotes() actually wrote under. A
-                    # hand-built f-string here previously drifted from that
-                    # key (used "cache:quote:{sym}" vs the real
-                    # "quote:{sym}") and silently no-op'd every alert on
-                    # every cycle — see workers/helpers/cache_publisher.py:38.
-                    cache_key = cache_keys.quote(alert.symbol)
-                    cached = r.get(cache_key)
-                    if not cached:
-                        # Visible-by-design: a persistent miss here means
-                        # every ACTIVE alert for this symbol silently never
-                        # fires. No retry/backfill added (out of scope) —
-                        # this is observability only.
-                        logger.warning(
-                            "Alert check: no cached quote, skipping",
-                            alert_id=alert.id,
-                            symbol=alert.symbol,
-                            cache_key=cache_key,
-                        )
-                        continue
+                    alert_type_value = alert.alert_type.value
 
-                    quote = json.loads(cached)
-                    price = quote.get("price", 0)
+                    if alert_type_value in _INDICATOR_ALERT_TYPES:
+                        # bd:shotockviz-06e — RSI/Golden-Death-Cross/Volume-
+                        # Spike read the daily OHLCV cache, not the quote
+                        # cache; see _load_daily_bars / _evaluate_indicator_alert.
+                        bars = _load_daily_bars(r, alert.symbol)
+                        if bars is None:
+                            logger.warning(
+                                "Alert check: no cached daily bars, skipping",
+                                alert_id=alert.id,
+                                symbol=alert.symbol,
+                                cache_key=cache_keys.ohlcv(alert.symbol, "1D"),
+                                alert_type=alert_type_value,
+                            )
+                            continue
+                        triggered, display_value = _evaluate_indicator_alert(alert, bars)
+                        price = float(bars[-1]["close"])
+                        if not triggered:
+                            continue
+                    else:
+                        # bd:shotockviz-983 — must go through cache_keys.quote()
+                        # (single source of truth, core/cache_keys.py) so this
+                        # always matches whatever key price_fetcher's
+                        # cache_and_publish_quotes() actually wrote under. A
+                        # hand-built f-string here previously drifted from that
+                        # key (used "cache:quote:{sym}" vs the real
+                        # "quote:{sym}") and silently no-op'd every alert on
+                        # every cycle — see workers/helpers/cache_publisher.py:38.
+                        cache_key = cache_keys.quote(alert.symbol)
+                        cached = r.get(cache_key)
+                        if not cached:
+                            # Visible-by-design: a persistent miss here means
+                            # every ACTIVE alert for this symbol silently never
+                            # fires. No retry/backfill added (out of scope) —
+                            # this is observability only.
+                            logger.warning(
+                                "Alert check: no cached quote, skipping",
+                                alert_id=alert.id,
+                                symbol=alert.symbol,
+                                cache_key=cache_key,
+                            )
+                            continue
 
-                    triggered = False
-                    if alert.alert_type.value == "PRICE_ABOVE" and alert.value and price > alert.value:
-                        triggered = True
-                    elif alert.alert_type.value == "PRICE_BELOW" and alert.value and price < alert.value:
-                        triggered = True
+                        quote = json.loads(cached)
+                        price = quote.get("price", 0)
+                        display_value = price
 
-                    if not triggered:
-                        continue
+                        triggered = False
+                        if alert_type_value == "PRICE_ABOVE" and alert.value and price > alert.value:
+                            triggered = True
+                        elif alert_type_value == "PRICE_BELOW" and alert.value and price < alert.value:
+                            triggered = True
+
+                        if not triggered:
+                            continue
 
                     # bd:features-2026-09 slice 3 (Sara ADR-T3) — atomic
                     # conditional UPDATE replaces the old read-then-write flip.
@@ -144,7 +269,13 @@ def check_all_alerts(self):
                     # Send Telegram notification — only this run (the one that
                     # won the atomic claim above) sends.
                     _send_telegram_alert(db, alert, price)
-                    logger.info("Alert triggered", alert_id=alert.id, symbol=alert.symbol)
+                    logger.info(
+                        "Alert triggered",
+                        alert_id=alert.id,
+                        symbol=alert.symbol,
+                        alert_type=alert_type_value,
+                        display_value=display_value,
+                    )
 
                 except Exception as e:
                     logger.warning("Failed to check alert", alert_id=alert.id, error=str(e))

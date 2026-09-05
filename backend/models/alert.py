@@ -24,9 +24,25 @@ class AlertType(str, PyEnum):
 
 
 class AlertStatus(str, PyEnum):
+    # bd:shotockviz-43x — EXPIRED removed: it was declared here and mapped
+    # by the frontend (utils/alertStatus.ts) but no backend code path ever
+    # assigned it (grep -rn EXPIRED backend/ returned only this enum
+    # member itself). Striking per Oliver/Tara's call (LOW value, "resolve
+    # by striking, not by implementing" — 10-tara-value.md) rather than
+    # building an expiry rule that was never asked for.
+    #
+    # DB enum note (checked before removing): the Postgres `alertstatus`
+    # type was never created by an Alembic migration — the `alerts` table
+    # predates this project's Alembic history entirely and is provisioned
+    # via `Base.metadata.create_all()` (core/database.py, dev-only;
+    # main.py's `_sync_markettype_enum()` only ADDs values, and does not
+    # even include `alertstatus` in its enum_map). So wherever the
+    # Postgres type already exists, it keeps the 'EXPIRED' label forever —
+    # Postgres has no `ALTER TYPE ... DROP VALUE` — but that is harmless:
+    # zero rows use it (confirmed by grep above) and nothing can write it
+    # once this Python member is gone. No migration added for this.
     ACTIVE = "ACTIVE"
     TRIGGERED = "TRIGGERED"
-    EXPIRED = "EXPIRED"
     INACTIVE = "INACTIVE"
 
 

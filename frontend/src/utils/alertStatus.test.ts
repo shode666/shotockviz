@@ -2,11 +2,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getAlertStatusKey } from './alertStatus.ts';
 
-test('getAlertStatusKey: EXPIRED status takes precedence', () => {
-    assert.equal(getAlertStatusKey({ status: 'EXPIRED', is_active: true }), 'expired');
-    assert.equal(getAlertStatusKey({ status: 'EXPIRED', is_active: false }), 'expired');
-});
-
 test('getAlertStatusKey: TRIGGERED status', () => {
     assert.equal(getAlertStatusKey({ status: 'TRIGGERED', is_active: true }), 'triggered');
 });

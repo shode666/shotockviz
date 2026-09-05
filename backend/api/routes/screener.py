@@ -14,81 +14,23 @@ from models.ohlcv import OHLCVBar
 from models.user import User
 from api.middleware.auth import get_optional_user
 from schemas.envelope import EnvelopingAPIRoute
+# bd:shotockviz-06e — RSI/MACD/SMA math moved to services/indicators.py so
+# workers/alert_checker.py can reuse the exact same computation instead of
+# a second, independently-drifting copy. Re-imported under the original
+# private names so this module's own call sites (and
+# tests/test_screener_indicators.py, which imports these by name from
+# here) do not need to change.
+from services.indicators import (
+    compute_rsi as _compute_rsi,
+    compute_macd as _compute_macd,
+    compute_sma as _compute_sma,
+    compute_volume_ratio as _compute_volume_ratio,
+)
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/screener -> /screener,
 # mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
 router = APIRouter(prefix="/screener", tags=["screener"], route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
-
-# ─── Indicator helpers ──────────────────────────────────────────────────────
-
-def _compute_rsi(closes: list[float], period: int = 14) -> float:
-    """Wilder smoothed RSI (computed from list of close prices)."""
-    if len(closes) < period + 1:
-        return 50.0
-
-    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
-    gains = [d if d > 0 else 0 for d in deltas]
-    losses = [-d if d < 0 else 0 for d in deltas]
-
-    # Simple moving average for the first calculation
-    avg_gain = sum(gains[:period]) / period
-    avg_loss = sum(losses[:period]) / period
-
-    # Smoothed EMA for the rest
-    for i in range(period, len(gains)):
-        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
-        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
-
-    rs = avg_gain / (avg_loss if avg_loss != 0 else 1e-9)
-    return round(100 - 100 / (1 + rs), 2)
-
-
-def _compute_macd(closes: list[float]) -> tuple[float, float]:
-    """Returns (macd_val, signal_val) for the latest bar."""
-    if len(closes) < 26:
-        return 0.0, 0.0
-
-    # EMA calculation helper
-    def ema(data: list[float], span: int) -> list[float]:
-        if len(data) < span:
-            return [None] * len(data)
-        result = []
-        multiplier = 2 / (span + 1)
-        result.append(sum(data[:span]) / span)  # SMA for first value
-        for i in range(span, len(data)):
-            result.append(data[i] * multiplier + result[-1] * (1 - multiplier))
-        return result
-
-    ema12 = ema(closes, 12)
-    ema26 = ema(closes, 26)
-
-    # ema() returns len(data)-span+1 elements; align by using the shorter ema26
-    # ema26 is shorter — offset into ema12 to align them
-    offset = len(ema12) - len(ema26)
-    macd_line = [ema12[offset + i] - ema26[i] for i in range(len(ema26))]
-
-    # Signal line (EMA9 of MACD line)
-    if len(macd_line) < 9:
-        return 0.0, 0.0
-
-    signal_line = ema(macd_line, 9)
-    return float(macd_line[-1]), float(signal_line[-1] if signal_line else 0)
-
-
-def _compute_sma(closes: list[float], period: int) -> float:
-    """Simple moving average (SMA).
-
-    Args:
-        closes: List of closing prices
-        period: Number of periods for SMA
-
-    Returns:
-        SMA value, or 0.0 if insufficient data
-    """
-    if len(closes) < period:
-        return 0.0
-    return sum(closes[-period:]) / period
 
 
 def _compute_signal(rsi: float, macd_val: float, sig_val: float) -> str:
@@ -218,9 +160,7 @@ def _evaluate_symbol(
     ma50 = _compute_sma(closes, 50)
     ma200 = _compute_sma(closes, 200)
 
-    vol_now = volumes[-1] if volumes else 0
-    vol_avg20 = sum(volumes[-20:]) / len(volumes[-20:]) if len(volumes) >= 20 else 1
-    vol_ratio = vol_now / vol_avg20 if vol_avg20 > 0 else 0.0
+    vol_ratio = _compute_volume_ratio(volumes)
 
     # Apply all filters with early exit (guard clauses)
     if not _matches_rsi(rsi, rsi_filter):

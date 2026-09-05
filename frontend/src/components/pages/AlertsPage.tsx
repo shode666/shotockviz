@@ -16,12 +16,12 @@ const PRICE_ALERT_TYPES = new Set(['Price Above', 'Price Below']);
 // icon rule — no emoji/unicode glyph as icon).
 // Triggered uses --color-support (chart-level yellow) per 03-design-notes.md
 // §Alerts "state ที่ 3 'แจ้งแล้ว' สี support-yellow" — distinct from --color-yellow.
+// bd:shotockviz-43x — `expired` entry removed along with utils/alertStatus.ts's
+// 'expired' key (backend never assigns AlertStatus.EXPIRED; see models/alert.py).
 const STATUS_STYLE = {
     active: { dot: 'var(--color-up)', label: 'ทำงานอยู่', color: 'var(--color-up)', Icon: null },
     triggered: { dot: 'var(--color-support)', label: 'แจ้งแล้ว', color: 'var(--color-support)', Icon: CheckCircle2 },
     inactive: { dot: 'var(--color-text-sub)', label: 'หยุดชั่วคราว', color: 'var(--color-text-sub)', Icon: null },
-    // bd:ui-honesty-2026-09 F11 — distinct from `inactive` (paused ≠ expired).
-    expired: { dot: 'var(--color-down)', label: 'หมดอายุ', color: 'var(--color-down)', Icon: null },
 };
 
 function formatTriggeredTime(iso?: string | null): string {
@@ -31,7 +31,12 @@ function formatTriggeredTime(iso?: string | null): string {
     return d.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-const EMPTY_FORM = { symbol: '', alert_type: 'Price Above', condition: 'above', value: '', channel: 'in_app' };
+// bd:shotockviz-675 — 'in_app' was the default and delivered nothing durable
+// (no notification store; the only 'in_app' delivery was a 5s toast over a
+// WebSocket that is dead in prod). Telegram is now the only channel and the
+// default — see api/routes/alerts.py::_resolve_channel, which now rejects
+// 'in_app' outright.
+const EMPTY_FORM = { symbol: '', alert_type: 'Price Above', condition: 'above', value: '', channel: 'telegram' };
 
 export default function AlertsPage() {
     const { isAuthenticated } = useAuthStore();
@@ -177,7 +182,11 @@ export default function AlertsPage() {
                 <div className="flex items-center justify-between mb-5">
                     <div>
                         <h2 className="text-base font-bold flex items-center gap-2"><Bell size={16} /> Price Alerts</h2>
-                        <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-sub)' }}>รับแจ้งเตือนเมื่อราคาถึงเป้าหมาย</p>
+                        {/* bd:shotockviz-cm3(a) — honest about sampling: a symbol's
+                            cached price refreshes roughly every 1 min for alert
+                            symbols (workers/alert_symbol_refresher.py), so a level
+                            crossed and retraced faster than that is never caught. */}
+                        <p className="text-xs mt-0.5" style={{ color: 'var(--color-text-sub)' }}>รับแจ้งเตือนเมื่อราคาถึงเป้าหมาย (ตรวจสอบทุก ~1 นาที จากราคาล่าสุดที่แคชไว้ — อาจพลาดจังหวะที่ราคาแตะเป้าแล้วกลับตัวเร็วกว่านั้น)</p>
                     </div>
                     {isAuthenticated && (
                         <button onClick={openModal} className="btn-accent flex items-center gap-1.5"><BellPlus size={12} /> สร้าง Alert</button>
@@ -398,11 +407,14 @@ export default function AlertsPage() {
                                 )}
                             </div>
 
-                            {/* Channel */}
+                            {/* Channel — bd:shotockviz-675: Telegram is the only channel;
+                                'in_app' removed (no notification store exists, see
+                                EMPTY_FORM comment above). Select kept (not a plain text
+                                label) so a future channel (e.g. Email) can be added
+                                without another UI rewrite. */}
                             <div>
                                 <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>ช่องทางแจ้งเตือน</div>
                                 <select className="input-field glass-select" value={form.channel} onChange={(e) => setForm((f) => ({ ...f, channel: e.target.value }))}>
-                                    <option value="in_app">In-App</option>
                                     <option value="telegram">Telegram</option>
                                 </select>
                             </div>

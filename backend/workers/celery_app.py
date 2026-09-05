@@ -13,6 +13,7 @@ celery_app = Celery(
     include=[
         "workers.price_fetcher",
         "workers.alert_checker",
+        "workers.alert_symbol_refresher",
         "workers.housekeeping",
         "workers.name_fetcher",
         "workers.fundamentals_fetcher",
@@ -68,6 +69,20 @@ celery_app.conf.beat_schedule = {
     "check-alerts": {
         "task": "workers.alert_checker.check_all_alerts",
         "schedule": 60.0,  # every 60 seconds
+    },
+    # bd:shotockviz-cm3(b) — refresh quotes for symbols with an ACTIVE
+    # PRICE_ABOVE/PRICE_BELOW alert every 60s (independent of the 6-slot
+    # round-robin above), so alert_checker never compares against a quote
+    # older than ~1 min for those specific symbols. Market-hours gated
+    # per symbol inside the task, so this adds yfinance calls only for
+    # alert-bearing symbols whose market is open right now — worst case
+    # (every watched symbol has an alert, one market open) this raises
+    # that subset's fetch cadence from ~once per 4-6 min to once per
+    # minute; zero extra calls for symbols with no alert, zero calls when
+    # no alert symbol's market is open.
+    "refresh-alert-symbols": {
+        "task": "workers.alert_symbol_refresher.refresh_alert_symbols",
+        "schedule": 60.0,
     },
     # DB housekeeping at 03:00 ICT (= 20:00 UTC prev day)
     "db-housekeeping": {

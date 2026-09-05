@@ -1,11 +1,13 @@
-// bd:ui-honesty-2026-09 F11 — STATUS_STYLE (AlertsPage.tsx:17-21) had no
-// `expired` key so an expired alert fell through to the `active`/`inactive`
-// mapping and showed "หยุดชั่วคราว" (paused). Per Oliver handoff
-// (05-oliver-phase2-handoff.md): backend alert status enum has EXPIRED
-// (uppercase, same convention as the existing 'TRIGGERED' check at
-// AlertsPage.tsx:205) — this is a pure frontend mapping gap, SMALL-FIX.
+// bd:shotockviz-43x — `expired` mapping removed: the backend's
+// `AlertStatus.EXPIRED` was declared but never assigned by any code path
+// (models/alert.py), so this frontend key was displayable but
+// unreachable outside a manual DB seed. Struck per Oliver/Tara's call
+// ("resolve by striking, not by implementing" — 10-tara-value.md) rather
+// than building an expiry rule nobody asked for. Only the two statuses
+// the backend actually assigns are mapped here — see models/alert.py's
+// AlertStatus for the removal note and the DB-enum finding.
 
-export type AlertStatusKey = 'active' | 'triggered' | 'inactive' | 'expired';
+export type AlertStatusKey = 'active' | 'triggered' | 'inactive';
 
 export interface AlertStatusInput {
     status?: string | null;
@@ -13,7 +15,6 @@ export interface AlertStatusInput {
 }
 
 export function getAlertStatusKey(alert: AlertStatusInput): AlertStatusKey {
-    if (alert.status === 'EXPIRED') return 'expired';
     if (alert.status === 'TRIGGERED') return 'triggered';
     return alert.is_active ? 'active' : 'inactive';
 }
