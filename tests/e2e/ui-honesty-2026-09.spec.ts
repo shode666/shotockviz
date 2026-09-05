@@ -378,11 +378,25 @@ test('F10: RightPanel News tab — item with no url is a non-interactive element
 });
 
 // ---------------------------------------------------------------------------
-// F11 — Alert EXPIRED status renders a distinct label/color from `inactive`
-// (paused). Guards the exact bug this feature fixes: EXPIRED silently
-// falling through to "หยุดชั่วคราว".
+// F11 — superseded by bd:shotockviz-43x (commit 1eb7fee). `AlertStatus.EXPIRED`
+// was struck from the backend enum, `utils/alertStatus.ts`'s mapping, and
+// REQUIREMENTS.md — [backend/models/alert.py:27-41]: it was declared but
+// never assigned by any code path (`grep -rn EXPIRED backend/` only found the
+// enum member itself), so "resolve by striking, not by implementing"
+// (Oliver/Tara). That state cannot exist on the wire any more, so the old
+// "seed an EXPIRED alert, assert หมดอายุ" test is asserting on a dead code
+// path. Replaced with coverage of the three statuses `getAlertStatusKey`
+// actually produces [frontend/src/utils/alertStatus.ts:11-16]: `status ===
+// 'TRIGGERED'` wins regardless of `is_active`; otherwise `is_active` alone
+// decides active vs inactive (paused) — `status` itself is not read for that
+// branch. Also guards that "หมดอายุ" does not silently reappear.
+//
+// Note (not this test's scope): `AlertStatus.INACTIVE` has the same
+// declared-never-assigned defect and is filed separately (bd:shotockviz-o0b)
+// — the UI's paused state ("หยุดชั่วคราว") comes from the `is_active` boolean,
+// not from `status`, so that dead enum member doesn't affect this test.
 // ---------------------------------------------------------------------------
-test('F11: alert with status EXPIRED shows "หมดอายุ", distinct from inactive "หยุดชั่วคราว"', async ({ page }) => {
+test('F11: alert statuses render distinctly — active/triggered/inactive; EXPIRED is gone (bd:shotockviz-43x)', async ({ page }) => {
   await mockStockAPIs(page);
   await mockAuthSession(page, MOCK_AUTH_ME);
   await mockWatchlistAPIs(page);
@@ -391,8 +405,11 @@ test('F11: alert with status EXPIRED shows "หมดอายุ", distinct fro
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify([
-        { id: 1, symbol: 'PTT.BK', alert_type: 'Price Above', condition: 'above', value: 40, channel: 'in_app', status: 'EXPIRED', is_active: false },
-        { id: 2, symbol: 'AAPL', alert_type: 'Price Below', condition: 'below', value: 170, channel: 'in_app', status: null, is_active: false },
+        // status === 'TRIGGERED' -> 'triggered', regardless of is_active.
+        { id: 1, symbol: 'PTT.BK', alert_type: 'Price Above', condition: 'above', value: 40, channel: 'in_app', status: 'ACTIVE', is_active: true },
+        { id: 2, symbol: 'AAPL', alert_type: 'Price Below', condition: 'below', value: 170, channel: 'in_app', status: 'TRIGGERED', is_active: true, triggered_at: '2024-01-01T09:30:00Z' },
+        // status: null + is_active: false -> 'inactive' (not read from status).
+        { id: 3, symbol: 'MSFT', alert_type: 'Price Above', condition: 'above', value: 300, channel: 'in_app', status: null, is_active: false },
       ]),
     }),
   );
@@ -400,168 +417,185 @@ test('F11: alert with status EXPIRED shows "หมดอายุ", distinct fro
   await page.goto('/alerts');
   await page.waitForLoadState('networkidle');
 
-  await expect(page.getByText('หมดอายุ')).toBeVisible({ timeout: 8_000 });
-  await expect(page.getByText('หยุดชั่วคราว')).toBeVisible();
-  // Distinct elements, not the same text rendered twice.
-  expect(await page.getByText('หมดอายุ').count()).toBeGreaterThan(0);
+  await expect(page.getByText('ทำงานอยู่')).toBeVisible({ timeout: 8_000 }); // active
+  await expect(page.getByText('แจ้งแล้ว')).toBeVisible(); // triggered
+  await expect(page.getByText('หยุดชั่วคราว')).toBeVisible(); // inactive (paused)
+
+  // Distinct elements, not the same text rendered twice, and the dead
+  // 'expired' key must not have quietly come back.
+  expect(await page.getByText('ทำงานอยู่').count()).toBeGreaterThan(0);
+  expect(await page.getByText('แจ้งแล้ว').count()).toBeGreaterThan(0);
   expect(await page.getByText('หยุดชั่วคราว').count()).toBeGreaterThan(0);
+  await expect(page.getByText('หมดอายุ')).toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------
-// F3 — StatusBar reflects real WS connection state and only updates its
-// timestamp on a real, *qualifying* `data_ready` message (not a wall-clock
-// tick, and — per r2, `03b-bella-spec-r2-F3.md` — not any `data_ready`
-// regardless of data_type/symbol either).
+// F3 — superseded by bd:shotockviz-09j (commit 0b7e47b). The data_ready-driven
+// label is GONE: `formatLastUpdate`, `getLastQuoteTimestamp` and
+// `nextLastUpdate` were deleted from `utils/statusBar.ts` — verified directly
+// against the source [frontend/src/utils/statusBar.ts:1-16], which documents
+// WHY: `data_ready` with `data_type:"quote"` only fires from the Celery-outage
+// fallback, so the old label read "—" under normal healthy operation. The old
+// AC3/AC4 regression tests below were pinning that now-deleted concept and a
+// wording ("อัปเดตล่าสุด:") that no longer exists.
 //
-// r2 scope (Bella): a message qualifies only when
-// `data_type === 'quote'` AND (`symbol === selectedStock.sym` OR
-// `symbol === '*'`). `history`/`fundamentals` for the SAME symbol, and
-// `quote` for a DIFFERENT symbol, must NOT move the timestamp — this is the
-// exact Chris Medium #1 regression (`30-chris-review.md`) this revision
-// exists to close, so both negative cases get their own assertions here,
-// not just the positive path. Label copy is now `ราคา {sym} อัปเดตล่าสุด:
-// …` (AC7) — asserted literally, not just via the old generic substring.
+// New contract [frontend/src/utils/statusBar.ts:18-115,
+// frontend/src/components/common/StatusBar.tsx:22-65]:
+//   - label renders as `ราคา {sym}: {label}` (no "อัปเดตล่าสุด:" wording)
+//   - `getPriceFreshness(tsSeconds, nowMs, marketOpen)` derives age from the
+//     server `ts` on the quote payload (`usePriceUpdates`), NOT from WS
+//     data_ready — `dataReadyPayload` is untouched but StatusBar no longer
+//     reads it
+//   - amber (`stale`) over 2min, red (`very-stale`) over 6min; market-closed
+//     overrides BOTH amber and red; `marketOpen === null` (no client-side
+//     model for the symbol's market, e.g. FUND/CRYPTO) gets no override
+//   - the boundary/threshold math itself (amber/red cutoffs, market-closed
+//     override, fresh-survives-close) is already exhaustively unit-tested
+//     [frontend/src/utils/statusBar.test.ts] — these E2E tests exercise the
+//     INTEGRATION wiring (real quote `ts` -> usePriceUpdates -> StatusBar ->
+//     rendered label, with the real `getSetStatus`/`getUsStatus` clock logic),
+//     not re-derive every boundary.
 //
-// Known cross-cutting fact (Oliver, 20-verify.md): caddy/Caddyfile.dev's
-// `/api/ws/*` Connection/Upgrade header_up lines broke WS entirely on Caddy
-// v2.11.4 (backend 404 instead of 101) — Oliver already removed those 2
-// lines from Caddyfile.dev. This test uses page.routeWebSocket, which
-// intercepts at the browser layer before any request reaches Caddy, so it
-// exercises the *frontend* contract (StatusBar + useWebSocket) independently
-// of that infra bug — it would NOT have caught the Caddy bug itself. See
-// 31-quinn-review.md §4 for the infra-level check.
+// `page.clock.setFixedTime()` pins `Date.now()`/`new Date()` in the page
+// while leaving real timers running [node_modules/playwright-core/types/
+// types.d.ts:20547-20564] — used here so `marketOpen` (computed from the real
+// wall clock inside `getUsStatus()`) is deterministic instead of depending on
+// whatever time the test happens to run.
+//
+// "● Live"/"○ Offline" from the WS connection is unchanged by bd:shotockviz-09j
+// (StatusBar.tsx:56-63) — kept as its own smoke test, WS-only, no data_ready
+// involved.
 // ---------------------------------------------------------------------------
-// Reads the whole "ราคา {sym} อัปเดตล่าสุด: ..." span via a substring match
-// that is ALWAYS present (dash or real time) — deliberately not a locator
-// matching only the timestamp regex. A locator that only matches when a
-// timestamp is present will hang for the full test timeout (30s, not 5s)
-// if the value the test is waiting on never appears, instead of failing
-// fast — that cost real debugging time writing the AC3/AC4 regression
-// checks below and is recorded here so the next author doesn't repeat it.
 function statusLabel(page: import('@playwright/test').Page) {
-  return page.locator('div.panel.border-t').getByText('อัปเดตล่าสุด:', { exact: false });
+  return page.locator('div.panel.border-t').getByText('ราคา NVDA', { exact: false });
 }
 
-test('F3: StatusBar shows Live when WS connects, Offline when it does not, and the timestamp only moves on a same-symbol quote data_ready', async ({ page }) => {
+test('F3: StatusBar shows Live when WS connects (unchanged by bd:shotockviz-09j)', async ({ page }) => {
   await mockStockAPIs(page);
   await mockAuthSession(page, MOCK_AUTH_ME);
   await mockWatchlistAPIs(page);
-
-  let sendMessage: ((msg: string) => void) | null = null;
-  await page.routeWebSocket('**/api/ws/prices', (ws) => {
-    sendMessage = (msg: string) => ws.send(msg);
-  });
+  await page.route('**/api/v1/stocks/quotes**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ NVDA: { price: 900, change: 1, change_pct: 0.1 } }),
+    }),
+  );
+  // bd:shotockviz-pls (landed mid-session, commit 14cf42a — a THIRD
+  // supersession Oliver's delegation did not flag): the WS handshake now
+  // requires `?token=<jwt>` on the URL [frontend/src/utils/wsUrl.ts:15,
+  // frontend/src/hooks/useWebSocket.ts:88-93]. The pattern must match the
+  // query string too, or this falls through to the REAL (unmocked) socket,
+  // which the backend now rejects (1008/403) for the fake mock token —
+  // reproduced and confirmed: `**/api/ws/prices` (no trailing wildcard)
+  // left the page on '○ Offline' 5/5 times before this fix.
+  await page.routeWebSocket('**/api/ws/prices**', () => {});
 
   await page.goto('/');
   await page.waitForLoadState('networkidle');
 
   const statusBar = page.locator('div.panel.border-t');
-  const label = statusLabel(page);
   await expect(statusBar.getByText('● Live')).toBeVisible({ timeout: 5_000 });
-  await expect(statusBar.getByText('Delayed 15', { exact: false })).toHaveCount(0);
-  // AC7 (label wording): must say "ราคา {sym}", not the bare generic label.
-  // appStore's default selectedStock.sym is 'NVDA' (appStore.ts).
-  await expect(label).toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-
-  expect(sendMessage, 'WS route handler must have fired').not.toBeNull();
-
-  // AC3 r2 / AC4 (trivial ordering — no real value has ever arrived yet, so
-  // "unchanged" and "still dash" happen to be the same observation). This
-  // is NOT the meaningful regression guard — see the two dedicated tests
-  // below for the case Chris actually found (wrong-type/-symbol message
-  // arriving AFTER a real one).
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'history', symbol: 'NVDA', timeframe: '1D' }));
-  await expect(label).toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'quote', symbol: 'AAPL' }));
-  await expect(label).toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-
-  // AC1 (qualify — same symbol): the one message that IS allowed through.
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'quote', symbol: 'NVDA' }));
-  await expect(label).not.toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-  const firstStamp = (await label.textContent())!;
-
-  // Wait 2s of real wall-clock time with no second data_ready — the old
-  // implementation ticked every 1s via setInterval; the fixed one must not.
-  await page.waitForTimeout(2_000);
-  await expect(label).toHaveText(firstStamp);
 });
 
-// ---------------------------------------------------------------------------
-// F3 r2 — AC3/AC4 regression guard, isolated. This is the ask from Oliver's
-// delegation verbatim: "Dave believes your existing StatusBar assertions
-// still pass because they substring-match. Verify that yourself rather than
-// trusting it ... that is the exact regression Chris found, and right now
-// nothing guards it end-to-end." The trivial form of AC3/AC4 (wrong
-// type/symbol arriving while the label is ALREADY "—") passes regardless of
-// whether the filter works, because "unchanged" and "still dash" are the
-// same observable. The only form that actually exercises the filter is: a
-// REAL qualifying timestamp is on screen, then a wrong-type/-symbol message
-// arrives — does the label keep the real value ("unchanged from its prior
-// value", `03b-bella-spec-r2-F3.md` AC3) or does it revert to "—"?
-//
-// RESULT: it reverts. `useWebSocket.ts:71` calls `setPayloadRef.current(data)`
-// unconditionally for every `data_ready`, unconditionally overwriting the
-// single global `appStore.dataReadyPayload` object regardless of whether it
-// qualifies. `getLastQuoteTimestamp` (`utils/statusBar.ts`) is a pure,
-// stateless filter over only the CURRENT `dataReadyPayload` — it has no
-// memory of the last-qualifying value, so once a non-qualifying message
-// overwrites the store, StatusBar's derived timestamp reverts to "—" even
-// though a real, still-fresh quote update happened moments earlier. This is
-// a genuine, unaddressed product bug against Bella's own r2 spec/verify
-// steps (§Verify steps 2→3), not test-drift — reported to Oliver, NOT fixed
-// here (this delegation's constraint is tests/ only, no frontend/src edits).
-// ---------------------------------------------------------------------------
-test('F3 r2 AC3 REGRESSION (real bug, not fixed here): a same-symbol history data_ready arriving AFTER a real quote update must leave the timestamp unchanged — it currently resets to "—"', async ({ page }) => {
+test('F3: a fresh ts (<2min old) renders a recent Thai age label, not a fabricated wall clock', async ({ page }) => {
+  // Time itself is irrelevant here — freshness bypasses the market-open
+  // check entirely below the amber threshold [statusBar.ts:102-104] — fixed
+  // anyway so the test is not flaky-by-construction.
+  const nowMs = Date.UTC(2026, 8, 9, 20, 0, 0);
+  await page.clock.setFixedTime(nowMs);
+  await mockStockAPIs(page);
+  await mockAuthSession(page, MOCK_AUTH_ME);
+  await mockWatchlistAPIs(page);
+  await page.route('**/api/v1/stocks/quotes**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ NVDA: { price: 900, change: 1, change_pct: 0.1, ts: Math.floor(nowMs / 1000) - 30 } }),
+    }),
+  );
+
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+
+  await expect(statusLabel(page)).toHaveText('ราคา NVDA: เมื่อครู่นี้');
+});
+
+test('F3: an old ts crosses amber (stale) then red (very-stale) while the market is open', async ({ page }) => {
+  // Wed 2026-09-09 15:00 ET (epoch - 5h, marketStatus.ts:52-71) = mins 900,
+  // inside the 570-960 regular-session window -> getUsStatus().open === true.
+  const nowMs = Date.UTC(2026, 8, 9, 20, 0, 0);
+  await page.clock.setFixedTime(nowMs);
   await mockStockAPIs(page);
   await mockAuthSession(page, MOCK_AUTH_ME);
   await mockWatchlistAPIs(page);
 
-  let sendMessage: ((msg: string) => void) | null = null;
-  await page.routeWebSocket('**/api/ws/prices', (ws) => {
-    sendMessage = (msg: string) => ws.send(msg);
-  });
+  let ageSec = 150; // 2m30s -> stale (amber): > AMBER_MS(120s), <= RED_MS(360s)
+  await page.route('**/api/v1/stocks/quotes**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ NVDA: { price: 900, change: 1, change_pct: 0.1, ts: Math.floor(nowMs / 1000) - ageSec } }),
+    }),
+  );
 
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   const label = statusLabel(page);
+  await expect(label).toHaveText('ราคา NVDA: 2 นาทีที่แล้ว');
 
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'quote', symbol: 'NVDA' }));
-  await expect(label).not.toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-  const firstStamp = (await label.textContent())!;
-
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'history', symbol: 'NVDA', timeframe: '1D' }));
-  // Bounded (3s, not the 30s test-timeout default) so this fails fast and
-  // legibly instead of hanging — see the `statusLabel` comment above.
-  await expect(
-    label,
-    'AC3 r2 (03b-bella-spec-r2-F3.md): timestamp must stay at its prior value, not reset to "—". ' +
-      'Root cause: useWebSocket.ts unconditionally overwrites appStore.dataReadyPayload for every ' +
-      'data_ready, and getLastQuoteTimestamp has no memory of the last qualifying value.',
-  ).toHaveText(firstStamp, { timeout: 3_000 });
+  ageSec = 400; // 6m40s -> very-stale (red): > RED_MS(360s)
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  await expect(label).toHaveText('ราคา NVDA: 6 นาทีที่แล้ว');
 });
 
-test('F3 r2 AC4 REGRESSION (real bug, not fixed here): an other-symbol quote data_ready arriving AFTER a real quote update must leave the timestamp unchanged — it currently resets to "—"', async ({ page }) => {
+test('F3: a closed market shows "ตลาดปิด" instead of a stale warning, but a fresh price after close still reads fresh', async ({ page }) => {
+  // Sat 2026-09-12 — day===6 in getUsStatus() (marketStatus.ts:60-62) ->
+  // closed all day regardless of time-of-day.
+  const nowMs = Date.UTC(2026, 8, 12, 20, 0, 0);
+  await page.clock.setFixedTime(nowMs);
   await mockStockAPIs(page);
   await mockAuthSession(page, MOCK_AUTH_ME);
   await mockWatchlistAPIs(page);
 
-  let sendMessage: ((msg: string) => void) | null = null;
-  await page.routeWebSocket('**/api/ws/prices', (ws) => {
-    sendMessage = (msg: string) => ws.send(msg);
-  });
+  let ageSec = 300; // would be stale (amber) if the market were open
+  await page.route('**/api/v1/stocks/quotes**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ NVDA: { price: 900, change: 1, change_pct: 0.1, ts: Math.floor(nowMs / 1000) - ageSec } }),
+    }),
+  );
 
   await page.goto('/');
   await page.waitForLoadState('networkidle');
   const label = statusLabel(page);
+  await expect(label).toHaveText('ราคา NVDA: ตลาดปิด');
 
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'quote', symbol: 'NVDA' }));
-  await expect(label).not.toHaveText('ราคา NVDA อัปเดตล่าสุด: —');
-  const firstStamp = (await label.textContent())!;
+  // statusBar.ts:87-89 — a genuinely fresh price still displays as fresh
+  // even after the market has closed; the override only fires for
+  // already-alarming staleness.
+  ageSec = 30;
+  await page.reload();
+  await page.waitForLoadState('networkidle');
+  await expect(label).toHaveText('ราคา NVDA: เมื่อครู่นี้');
+});
 
-  sendMessage!(JSON.stringify({ type: 'data_ready', data_type: 'quote', symbol: 'AAPL' }));
-  await expect(
-    label,
-    'AC4 (03b-bella-spec-r2-F3.md): a different symbol\'s quote must not move NVDA\'s timestamp. ' +
-      'Same root cause as the AC3 regression test above (dataReadyPayload is a single overwritten slot).',
-  ).toHaveText(firstStamp, { timeout: 3_000 });
+test('F3: a missing ts shows "—" rather than a fabricated time', async ({ page }) => {
+  await mockStockAPIs(page);
+  await mockAuthSession(page, MOCK_AUTH_ME);
+  await mockWatchlistAPIs(page);
+  await page.route('**/api/v1/stocks/quotes**', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ NVDA: { price: 900, change: 1, change_pct: 0.1 } }), // no `ts` field
+    }),
+  );
+
+  await page.goto('/');
+  await page.waitForLoadState('networkidle');
+
+  await expect(statusLabel(page)).toHaveText('ราคา NVDA: —');
 });
