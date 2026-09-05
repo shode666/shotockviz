@@ -85,10 +85,10 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { initTheme } = useAppStore()
-  const { checkAuth } = useAuthStore()
+  const { checkAuth, isAuthenticated } = useAuthStore()
 
   // Keep websocket alive at root level
-  useWebSocket()
+  const { isConnected } = useWebSocket()
 
   // Poll /api/v1/system/ready; bumps dataVersion when cache is warm
   useBackendReady()
@@ -116,7 +116,7 @@ function RootComponent() {
           <Outlet />
         </main>
       </div>
-      <StatusBar />
+      <StatusBar isConnected={isConnected} isAuthenticated={isAuthenticated} />
       <MobileTabBar />
       <SearchModal />
       {/* bd:ux-2026-09 icon rule #4 — lucide icons replace react-hot-toast's
