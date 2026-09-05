@@ -366,23 +366,37 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                                             {news.length === 0 ? (
                                                 <div className="text-[11px] text-center mt-4" style={{ color: 'var(--color-text-sub)' }}>ไม่มีข่าวล่าสุด</div>
                                             ) : (
-                                                news.slice(0, 8).map((n: any, i: number) => (
-                                                    <a
-                                                        key={i}
-                                                        href={n.url}
-                                                        target="_blank"
-                                                        rel="noreferrer"
-                                                        className="flex flex-col gap-1 p-2 rounded-lg transition-colors"
-                                                        onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--color-hover)')}
-                                                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-                                                    >
-                                                        <span className="badge badge-violet flex-shrink-0 text-[10px] w-fit">{n.source}</span>
-                                                        <span className="text-[11px] font-medium hover:underline">{n.title}</span>
-                                                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
-                                                            {new Date(n.published_at).toLocaleDateString('th-TH', { month: 'short', day: 'numeric' })}
-                                                        </span>
-                                                    </a>
-                                                ))
+                                                news.slice(0, 8).map((n: any, i: number) => {
+                                                    // bd:ui-honesty-2026-09 F10 — no fallback existed here
+                                                    // (href={n.url} rendered href="undefined" when missing);
+                                                    // same non-clickable treatment as NewsPage.
+                                                    const hasUrl = !!n.url;
+                                                    const Tag: any = hasUrl ? 'a' : 'div';
+                                                    // Oliver iter3 reject: role="link"+aria-disabled on a
+                                                    // non-focusable div is an ARIA violation (widget role
+                                                    // with nothing to back it). A url-less item is plain
+                                                    // content, not a disabled widget — no widget role/state
+                                                    // at all; absence conveyed via sr-only text instead.
+                                                    const linkProps = hasUrl
+                                                        ? { href: n.url, target: '_blank', rel: 'noreferrer' }
+                                                        : {};
+                                                    return (
+                                                        <Tag
+                                                            key={i}
+                                                            {...linkProps}
+                                                            className={`flex flex-col gap-1 p-2 rounded-lg transition-colors ${hasUrl ? '' : 'opacity-60 cursor-default'}`}
+                                                            onMouseEnter={hasUrl ? (e) => (e.currentTarget.style.background = 'var(--color-hover)') : undefined}
+                                                            onMouseLeave={hasUrl ? (e) => (e.currentTarget.style.background = 'transparent') : undefined}
+                                                        >
+                                                            {!hasUrl && <span className="sr-only">ไม่มีลิงก์บทความ</span>}
+                                                            <span className="badge badge-violet flex-shrink-0 text-[10px] w-fit">{n.source}</span>
+                                                            <span className={`text-[11px] font-medium ${hasUrl ? 'hover:underline' : ''}`}>{n.title}</span>
+                                                            <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                                                                {new Date(n.published_at).toLocaleDateString('th-TH', { month: 'short', day: 'numeric' })}
+                                                            </span>
+                                                        </Tag>
+                                                    );
+                                                })
                                             )}
                                         </div>
                                     )}

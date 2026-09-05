@@ -33,15 +33,27 @@ function NewsCard({ n }: { n: any }) {
             ? { bg: 'rgba(248,113,113,0.13)', text: 'var(--color-red)' }
             : { bg: 'rgba(148,163,184,0.10)', text: 'var(--color-text-sub)' };
 
+    // bd:ui-honesty-2026-09 F10 — no url means no real article behind this
+    // card; render a non-interactive <div> instead of a dead `href="#"` link.
+    const hasUrl = !!n.url;
+    const Tag = hasUrl ? 'a' : 'div';
+    // Oliver iter3 reject: role="link"+aria-disabled on a non-focusable div
+    // is an ARIA violation (widget role with nothing to back it — screen
+    // reader announces "link, unavailable" for something that isn't a link
+    // and can't be reached/activated). A url-less item is plain content, not
+    // a disabled widget — no widget role/state at all; absence is conveyed
+    // via a visually-hidden text marker instead of implied by opacity alone.
+    const linkProps = hasUrl
+        ? { href: n.url, target: '_blank', rel: 'noopener noreferrer' }
+        : {};
+
     return (
-        <a
-            href={n.url || '#'}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="panel border rounded-xl p-4 cursor-pointer transition-colors block"
+        <Tag
+            {...linkProps}
+            className={`panel border rounded-xl p-4 transition-colors block ${hasUrl ? 'cursor-pointer' : 'cursor-default opacity-60'}`}
             style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)', textDecoration: 'none', color: 'inherit' }}
-            onMouseEnter={e => ((e.currentTarget as HTMLElement).style.background = 'var(--color-hover)')}
-            onMouseLeave={e => ((e.currentTarget as HTMLElement).style.background = '')}
+            onMouseEnter={hasUrl ? (e) => ((e.currentTarget as HTMLElement).style.background = 'var(--color-hover)') : undefined}
+            onMouseLeave={hasUrl ? (e) => ((e.currentTarget as HTMLElement).style.background = '') : undefined}
         >
             <div className="flex items-start gap-3">
                 <span className="badge text-[10px] font-semibold shrink-0 mt-0.5 px-2 py-0.5 rounded-md"
@@ -49,6 +61,7 @@ function NewsCard({ n }: { n: any }) {
                     {sentiment === 'positive' ? '▲' : sentiment === 'negative' ? '▼' : '◆'}
                 </span>
                 <div className="flex-1 min-w-0">
+                    {!hasUrl && <span className="sr-only">ไม่มีลิงก์บทความ</span>}
                     <div className="text-sm font-medium mb-1.5 leading-snug line-clamp-2">{n.title}</div>
                     <div className="flex items-center gap-2">
                         <span className="text-[10px] px-1.5 py-0.5 rounded"
@@ -71,7 +84,7 @@ function NewsCard({ n }: { n: any }) {
                     </span>
                 )}
             </div>
-        </a>
+        </Tag>
     );
 }
 
