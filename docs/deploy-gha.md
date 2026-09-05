@@ -1,4 +1,4 @@
-# Deploy ShotockViz via GitHub Actions → fresh droplet (188.166.234.146)
+# Deploy ShotockViz via GitHub Actions → fresh droplet
 
 > New, **standalone** droplet — separate from the ShoDe Town shared droplet described in
 > `docs/deploy.md`. That doc + `scripts/deploy.sh` + `docker-compose.prod.yml` are untouched
@@ -8,7 +8,9 @@
 
 ## Prerequisites (R0 — do these before the first deploy)
 
-1. **DNS**: an A record for your `DOMAIN` (e.g. `stock.shode.dev`) → `188.166.234.146`.
+1. **DNS**: an A record for your `DOMAIN` (e.g. `stock.shode.dev`) → the current droplet's
+   IP (printed by `scripts/bootstrap-server.sh` at the end of its run, or `gh variable get
+   DEPLOY_HOST --repo shode666/shotockviz` after `setup-gh-secrets.sh` has been run once).
    Caddy's automatic Let's Encrypt TLS **will fail** if this isn't in place first.
 2. **Google OAuth**: add `https://<DOMAIN>` to Google Cloud Console → OAuth 2.0 Client →
    Authorized JavaScript origins.

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# bootstrap-server.sh — ONE-TIME setup for a fresh droplet (188.166.234.146 / ssh alias my-do)
+# bootstrap-server.sh — ONE-TIME setup for a fresh droplet (ssh alias my-do —
+# see your ~/.ssh/config Host entry for the current target IP; deliberately
+# not hardcoded here so this script keeps working after the next droplet move)
 #
 # Run from your Mac (nothing is installed on the server yet):
 #   ssh my-do 'bash -s' < scripts/bootstrap-server.sh
@@ -16,7 +18,7 @@ ENV_FILE="${APP_DIR}/.env"
 log() { printf '==> %s\n' "$1"; }
 
 if [ "$(id -u)" -ne 0 ]; then
-  echo "This script must run as root on the server (ssh my-do defaults to root@188.166.234.146)." >&2
+  echo "This script must run as root on the server (check the 'my-do' Host entry in ~/.ssh/config for the current target)." >&2
   exit 1
 fi
 
@@ -125,10 +127,12 @@ ENVEOF
   chmod 600 "${ENV_FILE}"
 fi
 
+SERVER_IP="$(curl -fsS4 --max-time 5 ifconfig.me 2>/dev/null || curl -fsS4 --max-time 5 icanhazip.com 2>/dev/null || echo "<run 'curl -4 ifconfig.me' on this server to find it>")"
+
 log "Bootstrap done."
 echo
 echo "Next steps:"
 echo "  1. Edit ${ENV_FILE} on the server with real values (chmod already 600)."
-echo "  2. On your Mac: bash scripts/setup-gh-secrets.sh --repo shode666/shotockviz"
-echo "  3. Point DOMAIN's DNS A record at 188.166.234.146 (required before first deploy)."
+echo "  2. On your Mac: bash scripts/setup-gh-secrets.sh --repo shode666/shotockviz --ip ${SERVER_IP}"
+echo "  3. Point DOMAIN's DNS A record at ${SERVER_IP} (required before first deploy)."
 echo "  4. Run the deploy workflow: gh workflow run deploy.yml --repo shode666/shotockviz"

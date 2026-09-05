@@ -8,12 +8,17 @@
 # - Sets repo variables: DEPLOY_HOST, DEPLOY_USER, DOMAIN, DEPLOY_KNOWN_HOSTS
 #
 # Usage:
-#   bash scripts/setup-gh-secrets.sh --repo shode666/shotockviz [--host my-do] [--ip 188.166.234.146]
+#   bash scripts/setup-gh-secrets.sh --repo shode666/shotockviz --ip <droplet-ip> [--host my-do]
+#   (or export DEPLOY_HOST=<droplet-ip> instead of passing --ip)
+#
+# No default IP is baked in on purpose — the droplet has moved before
+# (188.166.234.146 -> 68.183.182.190) and a stale hardcoded fallback here would
+# silently re-point the GH `DEPLOY_HOST` variable at a dead host on the next move.
 set -euo pipefail
 
 REPO="shode666/shotockviz"
 SSH_ALIAS="my-do"
-DEPLOY_IP="188.166.234.146"
+DEPLOY_IP="${DEPLOY_HOST:-}"
 DEPLOY_USER="root"
 KEY_PATH="${HOME}/.ssh/shotockviz_deploy"
 
@@ -35,6 +40,12 @@ for bin in gh ssh ssh-keygen ssh-keyscan; do
     exit 1
   fi
 done
+
+if [ -z "${DEPLOY_IP}" ]; then
+  echo "Deploy IP not set. Pass --ip <droplet-ip> or export DEPLOY_HOST=<droplet-ip>." >&2
+  echo "(bootstrap-server.sh prints the current droplet's IP at the end of its run.)" >&2
+  exit 1
+fi
 
 if ! gh auth status >/dev/null 2>&1; then
   echo "gh is not logged in. Run: gh auth login" >&2
