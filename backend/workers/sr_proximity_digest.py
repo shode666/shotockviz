@@ -171,6 +171,7 @@ def send_sr_proximity_digest(self, slot: str):
         import redis
         from sqlalchemy import create_engine, select
         from sqlalchemy.orm import Session
+        from core import cache_keys
         from models.user import User
         from models.watchlist import Watchlist, WatchlistItem
         from models.sr_level import SRLevel
@@ -235,7 +236,11 @@ def send_sr_proximity_digest(self, slot: str):
                 })
 
         # Q3 — current prices, 1 Redis MGET round-trip.
-        prices_raw = r.mget([f"cache:quote:{s}" for s in all_symbols])
+        # bd:shotockviz-983 — same hand-built-key bug as alert_checker.py
+        # (wrong "cache:quote:{s}" prefix vs the real "quote:{s}" that
+        # cache_and_publish_quotes() writes, core/cache_keys.py:36-38).
+        # Fixed to go through cache_keys.quote() so it can't drift again.
+        prices_raw = r.mget([cache_keys.quote(s) for s in all_symbols])
         prices_by_symbol: dict[str, float] = {}
         for symbol, raw in zip(all_symbols, prices_raw):
             if not raw:

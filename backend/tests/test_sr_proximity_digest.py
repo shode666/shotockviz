@@ -199,8 +199,8 @@ def _run_digest(sqlite_db_url, slot, fake_redis, mock_post):
 class TestSkipCases:
     def test_no_chat_id_and_empty_watchlist_users_are_skipped_silently(self, sqlite_db_url):
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),
-            "cache:quote:NVDA": _quote(118.40),
+            "quote:AOT.BK": _quote(61.25),
+            "quote:NVDA": _quote(118.40),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         _run_digest(sqlite_db_url, "set_open", fake_redis, mock_post)
@@ -216,8 +216,8 @@ class TestSourceFiltering:
         # source must not be counted — only manual_import (60.00, 63.50)
         # and auto_pivot (120.00) should show up in the message.
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.20),
-            "cache:quote:NVDA": _quote(118.40),
+            "quote:AOT.BK": _quote(61.20),
+            "quote:NVDA": _quote(118.40),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         _run_digest(sqlite_db_url, "set_open", fake_redis, mock_post)
@@ -234,8 +234,8 @@ class TestSourceFiltering:
 class TestBatchQueryNoNPlus1:
     def test_two_dq_round_trips_plus_one_mget(self, sqlite_db_url):
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),
-            "cache:quote:NVDA": _quote(118.40),
+            "quote:AOT.BK": _quote(61.25),
+            "quote:NVDA": _quote(118.40),
         })
         fake_redis.mget = MagicMock(side_effect=fake_redis.mget)
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
@@ -264,8 +264,8 @@ class TestBatchQueryNoNPlus1:
 class TestRunLockDedupe:
     def test_calling_same_slot_twice_same_day_sends_once(self, sqlite_db_url):
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),
-            "cache:quote:NVDA": _quote(118.40),
+            "quote:AOT.BK": _quote(61.25),
+            "quote:NVDA": _quote(118.40),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
 
@@ -276,8 +276,8 @@ class TestRunLockDedupe:
 
     def test_different_slot_same_day_is_not_blocked_by_the_other_slots_lock(self, sqlite_db_url):
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),
-            "cache:quote:NVDA": _quote(118.40),
+            "quote:AOT.BK": _quote(61.25),
+            "quote:NVDA": _quote(118.40),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
 
@@ -293,8 +293,8 @@ class TestNoProximityMessageIntegration:
         # non-empty watchlist + chat_id, so must get the "no proximity"
         # message, not silence (spec user-confirmed decision).
         fake_redis = _FakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(200.0),
-            "cache:quote:NVDA": _quote(500.0),
+            "quote:AOT.BK": _quote(200.0),
+            "quote:NVDA": _quote(500.0),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         _run_digest(sqlite_db_url, "set_open", fake_redis, mock_post)

@@ -1,6 +1,7 @@
 """Celery task for checking price/indicator alerts."""
 from datetime import datetime, timezone
 from celery import shared_task
+from core import cache_keys
 from core.logger import get_logger
 
 logger = get_logger(__name__)
@@ -65,10 +66,27 @@ def check_all_alerts(self):
 
             for alert in alerts:
                 try:
-                    # Key must match price_fetcher._cache_and_publish() which stores
-                    # at cache:quote:{sym}  (not plain quote:{sym})
-                    cached = r.get(f"cache:quote:{alert.symbol}")
+                    # bd:shotockviz-983 — must go through cache_keys.quote()
+                    # (single source of truth, core/cache_keys.py) so this
+                    # always matches whatever key price_fetcher's
+                    # cache_and_publish_quotes() actually wrote under. A
+                    # hand-built f-string here previously drifted from that
+                    # key (used "cache:quote:{sym}" vs the real
+                    # "quote:{sym}") and silently no-op'd every alert on
+                    # every cycle — see workers/helpers/cache_publisher.py:38.
+                    cache_key = cache_keys.quote(alert.symbol)
+                    cached = r.get(cache_key)
                     if not cached:
+                        # Visible-by-design: a persistent miss here means
+                        # every ACTIVE alert for this symbol silently never
+                        # fires. No retry/backfill added (out of scope) —
+                        # this is observability only.
+                        logger.warning(
+                            "Alert check: no cached quote, skipping",
+                            alert_id=alert.id,
+                            symbol=alert.symbol,
+                            cache_key=cache_key,
+                        )
                         continue
 
                     quote = json.loads(cached)

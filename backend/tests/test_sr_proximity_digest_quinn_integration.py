@@ -116,8 +116,8 @@ class TestFullMultiUserFlow:
     def test_a_gets_digest_b_gets_no_proximity_c_and_d_get_nothing(self, multi_user_db):
         sqlite_db_url, _ = multi_user_db
         fake_redis = _RealLockFakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),   # (60-61.25)/60 = 2.08% -> match
-            "cache:quote:PTT.BK": _quote(35.00),   # nowhere near 999.00 -> no match
+            "quote:AOT.BK": _quote(61.25),   # (60-61.25)/60 = 2.08% -> match
+            "quote:PTT.BK": _quote(35.00),   # nowhere near 999.00 -> no match
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         _run(sqlite_db_url, "set_open", fake_redis, mock_post)
@@ -147,8 +147,8 @@ class TestRealConcurrentRunLockRace:
         """
         sqlite_db_url, _ = multi_user_db
         fake_redis = _RealLockFakeRedis(quotes={
-            "cache:quote:AOT.BK": _quote(61.25),
-            "cache:quote:PTT.BK": _quote(35.00),
+            "quote:AOT.BK": _quote(61.25),
+            "quote:PTT.BK": _quote(35.00),
         })
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         barrier = threading.Barrier(2)
@@ -203,7 +203,7 @@ class TestOverlappingManualAndAutoPivotLevels:
         engine.dispose()
 
         sqlite_db_url = f"sqlite:///{db_path}"
-        fake_redis = _RealLockFakeRedis(quotes={"cache:quote:AOT.BK": _quote(61.25)})
+        fake_redis = _RealLockFakeRedis(quotes={"quote:AOT.BK": _quote(61.25)})
         mock_post = MagicMock(return_value=MagicMock(status_code=200))
         _run(sqlite_db_url, "set_open", fake_redis, mock_post)
 
