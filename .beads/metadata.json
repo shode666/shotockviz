@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "shotockviz",
+  "project_id": "c50c410c-e862-4dad-b17b-1d81bdcbbe8f"
+}
