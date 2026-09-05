@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 from celery import shared_task
 from core.logger import get_logger
-from core.symbol_utils import is_crypto
+from core.symbol_utils import is_crypto, is_ambiguous_bare_thai_symbol
 
 logger = get_logger(__name__)
 
@@ -27,13 +27,6 @@ _THAI_FUND_PATTERNS = [
     re.compile(r'^[A-Z]+-[A-Z]+'),   # K-CHINA, B-INCOME pattern (but NOT BRK-B)
 ]
 
-# Known Thai fund prefixes (บลจ. / asset management companies)
-_THAI_FUND_PREFIXES = (
-    "SCB", "SCBS", "PRINCIPAL", "KFIN", "KF", "KTAM", "KT-", "K-",
-    "B-", "BBLAM", "TISCO", "TMB", "UOBAM", "ONE-", "ASP", "PHATRA",
-    "MFC", "LHFUND", "KRUNGSRI", "WE-", "MEGA", "DAOL",
-)
-
 # Yahoo Finance only accepts simple tickers
 _YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
 
@@ -41,7 +34,15 @@ _YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
 def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
     """Determine market type for a symbol.
 
-    Returns: 'SET', 'US', 'FUND', or 'CRYPTO'
+    Returns: 'SET', 'US', 'FUND', 'CRYPTO', or 'AMBIGUOUS'.
+
+    bd:shotockviz-m6q — a bare symbol that only *starts with* a Thai
+    fund-house prefix (SCB, TISCO, K-, B-, ASP, ...) used to fall straight
+    through to 'FUND' whenever yfinance had no confirmed live price for it.
+    That silently mis-served real SET equities typed without ".BK" (SCB,
+    TISCO are themselves real tickers) — see is_ambiguous_bare_thai_symbol's
+    docstring for why neither a local symbol list nor yfinance can resolve
+    this reliably. 'AMBIGUOUS' tells the caller to refuse to guess.
     """
     sym_upper = symbol.upper()
 
@@ -53,16 +54,18 @@ def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
     if is_crypto(sym_upper):
         return "CRYPTO"
 
-    # Thai fund detection: special characters, known prefixes
+    # Thai fund detection: special characters (unambiguous fund-code shapes,
+    # e.g. "SCBS&P500", "K-CHINA") — these never collide with a bare SET
+    # ticker, so they stay a direct FUND classification.
     if any(p.search(sym_upper) for p in _THAI_FUND_PATTERNS):
         return "FUND"
-    if any(sym_upper.startswith(prefix) for prefix in _THAI_FUND_PREFIXES):
+    if is_ambiguous_bare_thai_symbol(sym_upper):
         # Check if it's a known non-fund (e.g., SCBS could be confused)
         # If yfinance returned valid stock data, trust that
         if yf_info and yf_info.get("regularMarketPrice"):
             pass  # let it fall through to SET/US detection
         else:
-            return "FUND"
+            return "AMBIGUOUS"
 
     # SET stocks end with .BK
     if sym_upper.endswith(".BK"):
@@ -82,6 +85,17 @@ def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
 
     # Default: if simple ticker without .BK → US
     return "US"
+
+
+def _should_register(market: str) -> bool:
+    """bd:shotockviz-m6q — pure gate so this decision is unit-testable
+    without a DB connection. 'AMBIGUOUS' must never be written to the
+    `stocks` table: MarketType has no such enum value, and Tara's finding
+    was precisely that a wrong-but-confident write here is sticky (a later
+    fix needs a data cleanup too). Refusing to write leaves the symbol
+    unregistered — retried by scan_unregistered, not permanently wrong.
+    """
+    return market != "AMBIGUOUS"
 
 
 @shared_task(bind=True, max_retries=1, default_retry_delay=30)
@@ -141,6 +155,20 @@ def register_symbol(self, symbol: str):
 
         # Classify market type
         market = _classify_market(sym, yf_info)
+
+        # bd:shotockviz-m6q — refuse to write an ambiguous bare Thai-fund-
+        # prefix symbol (SCB, TISCO, ASP, K-, B-...) as a guessed market.
+        # The watchlist API endpoint already rejects these at input time
+        # with a clear ".BK" message; this is defense-in-depth for the
+        # other callers (scan_unregistered, portfolio) that reach this
+        # task directly.
+        if not _should_register(market):
+            logger.warning(
+                "Symbol ambiguous, not registering — needs explicit .BK "
+                "suffix or exact fund code",
+                symbol=sym,
+            )
+            return {"symbol": sym, "status": "skipped_ambiguous", "market": market}
 
         # Insert into stocks table
         with engine.connect() as conn:

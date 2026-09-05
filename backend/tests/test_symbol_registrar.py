@@ -8,7 +8,8 @@ bd:features-2026-09 slice B — regression test for the bug documented in
 FUND. The fix adds an `is_crypto()` check as the FIRST branch of
 `_classify_market()`, before `_THAI_FUND_PATTERNS` is ever consulted.
 """
-from workers.symbol_registrar import _classify_market
+import pytest
+from workers.symbol_registrar import _classify_market, _should_register
 
 
 # ── Regression: crypto must classify as CRYPTO, not FUND ────────────────────
@@ -65,3 +66,48 @@ class TestClassifyMarketNoRegression:
         """GLD (the gold ETF slice, Tara §2.2) needs zero classifier changes
         — plain US ticker, no suffix, no dash."""
         assert _classify_market("GLD") == "US"
+
+
+# ── bd:shotockviz-m6q — bare Thai fund-prefix collisions must not become
+# a confident FUND guess. SCB/TISCO/ASP are real SET tickers too; the app
+# requires an explicit ".BK" (accepted convention) so a bare form is
+# ambiguous, not FUND. ─────────────────────────────────────────────────────
+
+class TestClassifyMarketAmbiguousBareThaiPrefix:
+    def test_bare_scb_is_ambiguous_not_fund(self):
+        assert _classify_market("SCB") == "AMBIGUOUS"
+
+    def test_bare_tisco_is_ambiguous_not_fund(self):
+        assert _classify_market("TISCO") == "AMBIGUOUS"
+
+    def test_bare_asp_is_ambiguous_not_fund(self):
+        assert _classify_market("ASP") == "AMBIGUOUS"
+
+    def test_scb_with_bk_suffix_is_set_unaffected(self):
+        """The suffixed form is unambiguous and must be completely
+        unaffected by this fix — still resolves via the .BK branch."""
+        assert _classify_market("SCB.BK") == "SET"
+
+    def test_yfinance_confirmed_price_still_passes_through(self):
+        """Pre-existing behavior (not what m6q reports) is untouched: if
+        yfinance genuinely reports a live price for the bare symbol, it
+        still falls through to SET/US detection instead of being treated
+        as ambiguous."""
+        yf_info = {"regularMarketPrice": 123.45, "exchange": "NMS"}
+        assert _classify_market("SCB", yf_info) == "US"
+
+    def test_k_china_and_b_income_regex_path_unaffected(self):
+        """These hit the earlier, unambiguous `_THAI_FUND_PATTERNS` regex
+        branch (dash-joined fund-code shape) — never reach the prefix
+        check, so must still classify FUND exactly as before."""
+        assert _classify_market("K-CHINA") == "FUND"
+        assert _classify_market("B-INCOME") == "FUND"
+
+
+class TestShouldRegister:
+    def test_ambiguous_market_is_not_registered(self):
+        assert _should_register("AMBIGUOUS") is False
+
+    @pytest.mark.parametrize("market", ["SET", "US", "FUND", "CRYPTO"])
+    def test_known_markets_are_registered(self, market):
+        assert _should_register(market) is True

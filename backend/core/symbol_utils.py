@@ -114,3 +114,44 @@ def is_crypto(symbol: str) -> bool:
     and internal dot-form BRK.B. THBUSD=X ends with "=X", not "-USD" → no clash.
     """
     return symbol.upper().endswith("-USD")
+
+
+# ── Thai fund-prefix ambiguity (bd:shotockviz-m6q) ────────────────────────────
+# Known Thai fund-house (บลจ.) prefixes. Several of these — SCB, TISCO, K-,
+# B-, ASP — are simultaneously real SET equity tickers (Siam Commercial Bank,
+# Tisco Financial Group, ...) and fund-code prefixes (SCBLT1, TISCOGF,
+# K-GINCOME, B-INCOME, ...). The app's accepted convention is that SET
+# tickers always carry an explicit ".BK" suffix; a bare symbol that merely
+# *starts with* one of these prefixes cannot be told apart from the real
+# stock without that suffix.
+#
+# NO MAGIC evidence for why this can't be resolved by guessing instead:
+#   - No comprehensive local SET symbol list exists to check against —
+#     `backend/scripts/seed_stocks.py` hardcodes 15 SET names only.
+#   - Live yfinance lookup is not a reliable disambiguator either: bare
+#     "SCB" resolves to Yahoo's own shortName "1249" / quoteType
+#     MUTUALFUND / regularMarketPrice None (a generic Yahoo-Data
+#     placeholder, not real SCB.BK or a real Thai fund) — same for "ASP" ->
+#     "4507". Verified via `docker-compose exec backend python3 -c
+#     "yfinance..."` on 2026-09-05; the data yfinance returns for a bare
+#     ambiguous symbol is itself untrustworthy signal.
+# Given both potential sources of truth are absent/unreliable, treat the
+# bare form as ambiguous rather than silently picking a market.
+THAI_FUND_PREFIXES: tuple[str, ...] = (
+    "SCB", "SCBS", "PRINCIPAL", "KFIN", "KF", "KTAM", "KT-", "K-",
+    "B-", "BBLAM", "TISCO", "TMB", "UOBAM", "ONE-", "ASP", "PHATRA",
+    "MFC", "LHFUND", "KRUNGSRI", "WE-", "MEGA", "DAOL",
+)
+
+
+def is_ambiguous_bare_thai_symbol(symbol: str) -> bool:
+    """True if `symbol` collides with a Thai fund-house prefix but carries
+    no `.BK`/`.MAI` suffix to disambiguate it from a real SET equity.
+
+    Symbols already carrying the market suffix (e.g. "SCB.BK") are never
+    ambiguous — the suffix is the app's accepted disambiguation signal.
+    """
+    sym_upper = symbol.upper()
+    if is_thai_stock(sym_upper):
+        return False
+    return any(sym_upper.startswith(prefix) for prefix in THAI_FUND_PREFIXES)

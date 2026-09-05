@@ -4,6 +4,7 @@ from sqlalchemy import select, delete, update
 from sqlalchemy.orm import selectinload
 
 from core.database import get_db
+from core.symbol_utils import is_ambiguous_bare_thai_symbol
 from models.user import User
 from models.watchlist import Watchlist, WatchlistItem
 from models.schemas import WatchlistCreate, WatchlistUpdate, WatchlistItemAdd, WatchlistResponse, WatchlistReorderRequest
@@ -91,6 +92,23 @@ async def add_stock(
     db: AsyncSession = Depends(get_db),
 ):
     """Add a stock to a watchlist."""
+    sym = body.symbol.upper()
+
+    # bd:shotockviz-m6q — SCB, TISCO, K-, B-, ASP (and other Thai fund-house
+    # prefixes) are simultaneously real SET tickers and fund-code prefixes.
+    # The app's accepted convention is that SET tickers carry an explicit
+    # ".BK" — a bare symbol here cannot be resolved to one or the other, so
+    # reject it and say so, rather than silently registering it as the
+    # wrong instrument (see workers/symbol_registrar.py _classify_market).
+    if is_ambiguous_bare_thai_symbol(sym):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{sym}' is ambiguous. For the SET stock, type '{sym}.BK'. "
+                f"For a Thai mutual fund, use its exact fund code."
+            ),
+        )
+
     result = await db.execute(
         select(Watchlist).where(Watchlist.id == watchlist_id, Watchlist.user_id == user.id)
     )

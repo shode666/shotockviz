@@ -7,10 +7,12 @@ from core.symbol_utils import (
     is_thai_stock,
     is_fund,
     is_crypto,
+    is_ambiguous_bare_thai_symbol,
     partition_by_market,
     deduplicate,
     YAHOO_SYMBOL_MAP,
     SUFFIX_TO_MARKET,
+    THAI_FUND_PREFIXES,
 )
 
 
@@ -162,6 +164,36 @@ class TestIsCrypto:
     ])
     def test_allowlist_and_edge_cases(self, symbol, expected):
         assert is_crypto(symbol) is expected
+
+
+# ── is_ambiguous_bare_thai_symbol (bd:shotockviz-m6q) ─────────────────────────
+
+class TestIsAmbiguousBareThaiSymbol:
+    @pytest.mark.parametrize("symbol", [
+        "SCB",       # Siam Commercial Bank ticker AND a fund-house prefix
+        "scb",       # case-insensitive
+        "TISCO",     # Tisco Financial Group ticker AND a fund-house prefix
+        "ASP",       # Asia Plus AND a fund-house prefix
+        "K-",        # bare prefix itself
+        "B-",
+        "SCBX",      # anything starting with the prefix, not just an exact match
+    ])
+    def test_bare_prefix_collision_is_ambiguous(self, symbol):
+        assert is_ambiguous_bare_thai_symbol(symbol) is True
+
+    @pytest.mark.parametrize("symbol", [
+        "SCB.BK",    # explicit suffix disambiguates — never ambiguous
+        "TISCO.BK",
+        "AAPL",      # no prefix collision at all
+        "PTT.BK",
+        "BTC-USD",
+    ])
+    def test_suffixed_or_unrelated_symbol_is_not_ambiguous(self, symbol):
+        assert is_ambiguous_bare_thai_symbol(symbol) is False
+
+    def test_prefix_list_is_nonempty_and_uppercase(self):
+        assert THAI_FUND_PREFIXES
+        assert all(p == p.upper() for p in THAI_FUND_PREFIXES)
 
 
 # ── deduplicate ───────────────────────────────────────────────────────────────
