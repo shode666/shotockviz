@@ -23,6 +23,7 @@ import models.symbol_mapping    # noqa: F401  — V2: symbol provider mapping
 import models.corporate_action  # noqa: F401  — V2: dividend/split events
 import models.financial_history # noqa: F401  — V2: 10-year financial scorecard
 import models.earnings_event    # noqa: F401  — V2: EPS surprise tracker
+import models.sr_level          # noqa: F401  — bd:features-2026-09: S/R levels
 
 # ── Alembic Config ────────────────────────────────────────────────────────────
 config = context.config

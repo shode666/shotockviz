@@ -104,3 +104,13 @@ def partition_by_market(symbols: list[str]) -> tuple[list[str], list[str]]:
 def deduplicate(symbols: list[str]) -> list[str]:
     """Remove duplicates while preserving order."""
     return list(dict.fromkeys(symbols))
+
+
+# ── Crypto detection (bd:features-2026-09 slice B — Tara §2.3 allowlist) ─────
+def is_crypto(symbol: str) -> bool:
+    """BTC-USD / ETH-USD (intentional allowlist-by-suffix, not open regex).
+
+    Safe vs BRK-B/BF-B (suffix "-B", not "-USD", see YAHOO_SYMBOL_MAP above)
+    and internal dot-form BRK.B. THBUSD=X ends with "=X", not "-USD" → no clash.
+    """
+    return symbol.upper().endswith("-USD")

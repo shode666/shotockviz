@@ -22,6 +22,8 @@ celery_app = Celery(
         "workers.symbol_registrar",
         "workers.index_populator",
         "workers.news_fetcher",
+        "workers.sr_auto_pivot",
+        "workers.sr_proximity_digest",
         # V2 workers
         "workers.corporate_actions_fetcher",
         "workers.financials_history_fetcher",
@@ -127,5 +129,26 @@ celery_app.conf.beat_schedule = {
     "fetch-fear-greed": {
         "task": "workers.fgi_fetcher.fetch_fear_greed",
         "schedule": crontab(minute="*/30"),
+    },
+    # bd:features-2026-09 slice A — daily-only, no dirty-flag/recompute
+    # avoidance by design (Tara: over-engineering for this workload).
+    # 18:00 ICT = 11:00 UTC, after SET close (16:30 ICT), before US open
+    # (21:30 ICT).
+    "compute-auto-pivots": {
+        "task": "workers.sr_auto_pivot.compute_auto_pivots",
+        "schedule": crontab(hour=11, minute=0),
+    },
+    # bd:features-2026-09 iter 8 — S/R proximity Telegram digest, 2x/day
+    # (16-sara-sr-proximity-digest-spec.md §2). UTC times below correspond
+    # to 09:30 ICT (before SET open) and 19:30 ICT (before US pre-market).
+    "sr-digest-set-open": {
+        "task": "workers.sr_proximity_digest.send_sr_proximity_digest",
+        "schedule": crontab(hour=2, minute=30),  # 09:30 ICT
+        "args": ("set_open",),
+    },
+    "sr-digest-us-premarket": {
+        "task": "workers.sr_proximity_digest.send_sr_proximity_digest",
+        "schedule": crontab(hour=12, minute=30),  # 19:30 ICT
+        "args": ("us_premarket",),
     },
 }

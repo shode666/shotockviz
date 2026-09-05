@@ -12,7 +12,7 @@ from core.database import create_tables
 from core.logger import setup_logging, get_logger
 from core.redis import init_redis, close_redis
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
-from api.routes import dashboard, notes, portfolio_performance, admin, backtesting
+from api.routes import dashboard, notes, portfolio_performance, admin, backtesting, sr_levels
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 from schemas.envelope import install_error_envelope
@@ -294,6 +294,7 @@ api_v1.include_router(portfolio.router)
 api_v1.include_router(portfolio_performance.router)   # equity curve
 api_v1.include_router(alerts.router)
 api_v1.include_router(drawings.router)
+api_v1.include_router(sr_levels.router)         # bd:features-2026-09 slice 2 — GET /sr-levels/{symbol}
 api_v1.include_router(screener.router)
 api_v1.include_router(dashboard.router)                # market overview
 api_v1.include_router(notes.router)                    # stock notes

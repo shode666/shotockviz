@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response validation."""
 from datetime import datetime, date
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─── Auth ──────────────────────────────────────────────────────────────────
@@ -27,6 +27,23 @@ class UserResponse(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# bd:features-2026-09 slice 3 — Sara spec §5. `pattern` matches Telegram
+# chat id shape (int64, negative for groups); this is the ONE write path
+# for `users.telegram_chat_id`, so it is the enforcement point for the
+# numeric-shape invariant the DB CHECK (Postgres-only, see models/user.py
+# deviation note) can't be mirrored for in SQLite tests.
+class UserSettingsResponse(BaseModel):
+    telegram_chat_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserSettingsUpdate(BaseModel):
+    telegram_chat_id: Optional[str] = Field(
+        default=None, pattern=r"^-?\d{1,20}$"
+    )
 
 
 # ─── Stock ─────────────────────────────────────────────────────────────────
@@ -237,6 +254,24 @@ class DrawingResponse(BaseModel):
     style_json: dict
     created_at: datetime
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ─── SR Level ──────────────────────────────────────────────────────────────
+# bd:features-2026-09 slice 2 — GET-only response schema for sr_levels
+# (models/sr_level.py). All 3 sources (manual_import/auto_pivot/user_created)
+# are returned, not just manual_import — future-proofs the endpoint for
+# slice-3 auto-pivot/user-drawn rows without another schema/endpoint change.
+
+class SRLevelResponse(BaseModel):
+    id: int
+    symbol: str
+    price: float
+    level_type: str
+    tag: Optional[str] = None
+    color: Optional[str] = None
+    source: str
 
     model_config = ConfigDict(from_attributes=True)
 

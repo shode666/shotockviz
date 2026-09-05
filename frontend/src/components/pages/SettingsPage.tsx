@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import toast from 'react-hot-toast';
 import { Settings as SettingsIcon, Palette, TrendingUp, Bell, Moon, Sun, BellOff } from 'lucide-react';
 import useAppStore from '@/store/appStore';
+import authService from '@/services/authService';
 
 const CATEGORIES = [
     { key: 'general', href: '#general', label: 'General', Icon: Palette },
@@ -26,12 +27,42 @@ export default function SettingsPage() {
     // one. setTheme(key) selects the clicked card's theme explicitly instead
     // (appStore.ts).
     const { theme, setTheme } = useAppStore();
-    // Telegram chat id — UI only, local state (bd:ux-2026-09). Backend wiring
-    // for actually saving/verifying this id belongs to the features-2026-09 bd.
+    // bd:features-2026-09 slice 3 — wired to GET/PATCH /api/v1/auth/settings.
+    // PATCH sends a real Telegram test message server-side (D2); a 422 here
+    // means the chat id is wrong or the user never messaged the bot — the
+    // axios error interceptor (api.ts) already surfaces that as a toast
+    // using the backend's Thai error message, so the local catch below
+    // only needs to reset the saving state, not duplicate the toast.
     const [telegramChatId, setTelegramChatId] = useState('');
+    const [isLoadingSettings, setIsLoadingSettings] = useState(true);
+    const [isSaving, setIsSaving] = useState(false);
 
-    const handleSave = () => {
-        toast.success('บันทึกการตั้งค่าแล้ว (แสดงผลเท่านั้น — การเชื่อม Telegram จริงยังไม่เปิดใช้งาน)');
+    useEffect(() => {
+        let cancelled = false;
+        authService.getSettings()
+            .then(({ data }) => {
+                if (!cancelled) setTelegramChatId(data.telegram_chat_id ?? '');
+            })
+            .catch(() => { /* silent — interceptor's 401/404 handling already applies */ })
+            .finally(() => { if (!cancelled) setIsLoadingSettings(false); });
+        return () => { cancelled = true; };
+    }, []);
+
+    const handleSave = async () => {
+        setIsSaving(true);
+        try {
+            await authService.updateSettings({ telegram_chat_id: telegramChatId || null });
+            toast.success(
+                telegramChatId
+                    ? 'บันทึกแล้ว — ส่งข้อความทดสอบไปที่ Telegram สำเร็จ ✅'
+                    : 'บันทึกการตั้งค่าแล้ว'
+            );
+        } catch {
+            // Error toast already shown by the axios response interceptor
+            // (api.ts) using the backend's clear failure reason.
+        } finally {
+            setIsSaving(false);
+        }
     };
 
     return (
@@ -140,6 +171,7 @@ export default function SettingsPage() {
                                     placeholder="เช่น 128845067"
                                     value={telegramChatId}
                                     onChange={(e) => setTelegramChatId(e.target.value)}
+                                    disabled={isLoadingSettings || isSaving}
                                     aria-describedby="settings-telegram-hint"
                                 />
                                 <p id="settings-telegram-hint" className="mt-2 text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
@@ -156,7 +188,13 @@ export default function SettingsPage() {
 
                         <div className="flex justify-end gap-2 mb-5">
                             <Link to="/dashboard" className="btn-outline px-5 py-2 text-xs">ยกเลิก</Link>
-                            <button onClick={handleSave} className="btn-accent px-5 py-2 text-xs">บันทึก</button>
+                            <button
+                                onClick={handleSave}
+                                disabled={isSaving}
+                                className="btn-accent px-5 py-2 text-xs disabled:opacity-60"
+                            >
+                                {isSaving ? 'กำลังบันทึก...' : 'บันทึก'}
+                            </button>
                         </div>
                     </div>
                 </div>

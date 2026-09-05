@@ -8,8 +8,14 @@ from core.database import get_db
 from core.security import create_access_token, decode_access_token
 from core.config import settings
 from models.user import User
-from models.schemas import TokenResponse, UserResponse, GoogleAuthRequest
-from api.middleware.auth import bearer_scheme
+from models.schemas import (
+    TokenResponse,
+    UserResponse,
+    GoogleAuthRequest,
+    UserSettingsResponse,
+    UserSettingsUpdate,
+)
+from api.middleware.auth import bearer_scheme, get_current_user
 from fastapi.security import HTTPAuthorizationCredentials
 from core.logger import get_logger
 from schemas.envelope import EnvelopingAPIRoute
@@ -167,4 +173,76 @@ async def get_auth_config():
     return {
         "google_client_id": settings.google_client_id,
     }
+
+
+# bd:features-2026-09 slice 3 (Sara spec §5) — profile-settings read/write,
+# same envelope/auth pattern as alerts.py (Depends(get_current_user), plain
+# DB read/write). Deliberately separate from GET /auth/me (JWT fast-path,
+# auth.py:23-30 ADR-007 — do not touch it).
+
+@router.get("/settings", response_model=UserSettingsResponse)
+async def get_settings(user: User = Depends(get_current_user)):
+    """Get the current user's persisted settings (Telegram chat id etc)."""
+    return user
+
+
+@router.patch("/settings", response_model=UserSettingsResponse)
+async def update_settings(
+    body: UserSettingsUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Update the current user's settings.
+
+    D2 (04-sara-telegram-spec.md §11) — saving a non-null telegram_chat_id
+    sends a real Telegram test message immediately to prove the id works.
+    If the send fails (bad chat id, bot never contacted), the setting is
+    NOT persisted and a clear error is returned — never silently save a
+    broken chat id.
+    """
+    new_chat_id = body.telegram_chat_id
+
+    if new_chat_id:
+        ok, error_detail = await _send_telegram_test_message(new_chat_id)
+        if not ok:
+            # Chris Finding 4 (05-dave-telegram-bot.md fix round) — truncate
+            # Telegram's raw error the same way alert_checker._send_telegram_alert
+            # does ([:200]), for consistency across both call sites. Not an
+            # IDOR (own chat_id only), just message-shape consistency.
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"ส่งข้อความทดสอบไป Telegram ไม่สำเร็จ — ตรวจสอบว่าคุยกับ @ShotockVizBot "
+                f"แล้วพิมพ์ /start ก่อน ({error_detail[:200]})",
+            )
+
+    user.telegram_chat_id = new_chat_id
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+async def _send_telegram_test_message(chat_id: str) -> tuple[bool, str]:
+    """Send a confirmation message via the Telegram Bot API.
+
+    Returns (success, error_detail). error_detail is empty on success.
+    """
+    import httpx
+
+    if not settings.telegram_bot_token:
+        return False, "TELEGRAM_BOT_TOKEN not configured"
+
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                url,
+                json={"chat_id": chat_id, "text": "เชื่อมต่อ ShotockViz alert สำเร็จ ✅"},
+            )
+        if resp.status_code != 200:
+            body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            return False, body.get("description", f"HTTP {resp.status_code}")
+        return True, ""
+    except httpx.HTTPError as e:
+        logger.warning("Telegram test message send failed", chat_id=chat_id, error=str(e))
+        return False, str(e)
 

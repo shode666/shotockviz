@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from celery import shared_task
 from core.logger import get_logger
+from core.symbol_utils import is_crypto
 
 logger = get_logger(__name__)
 
@@ -40,9 +41,17 @@ _YAHOO_SYMBOL_RE = re.compile(r'^[\^]?[A-Z0-9]{1,10}([.\-][A-Z0-9]{1,4})?$')
 def _classify_market(symbol: str, yf_info: dict | None = None) -> str:
     """Determine market type for a symbol.
 
-    Returns: 'SET', 'US', or 'FUND'
+    Returns: 'SET', 'US', 'FUND', or 'CRYPTO'
     """
     sym_upper = symbol.upper()
+
+    # bd:features-2026-09 slice B bug fix — MUST be the first check, before
+    # _THAI_FUND_PATTERNS: the regex `^[A-Z]+-[A-Z]+` (K-CHINA/B-INCOME
+    # pattern) also matches "BTC-USD"/"ETH-USD", which would otherwise
+    # misclassify crypto as a Thai fund. Precedence, not the regex, was
+    # wrong — do not touch the regex itself.
+    if is_crypto(sym_upper):
+        return "CRYPTO"
 
     # Thai fund detection: special characters, known prefixes
     if any(p.search(sym_upper) for p in _THAI_FUND_PATTERNS):

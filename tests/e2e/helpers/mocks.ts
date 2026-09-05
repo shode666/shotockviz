@@ -83,6 +83,16 @@ export const MOCK_WATCHLIST = {
   ],
 };
 
+/**
+ * bd:features-2026-09 slice 2 (Quinn Phase 3b) — SR levels for PTT.BK.
+ * Deliberately covers both color-present and color-null (fallback) rows,
+ * one of each level_type, matching srLevelColor.test.ts's coverage.
+ */
+export const MOCK_SR_LEVELS = [
+  { id: 1, symbol: 'PTT.BK', price: 33.0, level_type: 'support', tag: 'S1', color: '#fde047', source: 'manual_import' },
+  { id: 2, symbol: 'PTT.BK', price: 38.0, level_type: 'resistance', tag: null, color: null, source: 'auto_pivot' },
+];
+
 export const MOCK_SEARCH_RESULTS = [
   { symbol: 'PTT.BK', name: 'PTT Public Company', name_th: 'ปตท.', market: 'SET' },
   { symbol: 'AAPL', name: 'Apple Inc.', name_th: null, market: 'US' },
@@ -183,6 +193,20 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   // System ready
   await page.route('**/api/v1/system/ready', (route) =>
     route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ready: true }) }),
+  );
+
+  // SR levels — bd:features-2026-09 slice 2 (Quinn Phase 3b). Fires on every
+  // chart-page load (useSrLevels.ts has no toggle guard — it fetches
+  // regardless of showSrLevels), so this default handler is required to keep
+  // every OTHER spec in this suite deterministic now that TradingChart.tsx
+  // always calls it. Dave's PR did not add this default (not listed in his
+  // Files Changed for tests/e2e/) — flagged in 03-quinn-review.md.
+  await page.route('**/api/v1/sr-levels/*', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(MOCK_SR_LEVELS),
+    }),
   );
 }
 

@@ -61,6 +61,8 @@ htmlcov/
 frontend/playwright-report/
 frontend/test-results/
 frontend/.playwright/
+tests/e2e/playwright-report/
+tests/e2e/test-results/
 
 # ===== Database / Data =====
 *.sql.gz
@@ -68,7 +70,17 @@ frontend/.playwright/
 pgdata/
 redisdata/
 backup*.sql
-backend/db/migrations/
+# bd:features-2026-09 — removed the stray `backend/db/migrations/` ignore rule
+# that lived here since the initial commit: it silently dropped every NEW
+# migration file from `git add -A` (existing tracked ones survived only
+# because .gitignore doesn't retroactively untrack committed files — found
+# when 20260904_0004_user_telegram_chat_id.py failed to stage). Migrations are
+# source code, not generated DB state; they must never be ignored.
+# bd:features-2026-09 — user's manually-exported S/R data file (private trading
+# data, ~1.4MB); backend/scripts/import_sr_levels.py reads it from here. Dir
+# kept via .gitkeep so the expected path exists out of the box.
+backend/data/sr_levels/*
+!backend/data/sr_levels/.gitkeep
 
 # ===== Docker volumes =====
 ollama_data/
