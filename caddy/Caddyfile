@@ -8,9 +8,28 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
-		X-XSS-Protection "1; mode=block"
+		# bd:shotockviz-30l — legacy XSS auditor disabled ("0"), per OWASP:
+		# the auditor itself had vulns; "1; mode=block" is deprecated.
+		X-XSS-Protection "0"
 		Referrer-Policy "strict-origin-when-cross-origin"
-		Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://accounts.google.com https://apis.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' ws: wss: https://accounts.google.com; frame-src https://accounts.google.com"
+		# bd:shotockviz-30l — CSP hardening, verified against the built
+		# .output bundle (see bd notes):
+		#   - 'unsafe-eval' REMOVED: 0 eval()/new Function() in built client
+		#     chunks.
+		#   - 'unsafe-inline' in script-src KEPT: React streaming SSR +
+		#     TanStack Start inject inline hydration <script>s; a nonce needs
+		#     app-level router.options.ssr.nonce coordinated per-request,
+		#     which a static Caddy header cannot do. Accepted for a
+		#     single-user app; revisit only if untrusted HTML is ever rendered.
+		#   - apis.google.com REMOVED: no reference in frontend/src; Google
+		#     Identity Services officially needs only accounts.google.com
+		#     (script-src /gsi/client, frame-src + connect-src /gsi/).
+		#   - bare "ws:" REMOVED from connect-src: prod is TLS-only.
+		#   - added base-uri/object-src/form-action/frame-ancestors +
+		#     worker-src parity with dev.
+		# ⚠️ Enforcement on the deployed site is only provable after deploy:
+		# check Google sign-in + charts + WS with DevTools console open.
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'self'; frame-ancestors 'none'; script-src 'self' 'unsafe-inline' https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://lh3.googleusercontent.com; connect-src 'self' wss: https://accounts.google.com; frame-src https://accounts.google.com; worker-src 'self' blob:"
 		-Server
 	}
 

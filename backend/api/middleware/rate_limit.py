@@ -10,14 +10,39 @@ from schemas.envelope import enveloped_error_body
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """
-    Per-IP rate limiting using Redis sliding window.
-    Limits: guest=30/min, user=120/min (not yet enforced — only the login
-    endpoint below is actually rate-limited today; see CHRIS-11).
-    This middleware handles login endpoint brute-force protection.
+    Per-IP rate limiting using Redis fixed windows (INCR + EXPIRE).
+
+    Enforced today:
+    - POST /api/v1/auth/google — login brute-force protection (5 / 15 min).
+    - Quote endpoints (bd:shotockviz-3du / CHRIS-11) — the ONLY
+      unauthenticated routes that can trigger external fetches: each cache
+      miss fires request_data_fetch → Celery → yfinance from this host's
+      IP, so an anonymous caller looping 30-symbol batches can get the
+      droplet throttled upstream and stop the owner's own data. Limits:
+      anonymous 30/min, valid-bearer 120/min per IP (tier chosen by JWT
+      signature check only — no DB read in the hot path; separate Redis
+      keys per tier so an anonymous caller cannot consume or obtain the
+      authenticated budget). Legit peak is ~1 batch/60s per sidebar poll
+      plus symbol-switch quote reads, far below both limits.
+
+    Other endpoints stay unmetered — deliberate (single-user, self-hosted):
+    every other data-bearing route is auth'd or pure cache read with no
+    external amplification.
     """
 
     LOGIN_LIMIT = 5
     LOGIN_WINDOW = 15 * 60  # 15 minutes
+
+    QUOTES_ANON_LIMIT = 30    # requests / minute / IP (guest)
+    QUOTES_AUTH_LIMIT = 120   # requests / minute / IP (valid bearer JWT)
+    QUOTES_WINDOW = 60        # seconds
+
+    @staticmethod
+    def _is_quote_path(path: str) -> bool:
+        """GET /api/v1/stocks/quotes (batch) and /api/v1/stocks/{sym}/quote."""
+        return path == "/api/v1/stocks/quotes" or (
+            path.startswith("/api/v1/stocks/") and path.endswith("/quote")
+        )
 
     def __init__(self, app):
         super().__init__(app)
@@ -101,6 +126,34 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return RateLimitMiddleware._rightmost_untrusted_ip(xff) or peer_ip
 
     async def dispatch(self, request: Request, call_next):
+        # bd:shotockviz-3du — quote endpoints (see class docstring).
+        if request.method == "GET" and self._is_quote_path(request.url.path):
+            from core.security import decode_access_token  # local: avoid import cycle at module load
+
+            auth = request.headers.get("authorization", "")
+            token = auth[7:] if auth.lower().startswith("bearer ") else None
+            is_authed = bool(token and decode_access_token(token))
+            tier = "auth" if is_authed else "anon"
+            limit = self.QUOTES_AUTH_LIMIT if is_authed else self.QUOTES_ANON_LIMIT
+
+            client_ip = self._client_ip(request)
+            redis = await self.get_redis()
+            key = f"rate:quotes:{tier}:{client_ip}"
+
+            count = await redis.incr(key)
+            if count == 1:
+                await redis.expire(key, self.QUOTES_WINDOW)
+
+            if count > limit:
+                ttl = await redis.ttl(key)
+                return JSONResponse(
+                    content=enveloped_error_body(
+                        request, f"Too many quote requests. Try again in {ttl} seconds."
+                    ),
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    headers={"Retry-After": str(max(ttl, 1))},
+                )
+
         # ADR-001 r3-2 / S-AC-3/AB-6 — the one unauthenticated auth endpoint.
         if request.url.path == "/api/v1/auth/google" and request.method == "POST":
             client_ip = self._client_ip(request)

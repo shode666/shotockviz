@@ -255,6 +255,12 @@ def check_all_alerts(self):
                         ws_payload = json.dumps({
                             "type": "alert_triggered",
                             "symbol": alert.symbol,   # for broadcaster broadcast_price() routing
+                            # bd:shotockviz-pls — routing key only: the
+                            # broadcaster (main._dispatch_ws_message) sends
+                            # alert_triggered ONLY to this user's sockets and
+                            # strips user_id before delivery. Without it the
+                            # message is dropped (fail closed).
+                            "user_id": alert.user_id,
                             "data": {
                                 "symbol": alert.symbol,
                                 "condition": f"{alert.alert_type.value} {alert.value}",

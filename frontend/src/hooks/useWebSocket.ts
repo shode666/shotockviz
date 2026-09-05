@@ -3,6 +3,7 @@ import useAuthStore from '@/store/authStore';
 import useAppStore from '@/store/appStore';
 import toast from 'react-hot-toast';
 import { shouldBumpDataVersion } from './wsDataReady';
+import { buildWsUrl } from '@/utils/wsUrl';
 
 /**
  * WebSocket hook for real-time updates.
@@ -83,8 +84,11 @@ export default function useWebSocket() {
         }
 
         const connect = () => {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/ws/prices`;
+            // bd:shotockviz-pls — the backend now authenticates the WS
+            // handshake; pass the same access token api.js already uses
+            // for REST. This hook is gated on `token` above, so it never
+            // tries to connect logged-out.
+            const wsUrl = buildWsUrl(window.location.protocol, window.location.host, token);
 
             const ws = new WebSocket(wsUrl);
 

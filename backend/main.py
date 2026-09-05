@@ -4,13 +4,14 @@ import json
 from contextlib import asynccontextmanager
 from typing import Set
 
-from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import settings
 from core.database import create_tables
 from core.logger import setup_logging, get_logger
 from core.redis import init_redis, close_redis
+from core.security import decode_access_token
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
 from api.routes import dashboard, notes, portfolio_performance, admin, backtesting, sr_levels
 from api.middleware.rate_limit import RateLimitMiddleware
@@ -58,20 +59,29 @@ async def _warmup_cache() -> None:
 # ─── WebSocket Connection Manager ──────────────────────────────────────────
 
 class ConnectionManager:
-    """Manages active WebSocket connections for real-time price updates."""
+    """Manages active WebSocket connections for real-time price updates.
+
+    bd:shotockviz-pls — every socket is bound to the authenticated user id
+    from the handshake JWT (`user_ids`), so per-user payloads
+    (alert_triggered) can be routed to the owning user's sockets only
+    instead of `broadcast_all`.
+    """
 
     def __init__(self):
         self.active: Set[WebSocket] = set()
         self.subscriptions: dict[WebSocket, Set[str]] = {}
+        self.user_ids: dict[WebSocket, int] = {}
 
-    async def connect(self, ws: WebSocket):
+    async def connect(self, ws: WebSocket, user_id: int):
         await ws.accept()
         self.active.add(ws)
         self.subscriptions[ws] = set()
+        self.user_ids[ws] = user_id
 
     def disconnect(self, ws: WebSocket):
         self.active.discard(ws)
         self.subscriptions.pop(ws, None)
+        self.user_ids.pop(ws, None)
 
     def subscribe(self, ws: WebSocket, symbol: str):
         if ws in self.subscriptions:
@@ -90,9 +100,23 @@ class ConnectionManager:
             self.disconnect(ws)
 
     async def broadcast_all(self, data: dict):
-        """Send a message to ALL connected WebSocket clients (e.g. alert notifications)."""
+        """Send a message to ALL connected WebSocket clients (data_ready etc. —
+        non-PII cache-state signals). Per-user payloads must use send_to_user."""
         disconnected = []
         for ws in list(self.active):
+            try:
+                await ws.send_json(data)
+            except Exception:
+                disconnected.append(ws)
+        for ws in disconnected:
+            self.disconnect(ws)
+
+    async def send_to_user(self, user_id: int, data: dict):
+        """bd:shotockviz-pls — send only to sockets authenticated as `user_id`."""
+        disconnected = []
+        for ws, uid in list(self.user_ids.items()):
+            if uid != user_id:
+                continue
             try:
                 await ws.send_json(data)
             except Exception:
@@ -105,6 +129,39 @@ manager = ConnectionManager()
 
 
 # ─── Redis → WebSocket Price Broadcaster ───────────────────────────────────
+
+async def _dispatch_ws_message(data: dict) -> None:
+    """Route one Redis 'price_updates' message to WebSocket clients.
+
+    Extracted from the broadcaster loop so routing is unit-testable
+    (bd:shotockviz-pls).
+
+    - alert_triggered → ONLY the owning user's sockets (payload carries
+      symbol/condition/price/alert_id — user data). Publisher must include
+      a top-level "user_id" (workers/alert_checker.py); a payload without
+      one is DROPPED, not broadcast — fail closed, the leak-by-construction
+      this bd removes must not come back via a malformed payload.
+    - data_ready → all clients (cache-state signal, no user data).
+    - price_update (any message with a symbol) → symbol subscribers only.
+    """
+    msg_type = data.get("type", "")
+    symbol = data.get("symbol", "")
+
+    if msg_type == "alert_triggered":
+        user_id = data.get("user_id")
+        if user_id is None:
+            logger.warning("alert_triggered without user_id — dropped, not broadcast")
+            return
+        payload = {k: v for k, v in data.items() if k != "user_id"}
+        await manager.send_to_user(int(user_id), payload)
+    elif msg_type == "data_ready":
+        # Backend finished fetching external data — tell ALL clients
+        # to re-fetch. Sent by stock_service._notify_data_ready()
+        await manager.broadcast_all(data)
+    elif symbol:
+        # Price updates go only to symbol subscribers
+        await manager.broadcast_price(symbol, data)
+
 
 async def _redis_price_broadcaster() -> None:
     """
@@ -138,20 +195,7 @@ async def _redis_price_broadcaster() -> None:
                 if message.get("type") != "message":
                     continue
                 try:
-                    data = _json.loads(message["data"])
-                    msg_type = data.get("type", "")
-                    symbol = data.get("symbol", "")
-
-                    if msg_type == "alert_triggered":
-                        # Alert notifications go to ALL connected clients
-                        await manager.broadcast_all(data)
-                    elif msg_type == "data_ready":
-                        # Backend finished fetching external data — tell ALL clients
-                        # to re-fetch. Sent by stock_service._notify_data_ready()
-                        await manager.broadcast_all(data)
-                    elif symbol:
-                        # Price updates go only to symbol subscribers
-                        await manager.broadcast_price(symbol, data)
+                    await _dispatch_ws_message(_json.loads(message["data"]))
                 except Exception as e:
                     logger.debug("Price broadcast error", error=str(e))
 
@@ -309,10 +353,29 @@ app.include_router(system.health_router)   # GET /api/health
 # ─── WebSocket ──────────────────────────────────────────────────────────────
 
 @app.websocket("/api/ws/prices")
-async def websocket_prices(ws: WebSocket):
-    """Real-time price subscription WebSocket."""
-    await manager.connect(ws)
-    logger.info("WebSocket connected")
+async def websocket_prices(ws: WebSocket, token: str | None = Query(default=None)):
+    """Real-time price subscription WebSocket.
+
+    bd:shotockviz-pls — the handshake must carry a valid access JWT in the
+    `token` query parameter (`wss://.../api/ws/prices?token=...`, sent by
+    frontend/src/hooks/useWebSocket.ts which only connects when logged in).
+    Signature + expiry + type=access are verified (core.security.
+    decode_access_token — same key/algorithm as the REST bearer path); no
+    DB round-trip per handshake (single-user app, token lifetime is the
+    revocation window, same trade-off as REST until a token blacklist
+    exists). Invalid/missing token → close(1008 policy violation) before
+    accept — Starlette rejects the handshake with HTTP 403.
+    """
+    payload = decode_access_token(token) if token else None
+    try:
+        user_id = int(payload["sub"]) if payload else None
+    except (KeyError, TypeError, ValueError):
+        user_id = None
+    if user_id is None:
+        await ws.close(code=1008)
+        return
+    await manager.connect(ws, user_id)
+    logger.info("WebSocket connected", user_id=user_id)
     try:
         while True:
             data = await ws.receive_text()
