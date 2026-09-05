@@ -15,6 +15,12 @@ Adversarial follow-up to Dave's test_sr_proximity_digest.py. Covers:
    the exact same price (same "line") and at different prices (different
    lines) for the same symbol — confirm no double-count / no crash / no
    silently-merged-away legitimate second line.
+
+bd:shotockviz-p48 (2026-09-05) — item 3's finding (below) is now FIXED,
+not just documented: compute_proximity_for_user gained a cross-source
+dedupe step (_dedupe_cross_source_matches in sr_proximity_digest.py).
+The test below is updated to assert the fixed behavior (one line, not
+two) instead of the finding it originally proved.
 """
 import json
 import threading
@@ -172,16 +178,14 @@ class TestRealConcurrentRunLockRace:
 
 
 class TestOverlappingManualAndAutoPivotLevels:
-    def test_same_price_manual_and_auto_pivot_both_appear_as_separate_lines(self, tmp_path):
-        """Spec §3 says nothing about de-duplicating manual_import vs
-        auto_pivot rows that happen to land on the exact same price for
-        the same symbol/level_type — the code (compute_proximity_for_user)
-        iterates SRLevel rows independently with no merge step. Verify
-        that behavior explicitly (not implicitly assumed): a manual_import
-        row and an auto_pivot row at the SAME price on the SAME symbol
-        both surface as separate match entries -> the digest message
-        shows the SAME level line TWICE. Documented as a finding, not
-        silently accepted."""
+    def test_same_price_manual_and_auto_pivot_collapse_to_one_line(self, tmp_path):
+        """bd:shotockviz-p48 fix: a manual_import row and an auto_pivot row
+        at the SAME price on the SAME symbol/level_type are the same real
+        level seen from two sources — compute_proximity_for_user now
+        collapses them to ONE match, so the digest shows the line ONCE.
+        A genuinely different line (different level_type/price) must
+        still appear — this test was originally written to document the
+        pre-fix duplicate-line behavior as a finding; now asserts the fix."""
         db_path = tmp_path / "dup_levels.db"
         engine = create_engine(f"sqlite:///{db_path}")
         Base.metadata.create_all(engine)
@@ -210,13 +214,13 @@ class TestOverlappingManualAndAutoPivotLevels:
         assert mock_post.call_count == 1
         text = mock_post.call_args.kwargs["json"]["text"]
 
-        # FINDING: the identical (price, level_type) pair from 2 different
-        # sources renders as 2 near-identical lines in one message. Assert
-        # the current (undeduplicated) behavior explicitly.
-        assert text.count("แนวรับ 60.00") == 2, (
-            "expected finding confirmed: manual_import + auto_pivot at the "
-            "same price/level_type both render as separate lines (no "
-            "cross-source de-dup) -- text was:\n" + text
+        # FIXED (bd:shotockviz-p48): the identical (price, level_type)
+        # pair from 2 different sources is the same real level -> collapses
+        # to exactly ONE line, not two.
+        assert text.count("แนวรับ 60.00") == 1, (
+            "manual_import + auto_pivot at the same price/level_type should "
+            "collapse to one digest line -- text was:\n" + text
         )
-        # The genuinely different line (resistance 63.50) must also appear.
+        # The genuinely different line (resistance 63.50) must still appear
+        # — different level_type is never merged, regardless of source.
         assert "แนวต้าน 63.50" in text

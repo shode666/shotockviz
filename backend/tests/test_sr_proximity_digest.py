@@ -80,6 +80,89 @@ class TestProximityLevelScoping:
         assert distances == sorted(distances)
 
 
+class TestCrossSourceDedupe:
+    """bd:shotockviz-p48 — manual + auto level at ~the same price collapse
+    to one digest line; everything else (same-source closeness, or a
+    different level_type) must stay as separate lines."""
+
+    def test_manual_and_auto_same_price_same_type_collapse_to_one_match(self):
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": "manual pivot", "user_id": None, "source": "manual_import"},
+                {"price": 60.05, "level_type": "support", "tag": None, "user_id": None, "source": "auto_pivot"},
+            ]
+        }
+        prices = {"AOT.BK": 61.25}
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert len(results[0]["matches"]) == 1
+
+    def test_kept_representative_is_the_one_closest_to_current_price(self):
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": "far one", "user_id": None, "source": "manual_import"},
+                {"price": 60.20, "level_type": "support", "tag": "close one", "user_id": None, "source": "auto_pivot"},
+            ]
+        }
+        prices = {"AOT.BK": 61.0}  # 60.20 is closer to 61.0 than 60.00 is
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert len(results[0]["matches"]) == 1
+        assert results[0]["matches"][0]["tag"] == "close one"
+
+    def test_two_manual_levels_close_together_are_NOT_merged(self):
+        """Deliberately kept separate: same source (both manual_import),
+        so this is two real levels a trader placed on purpose, not one
+        level double-counted by two mechanisms. A missed line (silently
+        dropping one of two intentional levels) is worse than a duplicated
+        one, so same-source proximity never triggers the merge."""
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": "W1", "user_id": None, "source": "manual_import"},
+                {"price": 60.20, "level_type": "support", "tag": "W2", "user_id": None, "source": "manual_import"},
+            ]
+        }
+        prices = {"AOT.BK": 61.0}
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert len(results[0]["matches"]) == 2
+        tags = {m["tag"] for m in results[0]["matches"]}
+        assert tags == {"W1", "W2"}
+
+    def test_same_price_different_level_type_is_NOT_merged(self):
+        """A flip level (support AND resistance at the same price, from
+        different sources) is a different fact worth two lines, never
+        merged regardless of source."""
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": None, "user_id": None, "source": "manual_import"},
+                {"price": 60.00, "level_type": "resistance", "tag": None, "user_id": None, "source": "auto_pivot"},
+            ]
+        }
+        prices = {"AOT.BK": 60.5}
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert len(results[0]["matches"]) == 2
+
+    def test_manual_and_auto_far_apart_in_price_are_NOT_merged(self):
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": None, "user_id": None, "source": "manual_import"},
+                {"price": 62.00, "level_type": "support", "tag": None, "user_id": None, "source": "auto_pivot"},  # >3% away, outside 1.0% tolerance
+            ]
+        }
+        prices = {"AOT.BK": 61.5}
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert len(results[0]["matches"]) == 2
+
+    def test_merged_match_dict_has_no_leftover_source_key(self):
+        levels = {
+            "AOT.BK": [
+                {"price": 60.00, "level_type": "support", "tag": None, "user_id": None, "source": "manual_import"},
+                {"price": 60.05, "level_type": "support", "tag": None, "user_id": None, "source": "auto_pivot"},
+            ]
+        }
+        prices = {"AOT.BK": 61.0}
+        results = compute_proximity_for_user({"AOT.BK"}, levels, prices, user_id=1)
+        assert "source" not in results[0]["matches"][0]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # build_digest_message — pure
 # ─────────────────────────────────────────────────────────────────────────────
@@ -229,6 +312,50 @@ class TestSourceFiltering:
         assert "แนวรับ 61.20" not in text
         assert "60.00" in text
         assert "63.50" in text
+
+
+class TestCrossSourceDedupeIntegration:
+    """bd:shotockviz-p48 end-to-end: manual_import + auto_pivot rows for
+    the same real level produce ONE digest line, not two."""
+
+    @pytest.fixture
+    def dedupe_db_url(self, tmp_path):
+        db_path = tmp_path / "sr_digest_dedupe_test.db"
+        engine = create_engine(f"sqlite:///{db_path}")
+        Base.metadata.create_all(engine)
+
+        with Session(engine) as db:
+            u1 = User(email="u1@example.com", password_hash="x", display_name="U1", telegram_chat_id="1001")
+            db.add(u1)
+            db.flush()
+
+            wl1 = Watchlist(user_id=u1.id, name="Main")
+            db.add(wl1)
+            db.flush()
+
+            db.add(WatchlistItem(watchlist_id=wl1.id, symbol="AOT.BK"))
+
+            # Same real support level, entered manually AND independently
+            # computed by auto-pivot 0.05 THB apart (well within the 1.0%
+            # tolerance) -> must collapse to one line.
+            db.add_all([
+                SRLevel(symbol="AOT.BK", price=60.00, level_type="support",
+                         tag="manual W1", source="manual_import"),
+                SRLevel(symbol="AOT.BK", price=60.05, level_type="support",
+                         tag=None, source="auto_pivot"),
+            ])
+            db.commit()
+
+        engine.dispose()
+        return f"sqlite:///{db_path}"
+
+    def test_manual_and_auto_level_at_same_price_produce_one_line(self, dedupe_db_url):
+        fake_redis = _FakeRedis(quotes={"quote:AOT.BK": _quote(61.25)})
+        mock_post = MagicMock(return_value=MagicMock(status_code=200))
+        _run_digest(dedupe_db_url, "set_open", fake_redis, mock_post)
+
+        text = mock_post.call_args.kwargs["json"]["text"]
+        assert text.count("แนวรับ") == 1
 
 
 class TestBatchQueryNoNPlus1:

@@ -6,6 +6,16 @@
 // than building an expiry rule nobody asked for. Only the two statuses
 // the backend actually assigns are mapped here — see models/alert.py's
 // AlertStatus for the removal note and the DB-enum finding.
+//
+// bd:shotockviz-o0b — `AlertStatus.INACTIVE` (the backend enum member,
+// distinct from the `is_active` field below) had the same never-assigned
+// defect and is now struck from the backend enum too. No change needed
+// here: this function never read an INACTIVE *status* string off the
+// wire in the first place — the 'inactive' key it returns has always
+// come from `is_active: false`, which is correct and stays correct.
+// `status` (lifecycle: has it fired?) and `is_active` (user pause
+// control) are deliberately two fields, not one — see REQUIREMENTS.md
+// FR-ALERT-003 for the full reasoning.
 
 export type AlertStatusKey = 'active' | 'triggered' | 'inactive';
 

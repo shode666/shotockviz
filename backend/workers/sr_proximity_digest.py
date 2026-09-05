@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from core.logger import get_logger
+from workers.sr_auto_pivot import CLUSTER_TOLERANCE
 
 logger = get_logger(__name__)
 
@@ -25,10 +26,69 @@ SLOT_HEADERS = {
     "us_premarket": "ก่อน US pre-market",
 }
 
+# bd:shotockviz-p48 — "same level, seen from >=2 sources" tolerance for
+# collapsing digest matches into one line. Reused from sr_auto_pivot's own
+# clustering constant (1.0% relative) rather than inventing a second number
+# for the same question ("how close counts as the same price") — see
+# _dedupe_cross_source_matches below for the full rule.
+CROSS_SOURCE_DEDUPE_TOLERANCE = CLUSTER_TOLERANCE
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure functions (unit-testable, deterministic, no I/O)
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _dedupe_cross_source_matches(
+    matches: list[dict], tol: float = CROSS_SOURCE_DEDUPE_TOLERANCE
+) -> list[dict]:
+    """Collapse matches that are the same real level seen from >=2 sources
+    into one (bd:shotockviz-p48).
+
+    Rule — "the same alert" means, precisely: same `level_type` (support
+    vs resistance is never merged — a price acting as both is a flip
+    level, a different fact worth two lines) AND price within `tol`
+    relative distance of each other, clustered the same way
+    `sr_auto_pivot.cluster_pivots` clusters pivot prices (join the running
+    cluster mean if within tolerance; sorted-ascending single pass).
+
+    Merging is gated on the cluster containing >=2 *distinct* `source`
+    values. Two close-together levels from the SAME source are always
+    kept as two lines — e.g. two manual_import rows a trader placed 0.3%
+    apart on purpose are two real levels, not a duplicate, and collapsing
+    them would silently hide one. That asymmetry (a missed line is worse
+    than a duplicated one, per Oliver's brief) is why this only fires
+    across sources, never within one.
+
+    When a cluster does merge, the member closest to the current price
+    (smallest distance_pct — the most actionable one to show) is kept;
+    the rest are dropped from the digest line, not just their duplicate
+    text.
+    """
+    by_type: dict[str, list[dict]] = {}
+    for m in matches:
+        by_type.setdefault(m["level_type"], []).append(m)
+
+    deduped: list[dict] = []
+    for group in by_type.values():
+        ordered = sorted(group, key=lambda m: m["price"])
+        clusters: list[list[dict]] = [[ordered[0]]]
+        for m in ordered[1:]:
+            current = clusters[-1]
+            current_mean = sum(c["price"] for c in current) / len(current)
+            if current_mean != 0 and abs(m["price"] - current_mean) / current_mean <= tol:
+                current.append(m)
+            else:
+                clusters.append([m])
+
+        for cluster in clusters:
+            sources = {c.get("source") for c in cluster if c.get("source") is not None}
+            if len(cluster) > 1 and len(sources) >= 2:
+                deduped.append(min(cluster, key=lambda c: c["distance_pct"]))
+            else:
+                deduped.extend(cluster)
+
+    return deduped
+
 
 def compute_proximity_for_user(
     watchlist_symbols: set[str],
@@ -40,13 +100,17 @@ def compute_proximity_for_user(
     """Return proximity matches for one user's watchlist (spec §3).
 
     `levels_by_symbol[symbol]` = list of {"price", "level_type", "tag",
-    "user_id"} (already filtered to source IN manual_import/auto_pivot by
-    the caller's SQL). Per-user scoping (level.user_id is NULL (global) OR
-    == this user's id) is applied here, in-memory, per spec §3 Q2.
+    "user_id", "source"} (already filtered to source IN
+    manual_import/auto_pivot by the caller's SQL; "source" is optional —
+    missing/None never merges, see _dedupe_cross_source_matches). Per-user
+    scoping (level.user_id is NULL (global) OR == this user's id) is
+    applied here, in-memory, per spec §3 Q2.
 
     Returns [{"symbol", "price", "matches": [{"level_type","price","tag",
-    "distance_pct","signed_pct"}, ...]}] — matches sorted by distance_pct
-    ascending, outer list sorted by each symbol's closest match ascending.
+    "distance_pct","signed_pct"}, ...]}] — matches deduped
+    (bd:shotockviz-p48, see _dedupe_cross_source_matches), then sorted by
+    distance_pct ascending; outer list sorted by each symbol's closest
+    match ascending.
     """
     results: list[dict] = []
     for symbol in watchlist_symbols:
@@ -75,10 +139,13 @@ def compute_proximity_for_user(
                 "tag": level.get("tag"),
                 "distance_pct": distance_pct,
                 "signed_pct": signed_pct,
+                "source": level.get("source"),
             })
 
         if matches:
+            matches = _dedupe_cross_source_matches(matches)
             matches.sort(key=lambda m: m["distance_pct"])
+            matches = [{k: v for k, v in m.items() if k != "source"} for m in matches]
             results.append({"symbol": symbol, "price": price, "matches": matches})
 
     results.sort(key=lambda r: r["matches"][0]["distance_pct"])
@@ -219,7 +286,7 @@ def send_sr_proximity_digest(self, slot: str):
             level_rows = db.execute(
                 select(
                     SRLevel.symbol, SRLevel.price, SRLevel.level_type,
-                    SRLevel.tag, SRLevel.user_id,
+                    SRLevel.tag, SRLevel.user_id, SRLevel.source,
                 ).where(
                     SRLevel.symbol.in_(all_symbols),
                     SRLevel.source.in_(["manual_import", "auto_pivot"]),
@@ -227,12 +294,16 @@ def send_sr_proximity_digest(self, slot: str):
             ).all()
 
             levels_by_symbol: dict[str, list[dict]] = {}
-            for symbol, price, level_type, tag, level_user_id in level_rows:
+            for symbol, price, level_type, tag, level_user_id, source in level_rows:
                 levels_by_symbol.setdefault(symbol, []).append({
                     "price": price,
                     "level_type": level_type,
                     "tag": tag,
                     "user_id": level_user_id,
+                    # bd:shotockviz-p48 — carried through so
+                    # compute_proximity_for_user can dedupe a level seen
+                    # from >=2 sources into one digest line.
+                    "source": source,
                 })
 
         # Q3 — current prices, 1 Redis MGET round-trip.

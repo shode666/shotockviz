@@ -31,19 +31,49 @@ class AlertStatus(str, PyEnum):
     # by striking, not by implementing" — 10-tara-value.md) rather than
     # building an expiry rule that was never asked for.
     #
-    # DB enum note (checked before removing): the Postgres `alertstatus`
-    # type was never created by an Alembic migration — the `alerts` table
-    # predates this project's Alembic history entirely and is provisioned
-    # via `Base.metadata.create_all()` (core/database.py, dev-only;
-    # main.py's `_sync_markettype_enum()` only ADDs values, and does not
-    # even include `alertstatus` in its enum_map). So wherever the
-    # Postgres type already exists, it keeps the 'EXPIRED' label forever —
-    # Postgres has no `ALTER TYPE ... DROP VALUE` — but that is harmless:
-    # zero rows use it (confirmed by grep above) and nothing can write it
-    # once this Python member is gone. No migration added for this.
+    # bd:shotockviz-o0b — INACTIVE removed for the identical reason,
+    # flagged separately by 43x rather than folded into it. `status` and
+    # `is_active` are two *different* concepts, not the same thing spelled
+    # two ways, and INACTIVE was a redundant third spelling of one of
+    # them:
+    #   - `status` = lifecycle stage: has this alert ever fired?
+    #     ACTIVE (default, armed, never fired) -> TRIGGERED (fired once;
+    #     alert_checker.py sets it alongside is_active=False and never
+    #     reads it back to "un-trigger"). No code path ever moved status
+    #     to INACTIVE — grep -rn "AlertStatus\." backend/ finds only
+    #     ACTIVE/TRIGGERED as values ever assigned.
+    #   - `is_active` = user control: is this alert armed right now?
+    #     Defaults True; PATCH /alerts/{id}/toggle
+    #     (api/routes/alerts.py) flips it directly and is the ONLY way a
+    #     user pairs it. alert_checker.py's selection query ANDs
+    #     `status == ACTIVE AND is_active == True` — a triggered alert
+    #     also has is_active=False (so it won't re-fire), but that's the
+    #     checker enforcing "don't refire", not `is_active` becoming a
+    #     status. A user-paused alert stays status=ACTIVE the whole time.
+    # Frontend already gets this right (utils/alertStatus.ts checks
+    # status == 'TRIGGERED' first, else falls through to is_active) — it
+    # never read an INACTIVE status value off the wire because the
+    # backend never sent one. Kept two fields rather than merging into
+    # one: collapsing them would make "paused-but-already-fired" (a real,
+    # reachable combination today) inexpressible without adding a new
+    # status value, i.e. more surface for the exact bug this bead is
+    # about. Documented as the real truth in REQUIREMENTS.md FR-ALERT-003.
+    #
+    # DB enum note (checked before removing, same finding as 43x): the
+    # Postgres `alertstatus` type was never created by an Alembic
+    # migration — the `alerts` table predates this project's Alembic
+    # history entirely and is provisioned via `Base.metadata.create_all()`
+    # (core/database.py, dev-only; main.py's `_sync_markettype_enum()`
+    # only ADDs values, and does not even include `alertstatus` in its
+    # enum_map). So wherever the Postgres type already exists, it keeps
+    # the 'EXPIRED' and 'INACTIVE' labels forever — Postgres has no
+    # `ALTER TYPE ... DROP VALUE` — but that is harmless: zero rows use
+    # either (confirmed: `SELECT status, count(*) FROM alerts GROUP BY
+    # status` — no query needed beyond the grep above showing nothing
+    # ever assigns it) and nothing can write it once the Python member is
+    # gone. No migration added for this.
     ACTIVE = "ACTIVE"
     TRIGGERED = "TRIGGERED"
-    INACTIVE = "INACTIVE"
 
 
 class AlertChannel(str, PyEnum):
