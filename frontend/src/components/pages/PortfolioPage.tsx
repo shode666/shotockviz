@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react';
 import toast from 'react-hot-toast';
-import { Briefcase, Trash2, History, BarChart2, FilterX, Timer, Hourglass } from 'lucide-react';
+import { Briefcase, Trash2, History, BarChart2, FilterX, Timer, AlertTriangle, Hourglass, Info } from 'lucide-react';
 import portfolioService from '@/services/portfolioService';
 import useAuthStore from '@/store/authStore';
 import { displaySymbol, formatPriceTH } from '@/utils/formatters';
 import { AddTransactionModal } from '@/components/portfolio/AddTransactionModal';
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable';
 import { usePortfolioData } from '@/hooks/usePortfolioData';
+import { buildQualifications, hasQualifications, type QualificationTone } from '@/utils/portfolioQualifications';
 
 const CURR_SIGN: Record<string, string> = { THB: '฿', USD: '$' };
 
@@ -26,18 +27,62 @@ interface FxRateInfo {
     estimated?: boolean;
 }
 
+const TONE_ICON: Record<QualificationTone, typeof AlertTriangle> = {
+    error: AlertTriangle,
+    warn: Hourglass,
+    info: Info,
+};
+const TONE_COLOR: Record<QualificationTone, string> = {
+    error: 'var(--color-red)',
+    warn: 'var(--color-yellow)',
+    info: 'var(--color-text-sub)',
+};
+
 /**
- * bd:shotockviz-fnn — the FX disclosure the totals above depend on.
- * Never renders a rate without saying where it came from, and says "ไม่ทราบ"
- * for the currency return rather than printing a 0 the data cannot support.
+ * bd:shotockviz-pxo — ONE qualification block, rendered above the figures it
+ * qualifies.
+ *
+ * It replaces two disclosures that used to sit on either side of the numbers:
+ * bd:shotockviz-fnn's FX note (above the table) and bd:shotockviz-2w8's
+ * pending-price note (BELOW the table, so the user met the 0/0/0 first and the
+ * reason second, or never). Stacking two warning blocks around the same totals
+ * was not a fix; what the totals leave out and what the totals are estimated
+ * from are the same statement and belong in the same place — before them.
+ *
+ * The sentences and their order live in `utils/portfolioQualifications.ts` and
+ * are unit-tested; this component only renders them, plus the FX rate rows,
+ * which stay structured so "ประมาณการ" can be a badge rather than prose.
  */
-function FxDisclosure({ rates, fxPl, costEstimated }: {
-    rates: FxRateInfo[]; fxPl: number | null | undefined; costEstimated: boolean;
-}) {
-    if (!rates || rates.length === 0) return null;   // THB-only book — no FX to disclose
+function BookQualifications({ analytics }: { analytics: any }) {
+    if (!hasQualifications(analytics)) return null;
+    const items = buildQualifications(analytics);
+    const rates: FxRateInfo[] = analytics?.fx_rates ?? [];
+    const fxPl: number | null | undefined = analytics?.fx_pl;
+
     return (
-        <div className="text-[11px] mb-4 px-3 py-2 rounded-xl flex flex-col gap-1"
-            style={{ background: 'var(--color-hover)', color: 'var(--color-text-sub)' }}>
+        <div
+            role="status"
+            data-testid="portfolio-qualifications"
+            className="text-[11px] mb-5 px-3 py-2.5 rounded-xl flex flex-col gap-1.5 border"
+            style={{
+                background: 'var(--color-hover)',
+                color: 'var(--color-text-sub)',
+                borderWidth: 1,
+                borderStyle: 'solid',
+                borderColor: 'var(--color-border)',
+            }}
+        >
+            {items.map((q) => {
+                const Icon = TONE_ICON[q.tone];
+                return (
+                    <div key={q.key} className="flex items-start gap-1.5">
+                        <Icon size={12} strokeWidth={2} aria-hidden="true"
+                            className="mt-[2px] shrink-0" style={{ color: TONE_COLOR[q.tone] }} />
+                        <span style={q.tone === 'error' ? { color: 'var(--color-red)' } : undefined}>{q.text}</span>
+                    </div>
+                );
+            })}
+
             {rates.map((r) => (
                 <div key={r.currency} className="flex items-center gap-1.5 flex-wrap">
                     <span className="font-semibold">{r.currency}/{r.base ?? 'THB'} {formatPriceTH(r.rate, 4)}</span>
@@ -48,20 +93,18 @@ function FxDisclosure({ rates, fxPl, costEstimated }: {
                     )}
                 </div>
             ))}
-            <div>
-                ผลตอบแทนจากค่าเงิน:{' '}
-                {fxPl == null ? (
-                    <span style={{ color: 'var(--color-yellow)' }}>
-                        ไม่ทราบ — บางรายการซื้อไม่ได้บันทึกอัตราแลกเปลี่ยนไว้ และระบบไม่ย้อนหลังอัตราเก่าให้
-                    </span>
-                ) : (
+
+            {/* A KNOWN currency return is a figure, not a caveat — the unknown
+                case is already said above by `fx-pl-unknown`. */}
+            {rates.length > 0 && fxPl != null && (
+                <div>
+                    ผลตอบแทนจากค่าเงิน:{' '}
                     <span className="font-semibold tabular-nums"
                         style={{ color: fxPl >= 0 ? 'var(--color-green)' : 'var(--color-red)' }}>
                         {fxPl >= 0 ? '+' : '-'}฿{formatPriceTH(Math.abs(fxPl))}
                     </span>
-                )}
-                {costEstimated && ' · ต้นทุนบางรายการแปลงด้วยอัตราปัจจุบัน'}
-            </div>
+                </div>
+            )}
         </div>
     );
 }
@@ -168,6 +211,11 @@ export default function PortfolioPage() {
                     </div>
                 ) : (
                     <>
+                        {/* bd:shotockviz-pxo — the qualification comes FIRST.
+                            Everything the totals below exclude or estimate is
+                            said here, before the reader can misread a 0. */}
+                        <BookQualifications analytics={analytics} />
+
                         {/* Stats — bd:shotockviz-sbe: these are a THB-normalised
                             book total now (they used to be THB and USD added raw).
                             `≈` marks a total that leans on an estimated FX rate. */}
@@ -182,12 +230,6 @@ export default function PortfolioPage() {
                             />
                             <StatCard label="จำนวนหุ้น" value={analytics?.holdings?.length ?? 0} />
                         </div>
-
-                        <FxDisclosure
-                            rates={analytics?.fx_rates ?? []}
-                            fxPl={analytics?.fx_pl}
-                            costEstimated={!!analytics?.cost_basis_estimated}
-                        />
 
                         {/* Tab Bar */}
                         <div className="flex items-center gap-1 mb-4 border-b" style={{ borderColor: 'var(--color-border)' }}>
@@ -226,17 +268,12 @@ export default function PortfolioPage() {
                         </div>
 
                         {/* Tab: Holdings */}
+                        {/* bd:shotockviz-pxo — the note that used to sit here,
+                            below the table, moved into <BookQualifications />
+                            above the stat cards. Nothing is rendered after the
+                            figures it explains. */}
                         {activeTab === 'holdings' && (
-                            <>
-                                <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
-                                {analytics?.has_pending_prices && (
-                                    <div className="text-xs mt-2 px-4 py-2 flex items-center gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
-                                        <Hourglass size={12} strokeWidth={2} aria-hidden="true" />
-                                        {(analytics?.holdings ?? []).filter((h) => h.current_price == null).map((h) => h.symbol).join(', ')}
-                                        {' '}— รอราคาล่าสุด จะอัปเดตอัตโนมัติเมื่อข้อมูลพร้อม
-                                    </div>
-                                )}
-                            </>
+                            <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
                         )}
 
                         {/* Tab: Transaction History */}

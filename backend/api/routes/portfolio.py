@@ -45,11 +45,16 @@ def _is_yahoo_fetchable(symbol: str) -> bool:
     return bool(_YAHOO_SYMBOL_RE.match(symbol.upper()))
 
 
-async def _fx_quote_cached() -> dict | None:
+async def fx_quote_cached() -> dict | None:
     """Cache-only read of the FX quote (`THBUSD=X`). None on miss — never fetch.
 
     Its own pipeline round-trip so a cold/absent FX rate can never disturb the
     holdings pipelines above it.
+
+    Public (was `_fx_quote_cached`) because `portfolio_performance.py` — the
+    third `/portfolio` surface, bd:shotockviz-la4 — must read the rate through
+    exactly this path. A second copy of "how the FX quote is read" is how the
+    three screens disagreed in the first place.
     """
     try:
         r = await stock_service.get_redis()
@@ -88,7 +93,49 @@ async def _record_fx_rate(currency: str, txn_date, explicit: float | None) -> fl
     if txn_date is None or abs((today_ict - txn_date).days) > 1:
         return None  # back-dated: no observed rate exists, and none is invented
 
-    return portfolio_service.live_rate_from_thbusd(await _fx_quote_cached())
+    return portfolio_service.live_rate_from_thbusd(await fx_quote_cached())
+
+
+async def _assert_currency_consistent(
+    db: AsyncSession,
+    user_id: int,
+    symbol: str,
+    currency: str,
+    exclude_txn_id: int | None = None,
+) -> None:
+    """Reject a transaction that would put one symbol in two currencies.
+
+    bd:shotockviz-7ju / portfolio_service rule 5. `build_holdings` sums a
+    symbol's rows into ONE `cost_basis`; if the rows are in different currencies
+    that sum is not a number, and the FX conversion downstream inherits the
+    error rather than causing it. The read path can only refuse to state such a
+    position after the fact — this is where it is prevented.
+
+    Judged over ALL of the symbol's rows (including fully-closed lots), matching
+    what the read path flags, so the two paths cannot disagree about whether a
+    book is broken. A genuine re-denomination means correcting the old rows.
+    """
+    stmt = select(Transaction.currency).where(
+        Transaction.user_id == user_id,
+        Transaction.symbol == symbol,
+    )
+    if exclude_txn_id is not None:
+        stmt = stmt.where(Transaction.id != exclude_txn_id)
+
+    existing = {
+        getattr(c, "value", c) for c in (await db.execute(stmt.distinct())).scalars().all()
+    }
+    conflicting = sorted(existing - {currency})
+    if conflicting:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{symbol} ถูกบันทึกไว้เป็นสกุล {'/'.join(conflicting)} อยู่แล้ว "
+                f"— เพิ่มรายการสกุล {currency} จะทำให้ต้นทุนของสัญลักษณ์เดียวกันปนหน่วยเงิน "
+                "และยอดรวมจะไม่มีความหมาย กรุณาแก้สกุลเงินให้ตรงกัน "
+                "หรือแก้/ลบรายการเดิมก่อน"
+            ),
+        )
 
 
 @router.get("", response_model=list[TransactionResponse])
@@ -207,7 +254,7 @@ async def get_analytics(
     # Stage 4: the FX rate itself (bd:shotockviz-fnn). Cache-only, like every
     # other read on this route; a cold THBUSD=X is normal off-hours and is what
     # used to silently become the hardcoded 33.0 on the dashboard.
-    fx_quote = await _fx_quote_cached()
+    fx_quote = await fx_quote_cached()
     fx_rates = portfolio_service.build_fx_rates(txns, fx_quote)
     if any(r.source != "live" for r in fx_rates.values()):
         # Warm it for the next load. Bypasses _is_yahoo_fetchable on purpose:
@@ -236,8 +283,12 @@ async def get_analytics(
         HoldingResponse(
             symbol=v.symbol,
             qty=v.qty,
-            avg_cost=round(v.avg_cost, 4),
+            # None on a currency conflict (bd:shotockviz-7ju): a cost basis that
+            # mixes THB and USD is not a number, so no number is printed.
+            avg_cost=round(v.avg_cost, 4) if v.avg_cost is not None else None,
             currency=v.currency,
+            currency_conflict=v.currency_conflict,
+            currencies=v.currencies,
             current_price=v.current_price,
             # `is not None`, not truthiness: a legitimate 0.0 P&L is a real
             # answer, not a missing one.
@@ -275,10 +326,14 @@ async def get_analytics(
             FxRateInfo(
                 currency=r.currency, base=r.base, rate=round(r.rate, 6),
                 source=r.source, as_of=r.as_of, estimated=r.estimated,
+                # bd:shotockviz-ss3 — which way up THBUSD=X actually arrived,
+                # readable off a live response instead of trusted from a comment.
+                quote_orientation=r.quote_orientation,
             )
             for r in totals.fx_rates.values()
         ],
         fx_unavailable_symbols=totals.fx_unavailable_symbols,
+        currency_conflict_symbols=totals.currency_conflict_symbols,
         holdings=holding_responses,
         # Derived from the positions actually left unpriced (a cache "miss" that
         # the fund stage then resolved is not pending; a cached but unusable
@@ -295,9 +350,12 @@ async def add_transaction(
 ):
     """Add a buy or sell transaction."""
     currency = body.currency.upper() if body.currency else "THB"
+    symbol = body.symbol.upper()
+    # bd:shotockviz-7ju — refuse before writing, loudly. See rule 5.
+    await _assert_currency_consistent(db, user.id, symbol, currency)
     txn = Transaction(
         user_id=user.id,
-        symbol=body.symbol.upper(),
+        symbol=symbol,
         type=body.type,
         qty=body.qty,
         price=body.price,
@@ -316,7 +374,7 @@ async def add_transaction(
     # Fire-and-forget: ensure symbol is registered in stocks table
     try:
         from workers.symbol_registrar import register_symbol
-        register_symbol.delay(body.symbol.upper())
+        register_symbol.delay(symbol)
     except Exception:
         pass  # Non-critical — scan_unregistered will catch it later
 
@@ -343,7 +401,19 @@ async def update_transaction(
     # ever regains its FX return. It is never *recomputed* as a side effect of
     # editing qty/price/date: a rate is an observation, not a derived field.
     _ALLOWED_UPDATE_FIELDS = {"qty", "price", "fee", "currency", "date", "note", "fx_rate"}
-    for field, val in body.model_dump(exclude_unset=True).items():
+
+    # bd:shotockviz-7ju — editing the currency can break the symbol's consistency
+    # just as easily as inserting a new row; same refusal, same rule 5. Checked
+    # against the symbol's OTHER rows (this one is being replaced).
+    patch = body.model_dump(exclude_unset=True)
+    if patch.get("currency") is not None:
+        new_currency = str(getattr(patch["currency"], "value", patch["currency"])).upper()
+        patch["currency"] = new_currency
+        await _assert_currency_consistent(
+            db, user.id, txn.symbol, new_currency, exclude_txn_id=txn.id
+        )
+
+    for field, val in patch.items():
         if field not in _ALLOWED_UPDATE_FIELDS:
             continue
         setattr(txn, field, val)

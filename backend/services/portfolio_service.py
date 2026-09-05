@@ -66,6 +66,35 @@ Accounting rules pinned here (state them once, apply everywhere):
    A live quote outside `FX_PLAUSIBLE_RANGE` is treated as bad data, not as a
    rate — inverting a mis-quoted pair silently scales the whole US book by 1000.
 
+   FX-4 bd:shotockviz-ss3 — the quote's ORIENTATION is derived, not assumed.
+   Which way up `THBUSD=X` arrives ("1 THB in USD" ≈ 0.03, or "THB per USD"
+   ≈ 33) used to be asserted by a code comment alone and the code took the
+   reciprocal unconditionally. `read_fx_quote` instead picks whichever of
+   {p, 1/p} lands inside `FX_PLAUSIBLE_RANGE` and reports which one it used
+   (`FxRate.quote_orientation`, surfaced in the API payload). Exactly one can
+   land there, because the band lies strictly above 1.0 — the invariant
+   `_check_band_invariant` enforces at import. Neither landing = bad data =
+   no rate. The code is therefore correct under either Yahoo convention, and
+   the payload states the convention actually observed instead of a comment
+   claiming it.
+
+5. bd:shotockviz-7ju — one symbol, one currency. A position's cost basis is a
+   sum of native amounts, so it is only a number if every transaction for that
+   symbol is in the same currency. The old fold took the currency from the
+   FIRST transaction and silently added the rest on top, mixing THB and USD
+   into a single `cost_basis` that the FX conversion then inherited.
+   Write path (`api/routes/portfolio.py`) now REJECTS a transaction whose
+   currency disagrees with the symbol's existing rows (409). Read path keeps
+   working for legacy rows already in that state, but loudly: the position is
+   flagged `currency_conflict`, is never priced, never valued, and is excluded
+   from both sides of the total and named in
+   `PortfolioTotals.currency_conflict_symbols` — the same doctrine as rule 2
+   and rule 4's `fx_unavailable_symbols`. A conflict is judged over ALL rows of
+   the symbol, including fully-closed lots: for legacy data we cannot tell a
+   deliberate re-denomination from a mis-entry, and the write path makes the
+   same judgement, so the two paths cannot disagree. The fix for a genuine
+   re-denomination is to correct the old rows.
+
 Money is `float` here only because `models/portfolio.py:33-35` stores qty/price/fee
 as `Float`. The Decimal/Numeric migration is a separate bead (Tara N8) and is NOT
 started here. The arithmetic below adds exactly one new term per BUY (`+ fee`),
@@ -84,8 +113,14 @@ QTY_EPSILON = 1e-6
 # The one currency every total in this module is stated in.
 BASE_CURRENCY = "THB"
 
-# Yahoo symbol carrying the rate. It quotes "1 THB in USD" (e.g. 0.0317), so the
-# THB-per-USD rate is its reciprocal — see `live_rate_from_thbusd`.
+# Yahoo symbol carrying the rate.
+#
+# bd:shotockviz-ss3 — this used to read "It quotes '1 THB in USD' (e.g. 0.0317),
+# so the THB-per-USD rate is its reciprocal". That was a claim in a comment that
+# nobody had checked against a payload, and the code inverted unconditionally on
+# the strength of it. Orientation is now DERIVED per read (`read_fx_quote`) and
+# reported (`FxRate.quote_orientation`), so the comment no longer has to be
+# right — see rule 4 / FX-4 in the module docstring.
 FX_QUOTE_SYMBOL = "THBUSD=X"
 
 # Last-resort rate, used ONLY when there is no live quote and the user's own book
@@ -93,9 +128,35 @@ FX_QUOTE_SYMBOL = "THBUSD=X"
 # it is never written to a transaction.
 FX_FALLBACK_RATES = {"USD": 33.0}
 
-# Sanity band for a base-per-unit rate. A quote that lands outside it is bad data
-# (e.g. the pair delivered the other way up), not a market rate.
+# Sanity band for a base-per-unit rate, and — bd:shotockviz-ss3 — the thing that
+# makes the quote's orientation DERIVABLE instead of assumed.
+#
+# It can serve as that discriminator only because the band lies strictly above
+# 1.0: for any positive price p, at most one of {p, 1/p} can fall inside it, so
+# "which way up is this pair?" has exactly one answer, or none.
+# `_check_band_invariant` enforces that at import.
+#
+# Reference points for USD/THB: ~25 (1996), ~56 (1998 crisis peak), and 32.93 on
+# 2026-09-04 (public FX quote, cross-checked while working bd:shotockviz-ss3 —
+# an observation used to size the band, NOT a rate this code will ever use).
+# 10-100 is deliberately far wider than any plausible market move: its job is to
+# reject a mis-oriented or garbage payload, not to police the market.
 FX_PLAUSIBLE_RANGE = {"USD": (10.0, 100.0)}
+
+
+def _check_band_invariant() -> None:
+    """A band that straddles 1.0 cannot tell a rate from its reciprocal."""
+    for currency, (lo, hi) in FX_PLAUSIBLE_RANGE.items():
+        if not (1.0 < lo <= hi):
+            raise ValueError(
+                f"FX_PLAUSIBLE_RANGE[{currency!r}] = ({lo}, {hi}) must satisfy "
+                "1.0 < lo <= hi — otherwise a price and its reciprocal can both "
+                "be 'plausible' and the quote's orientation is undecidable "
+                "(bd:shotockviz-ss3)."
+            )
+
+
+_check_band_invariant()
 
 
 def _currency_str(value) -> str:
@@ -115,6 +176,11 @@ class FxRate:
     source: str  # "identity" | "live" | "last_known" | "fallback"
     as_of: str | None = None  # ISO date of a "last_known" observation
     base: str = BASE_CURRENCY
+    # bd:shotockviz-ss3 — which way up the live quote actually arrived
+    # ("reciprocal" | "direct"), or None when the rate did not come from a
+    # quote. Carried into the API payload so the orientation can be read off a
+    # live response instead of trusted from a comment.
+    quote_orientation: str | None = None
 
     @property
     def estimated(self) -> bool:
@@ -124,22 +190,58 @@ class FxRate:
 
 FxResolver = Callable[[str], "FxRate | None"]
 
+# How a quoted price relates to the base-per-unit rate we want.
+ORIENTATION_RECIPROCAL = "reciprocal"  # quote is base-in-foreign  (0.0304)
+ORIENTATION_DIRECT = "direct"          # quote is foreign-in-base  (32.93)
+
+
+@dataclass(frozen=True)
+class FxQuoteReading:
+    """A live FX quote read WITHOUT assuming which way up the pair is."""
+
+    rate: float          # base per 1 unit of the foreign currency
+    orientation: str     # ORIENTATION_RECIPROCAL | ORIENTATION_DIRECT
+    quoted_price: float  # exactly what the payload said, for the record
+
+
+def read_fx_quote(quote: Mapping | None, currency: str = "USD") -> FxQuoteReading | None:
+    """Derive the base-per-unit rate from a cached FX quote (rule 4 / FX-4).
+
+    Tries both readings of the quoted price and keeps the one that lands inside
+    `FX_PLAUSIBLE_RANGE[currency]`. The band sits strictly above 1.0, so at most
+    one of them can — `_check_band_invariant`. Returns None when the price is
+    missing / non-numeric / non-positive, when neither reading is plausible
+    (garbage), or in the impossible-by-invariant case where both are (ambiguous
+    — decline rather than pick).
+
+    This is what makes a mis-oriented payload a *declined* rate instead of a
+    silent ~1000x rescaling of the whole foreign book.
+    """
+    band = FX_PLAUSIBLE_RANGE.get(currency.upper())
+    if band is None:
+        return None
+    price = usable_price(quote)
+    if price is None:
+        return None
+
+    lo, hi = band
+    readings = [
+        FxQuoteReading(1.0 / price, ORIENTATION_RECIPROCAL, price),
+        FxQuoteReading(price, ORIENTATION_DIRECT, price),
+    ]
+    plausible = [r for r in readings if lo <= r.rate <= hi]
+    return plausible[0] if len(plausible) == 1 else None
+
 
 def live_rate_from_thbusd(quote: Mapping | None) -> float | None:
     """THB-per-USD from a cached `THBUSD=X` quote, or None if not usable.
 
-    The quote is "1 THB in USD", so the rate we want is its reciprocal. A price
-    that is missing / non-numeric / non-positive, or a reciprocal outside
-    `FX_PLAUSIBLE_RANGE["USD"]`, returns None — the caller then falls back and
-    marks the result estimated instead of scaling the US book by a wrong power
-    of ten.
+    Thin wrapper over `read_fx_quote` for callers that only need the number
+    (e.g. stamping a rate onto a new transaction). Prefer `read_fx_quote` where
+    the orientation is worth reporting.
     """
-    price = usable_price(quote)
-    if price is None:
-        return None
-    rate = 1.0 / price
-    lo, hi = FX_PLAUSIBLE_RANGE["USD"]
-    return rate if lo <= rate <= hi else None
+    reading = read_fx_quote(quote, "USD")
+    return reading.rate if reading is not None else None
 
 
 def last_known_rate(txns: Iterable, currency: str) -> tuple[float, str | None] | None:
@@ -175,13 +277,15 @@ def resolve_fx(
     currency: str,
     live_rate: float | None = None,
     last_known: tuple[float, str | None] | None = None,
+    live_orientation: str | None = None,
 ) -> FxRate | None:
     """Pick the most honest rate available for `currency`, labelled with its source."""
     currency = currency.upper()
     if currency == BASE_CURRENCY:
         return FxRate(currency=currency, rate=1.0, source="identity")
     if live_rate is not None and live_rate > 0:
-        return FxRate(currency=currency, rate=live_rate, source="live")
+        return FxRate(currency=currency, rate=live_rate, source="live",
+                      quote_orientation=live_orientation)
     if last_known is not None and last_known[0] > 0:
         return FxRate(currency=currency, rate=last_known[0], source="last_known",
                       as_of=last_known[1])
@@ -207,17 +311,19 @@ def build_fx_rates(txns: Sequence, fx_quote: Mapping | None = None) -> dict[str,
     `fx_quote` is the cached `THBUSD=X` blob (None when the cache is cold — the
     normal state off-hours, which is exactly when the old 33.0 constant fired).
     """
-    live = live_rate_from_thbusd(fx_quote)
+    reading = read_fx_quote(fx_quote, "USD")
     currencies = {
         _currency_str(getattr(t, "currency", None)) for t in txns
     } - {BASE_CURRENCY}
 
     rates: dict[str, FxRate] = {}
     for currency in sorted(currencies):
+        is_usd = currency == "USD"
         resolved = resolve_fx(
             currency,
-            live_rate=live if currency == "USD" else None,
+            live_rate=reading.rate if (is_usd and reading) else None,
             last_known=last_known_rate(txns, currency),
+            live_orientation=reading.orientation if (is_usd and reading) else None,
         )
         if resolved is not None:
             rates[currency] = resolved
@@ -243,6 +349,15 @@ class Holding:
     # Only meaningful while `fx_complete` is True.
     cost_basis_base: float = 0.0
     fx_complete: bool = True
+    # Rule 5 / bd:shotockviz-7ju: every currency seen on this symbol's rows, not
+    # just the first one. More than one means `cost_basis` below is a sum of
+    # different units and is not a number.
+    currencies: set[str] = field(default_factory=set)
+
+    @property
+    def currency_conflict(self) -> bool:
+        """True when this symbol's transactions do not agree on a currency."""
+        return len(self.currencies) > 1
 
     @property
     def avg_cost(self) -> float:
@@ -266,9 +381,14 @@ class ValuedHolding:
 
     symbol: str
     qty: float
-    avg_cost: float
-    cost_basis: float
+    avg_cost: float | None
+    cost_basis: float | None
     currency: str
+    # Rule 5 / bd:shotockviz-7ju. When True, `avg_cost`/`cost_basis` are None:
+    # the underlying rows disagree on a currency, so there is no cost number to
+    # state. `currencies` names what was found so the user can go fix the rows.
+    currency_conflict: bool = False
+    currencies: list[str] = field(default_factory=list)
     current_price: float | None = None
     current_value: float | None = None
     unrealized_pl: float | None = None
@@ -279,6 +399,7 @@ class ValuedHolding:
     fx_source: str | None = None          # identity | live | last_known | fallback
     fx_as_of: str | None = None           # observation date of a "last_known" rate
     fx_estimated: bool = False
+    fx_quote_orientation: str | None = None  # bd:shotockviz-ss3
     cost_basis_base: float | None = None
     cost_basis_source: str | None = None  # identity | historical | current_rate
     current_value_base: float | None = None
@@ -318,6 +439,9 @@ class PortfolioTotals:
     # Priced, but no rate for its currency -> excluded from the totals rather
     # than added raw (that raw addition was bd:shotockviz-sbe).
     fx_unavailable_symbols: list[str] = field(default_factory=list)
+    # Rule 5 / bd:shotockviz-7ju — the symbol's own rows disagree on a currency,
+    # so its cost basis mixes units. Excluded from both sides and named.
+    currency_conflict_symbols: list[str] = field(default_factory=list)
 
 
 def build_holdings(txns: Iterable) -> dict[str, Holding]:
@@ -332,6 +456,9 @@ def build_holdings(txns: Iterable) -> dict[str, Holding]:
                 currency=_currency_str(getattr(t, "currency", None)),
             )
         h = holdings[symbol]
+        # Rule 5: record every currency this symbol was ever transacted in, so a
+        # mixed-unit cost basis is detectable instead of inherited silently.
+        h.currencies.add(_currency_str(getattr(t, "currency", None)))
 
         qty = float(t.qty or 0.0)
         price = float(t.price or 0.0)
@@ -424,6 +551,23 @@ def value_holdings(
     valued: list[ValuedHolding] = []
 
     for symbol, h in holdings.items():
+        # Rule 5 / bd:shotockviz-7ju — mixed cost-basis units. Nothing about
+        # this position is expressible: not the cost (a sum of two currencies),
+        # therefore not the P&L, therefore not the converted total. Return the
+        # row so the user can SEE the broken symbol, but with every money field
+        # None and the conflict named. `summarize` then excludes it by name.
+        if h.currency_conflict:
+            valued.append(ValuedHolding(
+                symbol=symbol,
+                qty=h.qty,
+                avg_cost=None,
+                cost_basis=None,
+                currency="/".join(sorted(h.currencies)),
+                currency_conflict=True,
+                currencies=sorted(h.currencies),
+            ))
+            continue
+
         price = usable_price(quotes.get(symbol))
         value = price * h.qty if price is not None else None
         pl = (value - h.cost_basis) if value is not None else None
@@ -447,6 +591,7 @@ def value_holdings(
             v.fx_source = rate.source
             v.fx_as_of = rate.as_of
             v.fx_estimated = rate.estimated
+            v.fx_quote_orientation = rate.quote_orientation
             v.avg_fx_rate = h.avg_fx_rate
 
             # Cost side (FX-2): each lot at its own stored rate when we have
@@ -484,9 +629,10 @@ def value_holdings(
 def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
     """Aggregate priced, convertible positions — always in `BASE_CURRENCY`.
 
-    Exclusions (both are "we do not know", never "it is worth nothing"):
-      * no usable quote        -> `unpriced_symbols`        (rule 2)
-      * no rate for its currency -> `fx_unavailable_symbols` (rule 4)
+    Exclusions (all three are "we do not know", never "it is worth nothing"):
+      * rows disagree on a currency -> `currency_conflict_symbols` (rule 5)
+      * no usable quote             -> `unpriced_symbols`          (rule 2)
+      * no rate for its currency    -> `fx_unavailable_symbols`    (rule 4)
 
     The FX split is carried through: `market_pl + fx_pl == unrealized_pl` whenever
     `fx_pl` is not None. `fx_pl` goes None the moment one included position cannot
@@ -500,6 +646,12 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
     totals = PortfolioTotals()
 
     for v in valued:
+        # Checked before `priced`: a conflicted position was never priced, and
+        # calling it "waiting for a price" would send the user to wait for data
+        # that will never fix it (rule 5).
+        if v.currency_conflict:
+            totals.currency_conflict_symbols.append(v.symbol)
+            continue
         if not v.priced:
             totals.unpriced_symbols.append(v.symbol)
             continue
@@ -526,6 +678,7 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
                 rate=v.fx_rate,
                 source=v.fx_source,
                 as_of=v.fx_as_of,
+                quote_orientation=v.fx_quote_orientation,
             )
 
     totals.unrealized_pl = totals.total_value - totals.total_cost
@@ -533,3 +686,90 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
         totals.unrealized_pl / totals.total_cost * 100 if totals.total_cost else 0.0
     )
     return totals
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Equity curve — bd:shotockviz-la4
+#
+# The third surface. `api/routes/portfolio_performance.py` walked every held
+# symbol and did `total_value += price * qty` with NO conversion at all, then
+# fed that number to the Dashboard sparkline — so a mixed book's equity curve
+# was the raw THB+USD addition rule 4 exists to forbid, on a screen that also
+# showed the correctly-converted total right next to it.
+#
+# What a *correct* curve would need is a rate PER DAY, i.e. historical FX. The
+# user's standing decision is that historical rates are not backfilled (rule 4 /
+# FX-1), and this module does not invent numbers. So the curve is stated on the
+# only honest basis left:
+#
+#   CURVE_BASIS_CONSTANT_RATE — every day of the curve is converted at ONE rate,
+#   today's. The line therefore shows how the MARKET moved; it deliberately does
+#   not show currency return, and its historical levels are not what the book was
+#   worth in THB on those dates. Constant-currency reporting, declared as such:
+#   the basis, the rate, and its source travel with the payload so the screen can
+#   say it. Anything else would be inventing a rate per day.
+#
+#   CURVE_BASIS_SINGLE_CURRENCY — the book is entirely in the base currency, so
+#   no conversion happens and there is nothing to qualify. The common Thai case.
+#
+# A symbol whose currency has no rate at all, or whose rows disagree on a
+# currency (rule 5), cannot enter the curve. Note the curve excludes the whole
+# DAY rather than the position: dropping a position out of a time series makes
+# the line fall, which reads as a loss that never happened. That is the same
+# reason the existing code skips a day with any unpriced symbol.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CURVE_BASIS_SINGLE_CURRENCY = "single_currency"
+CURVE_BASIS_CONSTANT_RATE = "constant_current_rate"
+
+
+@dataclass
+class CurveFxPlan:
+    """Everything the equity curve needs to state itself honestly."""
+
+    basis: str
+    # symbol -> the one rate used for EVERY day of the curve. A symbol missing
+    # from here cannot be converted and must exclude the days it is held on.
+    rate_by_symbol: dict[str, float] = field(default_factory=dict)
+    base_currency: str = BASE_CURRENCY
+    fx_rates: dict[str, FxRate] = field(default_factory=dict)
+    fx_estimated: bool = False
+    fx_unavailable_symbols: list[str] = field(default_factory=list)
+    currency_conflict_symbols: list[str] = field(default_factory=list)
+
+    def convertible(self, symbol: str) -> bool:
+        return symbol in self.rate_by_symbol
+
+
+def curve_fx_plan(
+    holdings: Mapping[str, Holding],
+    fx_rates: Mapping[str, FxRate],
+) -> CurveFxPlan:
+    """Fix ONE rate per symbol for the whole curve, and say what that means.
+
+    `fx_rates` is the same map `/portfolio/analytics` and the dashboard use
+    (`build_fx_rates`), so all three surfaces convert at the same rate at the
+    same instant — which is the point of bd:shotockviz-la4.
+    """
+    resolve = fx_resolver(dict(fx_rates))
+    plan = CurveFxPlan(basis=CURVE_BASIS_SINGLE_CURRENCY)
+
+    for symbol, h in holdings.items():
+        if h.currency_conflict:
+            plan.currency_conflict_symbols.append(symbol)
+            continue
+        currency = _currency_str(h.currency)
+        rate = resolve(currency)
+        if rate is None:
+            plan.fx_unavailable_symbols.append(symbol)
+            continue
+        plan.rate_by_symbol[symbol] = rate.rate
+        if currency != BASE_CURRENCY:
+            plan.basis = CURVE_BASIS_CONSTANT_RATE
+            plan.fx_rates[currency] = rate
+            if rate.estimated:
+                plan.fx_estimated = True
+
+    plan.currency_conflict_symbols.sort()
+    plan.fx_unavailable_symbols.sort()
+    return plan

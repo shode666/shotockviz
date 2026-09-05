@@ -111,11 +111,82 @@ def test_live_rate_is_the_reciprocal_of_the_thbusd_quote():
     {"price": 0.0},
     {"price": -0.03},
     {"price": "n/a"},
-    {"price": 33.0},     # pair delivered the other way up -> 0.0303 THB/USD
-    {"price": 0.5},      # -> 2 THB/USD, outside the plausible band
+    {"price": 0.5},      # neither 0.5 nor 2.0 is a plausible THB/USD rate
+    {"price": 3300.0},   # neither 3300 nor 0.0003
 ])
 def test_an_unusable_or_implausible_quote_is_not_a_rate(quote):
     assert portfolio_service.live_rate_from_thbusd(quote) is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FX-4 / bd:shotockviz-ss3 — the quote's orientation is derived, not assumed
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_the_bands_lower_bound_sits_above_one_or_orientation_is_undecidable():
+    """The invariant the whole derivation rests on: a price and its reciprocal
+    can never both be 'plausible'. `_check_band_invariant` runs at import; this
+    pins the property so nobody widens the band down through 1.0 later."""
+    for lo, hi in portfolio_service.FX_PLAUSIBLE_RANGE.values():
+        assert 1.0 < lo <= hi
+    portfolio_service._check_band_invariant()
+
+    original = portfolio_service.FX_PLAUSIBLE_RANGE.copy()
+    try:
+        portfolio_service.FX_PLAUSIBLE_RANGE["USD"] = (0.5, 100.0)
+        with pytest.raises(ValueError, match="orientation is undecidable"):
+            portfolio_service._check_band_invariant()
+    finally:
+        portfolio_service.FX_PLAUSIBLE_RANGE.clear()
+        portfolio_service.FX_PLAUSIBLE_RANGE.update(original)
+
+
+def test_a_reciprocal_quote_is_read_as_such_and_says_so():
+    """The documented Yahoo convention: THBUSD=X = '1 THB in USD'."""
+    reading = portfolio_service.read_fx_quote({"price": FX_QUOTE_PRICE})
+    assert reading is not None
+    assert reading.rate == pytest.approx(35.0)
+    assert reading.orientation == portfolio_service.ORIENTATION_RECIPROCAL
+    assert reading.quoted_price == pytest.approx(FX_QUOTE_PRICE)
+
+
+def test_a_direct_quote_is_read_correctly_instead_of_scaling_the_book_by_1000():
+    """bd:shotockviz-ss3's actual risk. If the pair ever arrives the other way
+    up (32.93 = THB per USD — the real 2026-09-04 level), the old code inverted
+    it to 0.0304 and shrank the whole US book by ~1000x. It is now read as what
+    it is, and the orientation is reported rather than assumed."""
+    reading = portfolio_service.read_fx_quote({"price": 32.93})
+    assert reading is not None
+    assert reading.rate == pytest.approx(32.93)
+    assert reading.orientation == portfolio_service.ORIENTATION_DIRECT
+    assert portfolio_service.live_rate_from_thbusd({"price": 32.93}) == pytest.approx(32.93)
+
+
+def test_an_unknown_currency_has_no_band_and_therefore_no_derivable_rate():
+    assert portfolio_service.read_fx_quote({"price": 32.93}, "EUR") is None
+
+
+def test_the_observed_orientation_travels_all_the_way_into_the_totals():
+    """The point of the field: the orientation becomes readable off a live API
+    response instead of being asserted by a code comment."""
+    rates = portfolio_service.build_fx_rates(
+        [_Txn("NVDA", "BUY", 1, 100, currency="USD", fx_rate=30.0)],
+        {"price": FX_QUOTE_PRICE},
+    )
+    assert rates["USD"].quote_orientation == portfolio_service.ORIENTATION_RECIPROCAL
+
+    totals = portfolio_service.summarize(portfolio_service.value_holdings(
+        portfolio_service.build_holdings(
+            [_Txn("NVDA", "BUY", 1, 100, currency="USD", fx_rate=30.0)]),
+        {"NVDA": {"price": 110.0}},
+        fx=portfolio_service.fx_resolver(rates),
+    ))
+    assert totals.fx_rates["USD"].quote_orientation == portfolio_service.ORIENTATION_RECIPROCAL
+
+
+def test_a_non_live_rate_reports_no_orientation_because_no_quote_was_read():
+    fallback = portfolio_service.resolve_fx("USD", live_rate=None, last_known=None)
+    assert fallback.source == "fallback"
+    assert fallback.quote_orientation is None
 
 
 def test_rate_chain_prefers_live_then_the_users_own_rate_then_the_constant():

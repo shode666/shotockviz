@@ -4,12 +4,15 @@ import { displaySymbol } from '@/utils/formatters';
 interface Holding {
     symbol: string;
     qty: number;
-    avg_cost: number;
+    // bd:shotockviz-7ju — null when `currency_conflict`: a cost basis summed
+    // across two currencies is not a number, so the backend sends none.
+    avg_cost: number | null;
     current_price: number | null;
     current_value: number | null;
     unrealized_pl: number | null;
     unrealized_pl_pct: number | null;
     currency?: string;
+    currency_conflict?: boolean;
 }
 
 interface HoldingsTableProps {
@@ -75,11 +78,17 @@ export function HoldingsTable({ holdings, hasPendingPrices }: HoldingsTableProps
                                 </td>
                                 <td className="px-4 py-3 tabular-nums">{h.qty.toLocaleString()}</td>
                                 <td className="px-4 py-3 tabular-nums">
-                                    {cs}
-                                    {fmt(h.avg_cost)}
+                                    {/* bd:shotockviz-7ju — no currency sign in front of
+                                        a dash, and no number at all when the units are
+                                        mixed. */}
+                                    {h.avg_cost != null ? `${cs}${fmt(h.avg_cost)}` : '—'}
                                 </td>
                                 <td className="px-4 py-3 tabular-nums">
-                                    {h.current_price != null ? (
+                                    {h.currency_conflict ? (
+                                        <span className="text-[10px]" style={{ color: 'var(--color-red)' }}>
+                                            สกุลเงินไม่ตรงกัน
+                                        </span>
+                                    ) : h.current_price != null ? (
                                         <>
                                             {cs}
                                             {fmt(h.current_price)}

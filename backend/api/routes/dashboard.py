@@ -153,7 +153,10 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
 
         top_holdings = []
         for v in valued:
-            if not v.priced:
+            # bd:shotockviz-7ju — a position whose rows mix currencies has no
+            # value to rank by; it is reported by name, not as a row with
+            # invented numbers.
+            if v.currency_conflict or not v.priced:
                 continue
             top_holdings.append({
                 "symbol": v.symbol,
@@ -195,10 +198,13 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
                 {
                     "currency": r.currency, "base": r.base, "rate": round(r.rate, 6),
                     "source": r.source, "as_of": r.as_of, "estimated": r.estimated,
+                    # bd:shotockviz-ss3 — the observed orientation of THBUSD=X.
+                    "quote_orientation": r.quote_orientation,
                 }
                 for r in totals.fx_rates.values()
             ],
             "fx_unavailable_symbols": totals.fx_unavailable_symbols,
+            "currency_conflict_symbols": totals.currency_conflict_symbols,
             "position_count": len(active),
             "top_holdings": top_holdings[:5],
             # Stays tied to unpriced POSITIONS only — a stale FX rate is reported

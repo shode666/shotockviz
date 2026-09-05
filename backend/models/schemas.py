@@ -200,13 +200,24 @@ class FxRateInfo(BaseModel):
     source: str  # identity | live | last_known | fallback
     as_of: Optional[str] = None
     estimated: bool = False
+    # bd:shotockviz-ss3 — "reciprocal" | "direct": which way up the live FX quote
+    # arrived. None when the rate did not come from a quote. Present so the pair's
+    # orientation can be READ off a live payload; it used to be a code comment.
+    quote_orientation: Optional[str] = None
 
 
 class HoldingResponse(BaseModel):
     symbol: str
     qty: float
-    avg_cost: float
+    # None when `currency_conflict` — a cost basis summed across two currencies
+    # is not a number and must not be printed as one (bd:shotockviz-7ju).
+    avg_cost: Optional[float] = None
     currency: str = "THB"
+    # bd:shotockviz-7ju — this symbol's transactions disagree on a currency.
+    # Every money field on the row is None; the position is excluded from the
+    # totals and named in PortfolioAnalytics.currency_conflict_symbols.
+    currency_conflict: bool = False
+    currencies: List[str] = []
     current_price: Optional[float] = None
     current_value: Optional[float] = None
     unrealized_pl: Optional[float] = None
@@ -243,6 +254,8 @@ class PortfolioAnalytics(BaseModel):
     cost_basis_estimated: bool = False  # some cost converted at today's rate
     fx_rates: List[FxRateInfo] = []
     fx_unavailable_symbols: List[str] = []
+    # bd:shotockviz-7ju — symbols excluded because their own rows mix currencies.
+    currency_conflict_symbols: List[str] = []
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
     has_pending_prices: bool = False
