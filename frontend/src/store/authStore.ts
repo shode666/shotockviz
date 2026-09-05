@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import api from '@/services/api';
+import { clearAuthSession, shouldClearSession, classifyCheckAuthError } from './authCleanup';
 
 /**
  * Safe localStorage helpers — no-op on the server (SSR / TanStack Start).
@@ -27,6 +28,13 @@ interface AuthState {
     googleLogin: (credential: string) => Promise<AuthUser>;
     logout: () => Promise<void>;
     checkAuth: (retryCount?: number) => Promise<void>;
+    // bd:features-2026-09 — passive state flip called by the global 401
+    // response interceptor (services/api.ts) so any endpoint's 401 (not
+    // just /auth/me during checkAuth) immediately unblocks Google One Tap,
+    // instead of waiting for the next page reload. Reuses the same
+    // clearAuthSession() cleanup as checkAuth() (no duplication, no new
+    // token-management logic — see authCleanup.ts / ADR-007).
+    handleUnauthorizedResponse: () => void;
 }
 
 // bd:deps-2026-09 S1 (ADR-007) — removed: JWT-expiry parsing + proactive
@@ -80,14 +88,14 @@ const useAuthStore = create<AuthState>()((set, get) => ({
             const { data } = await api.get('/auth/me', { timeout: 15000 });
             set({ token, user: data, isAuthenticated: true, isLoading: false });
         } catch (err: any) {
-            if (err?.response?.status === 401) {
+            const action = classifyCheckAuthError(err?.response?.status, retryCount);
+            if (action === 'clear-session') {
                 // Access token invalid/expired — clear it. Google One Tap
                 // (GoogleOneTapManager, __root.tsx) picks up from here:
                 // isAuthenticated flips false → its `disabled` flag flips
                 // false → it silently re-authenticates without a popup.
-                ls.del('access_token');
-                set({ token: null, user: null, isAuthenticated: false, isLoading: false });
-            } else if (retryCount < 5) {
+                clearAuthSession({ removeToken: () => ls.del('access_token'), setAuthState: set });
+            } else if (action === 'retry') {
                 // Network error / 502 — backend still starting up
                 const delays = [2000, 4000, 6000, 10000, 15000];
                 const delay = delays[retryCount] ?? 15000;
@@ -97,6 +105,15 @@ const useAuthStore = create<AuthState>()((set, get) => ({
                 set({ isLoading: false });
             }
         }
+    },
+
+    // bd:features-2026-09 — see handleUnauthorizedResponse in AuthState above.
+    // round 2 (Quinn Medium): guarded with shouldClearSession() so N
+    // concurrent in-flight 401s don't each trigger a redundant set() —
+    // once isAuthenticated is already false, this is a no-op.
+    handleUnauthorizedResponse: () => {
+        if (!shouldClearSession(get().isAuthenticated)) return;
+        clearAuthSession({ removeToken: () => ls.del('access_token'), setAuthState: set });
     },
 }));
 

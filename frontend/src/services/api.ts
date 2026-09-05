@@ -1,5 +1,7 @@
 import axios, { type AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import toast from 'react-hot-toast';
+import { useAuthStore } from '@/store/authStore';
+import { handleApiError, type ApiErrorBody } from './apiErrorHandler';
 
 // Always use relative path — Vite proxy forwards /api → http://backend:8000
 // (VITE_API_URL=http://backend:8000 is not resolvable from the browser)
@@ -28,15 +30,25 @@ api.interceptors.request.use((config: InternalAxiosRequestConfig) => {
 
 // bd:deps-2026-09 S1 (ADR-007) — the 401 auto-refresh interceptor was removed
 // (there is no POST /auth/refresh anymore; CLAUDE.md rule 5 "NO custom token
-// management on frontend"). A 401 now falls straight through to the generic
-// error interceptor below; authStore.checkAuth() clears the stale token and
-// Google One Tap silently re-authenticates.
+// management on frontend"). This stays true below: on a 401 we only flip
+// local state (delete the stale token, isAuthenticated -> false) — we never
+// request, parse, or re-issue a token from here. No polling, no timer.
+//
+// bd:features-2026-09 — this was previously *only* handled by
+// authStore.checkAuth() on app mount, which runs once. If the 8h JWT
+// (backend/core/config.py) expires mid-session, every other endpoint starts
+// returning 401 but isAuthenticated never flipped false until a page
+// reload — so Google One Tap (disabled: isLoading || isAuthenticated,
+// __root.tsx) never re-fired. The response-error handling below (extracted
+// to services/apiErrorHandler.ts::handleApiError, DI'd with `useAuthStore`)
+// reuses authStore's existing 401-cleanup (clearAuthSession, authCleanup.ts)
+// on ANY 401 response so One Tap unblocks immediately instead of waiting
+// for the next reload.
 
 // Global error handling and toast notifications
 // Data endpoints (quotes, history) are silent on failure — chart/panel handles fallback UI
 // /search is silent — the sidebar search box shows empty results on failure, no toast needed
 const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready', '/sr-levels'];
-const isSilentPath = (url = ''): boolean => SILENT_PATHS.some((p) => url.includes(p));
 
 // bd:deps-2026-09 S2 (ADR-002, AC-B4-r3) — single central unwrap point.
 // Every /api/v1/* JSON response is now enveloped as
@@ -53,11 +65,6 @@ interface Envelope {
 const _isEnvelope = (body: unknown): body is Envelope =>
     body !== null && typeof body === 'object' && 'data' in body && 'meta' in body;
 
-interface ApiErrorBody {
-    detail?: string | Array<{ msg: string }>;
-    meta?: { error?: { message?: string } };
-}
-
 api.interceptors.response.use(
     (response: AxiosResponse & { meta?: unknown }) => {
         if (_isEnvelope(response.data)) {
@@ -67,43 +74,11 @@ api.interceptors.response.use(
         return response;
     },
     (error: AxiosError<ApiErrorBody>) => {
-        const url = error.config?.url || '';
-        const status = error.response?.status;
-        const body = error.response?.data;
-
-        // Silently drop data-fetching errors — chart shows stale/mock data instead
-        if (isSilentPath(url)) {
-            return Promise.reject(error);
-        }
-
-        // Timeout — show a brief user-friendly message
-        if (error.code === 'ECONNABORTED') {
-            toast.error('Request timed out — please try again', { id: 'timeout' });
-            return Promise.reject(error);
-        }
-
-        // bd:deps-2026-09 S2 (AC-B4-r3) — error body is now the enveloped
-        // shape {data: null, meta: {..., error: {message}}}; the old
-        // FastAPI-default `detail` (string | validation-error array) no
-        // longer appears on /api/v1/* (schemas/envelope.py
-        // install_error_envelope). Keep the `detail` fallback only for any
-        // response that somehow isn't enveloped (defense in depth).
-        let msg = error.message || 'API Request Failed';
-        if (body?.meta?.error?.message) {
-            msg = body.meta.error.message;
-        } else if (body?.detail) {
-            if (Array.isArray(body.detail)) {
-                msg = body.detail.map((e) => e.msg).join(', ');
-            } else if (typeof body.detail === 'string') {
-                msg = body.detail;
-            }
-        }
-
-        // 401 is silent here — authStore.checkAuth() clears the token and
-        // Google One Tap re-authenticates (ADR-007); 404 for data is silent
-        if (status === 401 || status === 404) return Promise.reject(error);
-
-        toast.error(msg, { id: `api-err-${status}` });
+        handleApiError(error, {
+            silentPaths: SILENT_PATHS,
+            authStore: useAuthStore,
+            showToast: (message, opts) => toast.error(message, opts),
+        });
         return Promise.reject(error);
     }
 );
