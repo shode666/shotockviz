@@ -90,15 +90,45 @@ test.describe('Settings Page — navigation', () => {
     await expect(page).toHaveURL('/settings');
   });
 
-  test('settings page has General / Chart / Notification side nav', async ({ page }) => {
+  test('settings page has General / Notification side nav (bd:ui-honesty-2026-09 F2 — Chart category removed, no Chart Defaults section left to point at)', async ({ page }) => {
     await page.goto('/settings');
     // bd:ux-2026-09 item 6 fix — unscoped 'Chart' collides with the top
     // Navbar's own "Chart" route link (strict-mode violation); scope to the
     // settings side-nav landmark (SettingsPage.tsx:46, aria-label="หมวดตั้งค่า").
     const sideNav = page.getByRole('navigation', { name: 'หมวดตั้งค่า' });
     await expect(sideNav.getByRole('link', { name: /General/ })).toBeVisible();
-    await expect(sideNav.getByRole('link', { name: /Chart/ })).toBeVisible();
     await expect(sideNav.getByRole('link', { name: /Notification/ })).toBeVisible();
+    // bd:ui-honesty-2026-09 F2 — CATEGORIES dropped the 'chart' entry entirely.
+    await expect(sideNav.getByRole('link', { name: /Chart/ })).toHaveCount(0);
+  });
+
+  test('side-nav aria-current follows scroll position, not a hardcoded first item (bd:ui-honesty-2026-09 F2)', async ({ page }) => {
+    // iter1->iter2 regression this locks down: SettingsPage.tsx originally
+    // compared el.offsetTop (page-coordinate) against container.scrollTop
+    // (container-coordinate) — aria-current stayed pinned to "General" no
+    // matter how far the panel scrolled (20-verify.md's iter1 finding).
+    await page.setViewportSize({ width: 900, height: 420 });
+    await page.goto('/settings');
+    await page.waitForLoadState('networkidle');
+
+    const sideNav = page.getByRole('navigation', { name: 'หมวดตั้งค่า' });
+    const generalLink = sideNav.getByRole('link', { name: /General/ });
+    const notifLink = sideNav.getByRole('link', { name: /Notification/ });
+
+    await expect(generalLink).toHaveAttribute('aria-current', 'true');
+    await expect(notifLink).not.toHaveAttribute('aria-current', 'true');
+
+    // Scroll the settings content container to its max — the container is
+    // the same element scrollspy.ts's caller passes as `container` (the
+    // outer div SettingsPage renders into, ref-scrolled, not the window).
+    await page.evaluate(() => {
+      const el = document.querySelector('.flex-1.overflow-auto') as HTMLElement | null;
+      if (el) el.scrollTop = el.scrollHeight;
+    });
+    await page.waitForTimeout(200); // scroll listener + setState settle
+
+    await expect(notifLink).toHaveAttribute('aria-current', 'true');
+    await expect(generalLink).not.toHaveAttribute('aria-current', 'true');
   });
 
   test('settings page has Dark and Light theme cards', async ({ page }) => {
@@ -107,18 +137,18 @@ test.describe('Settings Page — navigation', () => {
     await expect(page.getByText('Light', { exact: true }).first()).toBeVisible();
   });
 
-  test('settings page has Timezone selector', async ({ page }) => {
+  test('Timezone selector is gone (bd:ui-honesty-2026-09 F2 — removed, no code ever read #settings-tz\'s value)', async ({ page }) => {
     await page.goto('/settings');
-    // bd:ux-2026-09 item 6 fix — unscoped 'Timezone' matches 3 nodes (the
-    // section title div, the sr-only <label>, and the helper paragraph
-    // substring) — same .first() pattern already used below for Dark/Light.
-    await expect(page.getByText('Timezone', { exact: true }).first()).toBeVisible();
-    await expect(page.locator('#settings-tz')).toBeVisible();
+    await expect(page.getByText('Timezone', { exact: true })).toHaveCount(0);
+    await expect(page.locator('#settings-tz')).toHaveCount(0);
+    await expect(page.getByText('ShotockViz แสดงเวลาตาม timezone')).toHaveCount(0);
   });
 
-  test('settings page has Chart Defaults section', async ({ page }) => {
+  test('Chart Defaults section is gone (bd:ui-honesty-2026-09 F2 — Default Timeframe / Chart Type dropdowns saved nothing)', async ({ page }) => {
     await page.goto('/settings');
-    await expect(page.getByText('Chart Defaults')).toBeVisible();
+    await expect(page.getByText('Chart Defaults')).toHaveCount(0);
+    await expect(page.locator('#settings-tf')).toHaveCount(0);
+    await expect(page.locator('#settings-ct')).toHaveCount(0);
   });
 
   test('settings page has a Telegram Chat ID field (local state only)', async ({ page }) => {

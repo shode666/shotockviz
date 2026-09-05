@@ -26,8 +26,8 @@ test.describe('Screener Page — initial state', () => {
     await expect(page.getByRole('button', { name: /Run Screen/ })).toBeVisible();
   });
 
-  test('shows Save Filter button', async ({ page }) => {
-    await expect(page.getByRole('button', { name: /Save Filter/ })).toBeVisible();
+  test('Save Filter button is gone (bd:ui-honesty-2026-09 F9 — no backend preset endpoint exists)', async ({ page }) => {
+    await expect(page.getByRole('button', { name: /Save Filter/ })).toHaveCount(0);
   });
 
   test('shows all 5 filter dropdowns', async ({ page }) => {
