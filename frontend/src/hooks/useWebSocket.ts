@@ -13,16 +13,48 @@ import { shouldBumpDataVersion } from './wsDataReady';
  *                          bump dataVersion so React components re-fetch
  *                          (quote data_type bumps immediately — see
  *                          shouldBumpDataVersion); also stamps
- *                          appStore.dataReadyPayload for StatusBar's
- *                          "last update" display (bd:ui-honesty-2026-09 F3).
+ *                          appStore.dataReadyPayload (consumed by
+ *                          useChartData; StatusBar has its own polled path
+ *                          since bd:shotockviz-09j).
+ *   - 'price_update'    → per-symbol quote push, only delivered for
+ *                         symbols this socket subscribed to (see below).
+ *                         Logged for observability only — the 60s REST poll
+ *                         in usePriceUpdates remains the source of truth for
+ *                         displayed prices. Tara (bd:shotockviz-foc): this
+ *                         trader is not latency-sensitive, so a polled price
+ *                         and a pushed price are the same trade for him; the
+ *                         value of subscribing is honesty/closing the CQRS
+ *                         loop, not speed. Wiring price_update into UI state
+ *                         is a separate, larger change and out of this bd's
+ *                         scope.
  *
- * Any other message type (e.g. a stray 'price_update', which had no handler
- * here before this bd — audit finding F12) is ignored: no matching branch,
- * no throw.
+ * Subscription model (bd:shotockviz-foc):
+ *   The backend's ConnectionManager (`main.py`) only forwards `price_update`
+ *   to sockets that previously sent `{"action":"subscribe","symbol":...}`,
+ *   and it forgets all subscriptions when a socket disconnects
+ *   (`ConnectionManager.subscriptions` is keyed by the WebSocket instance —
+ *   `main.py:63-64`, `main.py:80` `subscriptions.pop(ws, None)`). So this
+ *   hook:
+ *     - subscribes to the symbol on screen (`appStore.selectedStock.sym`)
+ *       every time a connection is (re)established — including after the
+ *       exponential-backoff auto-reconnect below — because server-side
+ *       state does not survive a drop;
+ *     - unsubscribes the old symbol and subscribes the new one when the
+ *       user switches symbols on an already-open socket.
+ *
+ *   Scope decision: subscribe only to the on-screen symbol, not the whole
+ *   sidebar watchlist. The watchlist already gets fresh prices from its own
+ *   independent 60s poll (`usePriceUpdates` in Sidebar.tsx), and there is no
+ *   shared store of watchlist symbols this hook could read today — Sidebar
+ *   keeps that list in local component state. Lifting it into a shared
+ *   store to also subscribe every watchlist symbol over WS would be a
+ *   materially bigger change for a value Tara already scored as "honesty,
+ *   not speed" (the 60s poll is equivalent at this trader's horizon).
  */
 export default function useWebSocket() {
     const { token, user } = useAuthStore();
     const setDataReadyPayload = useAppStore(s => s.setDataReadyPayload);
+    const selectedSymbol = useAppStore(s => s.selectedStock.sym);
     const [isConnected, setIsConnected] = useState(false);
     const wsRef = useRef(null);
     const reconnectTimeoutRef = useRef(null);
@@ -31,6 +63,14 @@ export default function useWebSocket() {
     // Store latest setDataReadyPayload in ref to avoid stale closure
     const setPayloadRef = useRef(setDataReadyPayload);
     setPayloadRef.current = setDataReadyPayload;
+
+    // Latest on-screen symbol, read from `onopen` (which lives inside
+    // `connect()`, only re-created when token/user change — not on every
+    // symbol switch) and from the reconnect/backoff path.
+    const symbolRef = useRef(selectedSymbol);
+    // What the server currently believes this socket is subscribed to (or
+    // null if nothing is subscribed / the socket isn't open yet).
+    const subscribedSymbolRef = useRef(null);
 
     useEffect(() => {
         if (!token || !user?.id) {
@@ -54,6 +94,14 @@ export default function useWebSocket() {
                 if (reconnectTimeoutRef.current) {
                     clearTimeout(reconnectTimeoutRef.current);
                     reconnectTimeoutRef.current = null;
+                }
+                // The server has no memory of this client — (re)subscribe to
+                // whatever is on screen right now, not whatever it was when
+                // the previous socket dropped.
+                subscribedSymbolRef.current = null;
+                if (symbolRef.current) {
+                    ws.send(JSON.stringify({ action: 'subscribe', symbol: symbolRef.current }));
+                    subscribedSymbolRef.current = symbolRef.current;
                 }
             };
 
@@ -81,6 +129,10 @@ export default function useWebSocket() {
                         if (shouldBumpDataVersion(data)) {
                             useAppStore.getState().bumpDataVersion();
                         }
+                    } else if (data.type === 'price_update') {
+                        // bd:shotockviz-foc — reachable now that this hook sends a
+                        // subscribe frame (see docstring). Observability only.
+                        console.debug('[WS] price_update:', data.symbol, data.price, data.ts);
                     }
                 } catch (e) {
                     console.error('Failed to parse WS message', e);
@@ -89,6 +141,7 @@ export default function useWebSocket() {
 
             ws.onclose = () => {
                 setIsConnected(false);
+                subscribedSymbolRef.current = null;
                 const delay = Math.min(2000 * Math.pow(2, reconnectAttemptsRef.current), 30_000);
                 reconnectAttemptsRef.current += 1;
                 reconnectTimeoutRef.current = setTimeout(connect, delay);
@@ -109,6 +162,24 @@ export default function useWebSocket() {
             if (wsRef.current) wsRef.current.close();
         };
     }, [token, user?.id]);
+
+    // Switch subscription when the on-screen symbol changes on an
+    // already-open socket. Initial subscribe for a fresh/reconnected socket
+    // is handled in `onopen` above via `symbolRef`, which this effect keeps
+    // current even while disconnected.
+    useEffect(() => {
+        symbolRef.current = selectedSymbol;
+
+        const ws = wsRef.current;
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+        const current = subscribedSymbolRef.current;
+        if (current === selectedSymbol) return;
+
+        if (current) ws.send(JSON.stringify({ action: 'unsubscribe', symbol: current }));
+        if (selectedSymbol) ws.send(JSON.stringify({ action: 'subscribe', symbol: selectedSymbol }));
+        subscribedSymbolRef.current = selectedSymbol;
+    }, [selectedSymbol]);
 
     return { isConnected };
 }

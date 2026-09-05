@@ -1,108 +1,91 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatLastUpdate, getLastQuoteTimestamp, nextLastUpdate, type LastUpdateState } from './statusBar.ts';
+import { formatAgeThai, getPriceFreshness } from './statusBar.ts';
 
-test('formatLastUpdate: null timestamp (no data_ready yet this session) returns em-dash', () => {
-    assert.equal(formatLastUpdate(null, Date.now()), '—');
+// bd:shotockviz-09j — real price age from server `ts`, replacing the
+// data_ready-derived path (ADR-UH-001/001a) that always read "—".
+
+test('formatAgeThai: under 1 minute reads "just now"', () => {
+    assert.equal(formatAgeThai(0), 'เมื่อครู่นี้');
+    assert.equal(formatAgeThai(59_000), 'เมื่อครู่นี้');
 });
 
-test('formatLastUpdate: formats a real timestamp as HH:MM:SS, not the current wall clock', () => {
-    const dataReadyAt = new Date('2026-09-05T03:04:05Z').getTime();
-    const laterNow = dataReadyAt + 60_000; // 1 minute after the data arrived
-    const result = formatLastUpdate(dataReadyAt, laterNow);
-    assert.equal(result, new Date(dataReadyAt).toLocaleTimeString('en-GB', { hour12: false }));
-    // Must reflect the data timestamp, not `now`
-    assert.notEqual(result, new Date(laterNow).toLocaleTimeString('en-GB', { hour12: false }));
+test('formatAgeThai: rounds down to whole minutes', () => {
+    assert.equal(formatAgeThai(60_000), '1 นาทีที่แล้ว');
+    assert.equal(formatAgeThai(119_000), '1 นาทีที่แล้ว');
+    assert.equal(formatAgeThai(4 * 60_000), '4 นาทีที่แล้ว');
 });
 
-// bd:ui-honesty-2026-09 F3 r2 (03b-bella-spec-r2-F3.md) — getLastQuoteTimestamp
-
-test('getLastQuoteTimestamp: null payload returns null', () => {
-    assert.equal(getLastQuoteTimestamp(null, 'NVDA'), null);
+test('formatAgeThai: negative age (clock skew) clamps to "just now", does not throw or go negative', () => {
+    assert.equal(formatAgeThai(-5_000), 'เมื่อครู่นี้');
 });
 
-test('getLastQuoteTimestamp: data_type "history", symbol matches selected -> null (Chris regression)', () => {
-    const payload = { data_type: 'history', symbol: 'NVDA', _key: 123 };
-    assert.equal(getLastQuoteTimestamp(payload, 'NVDA'), null);
+test('getPriceFreshness: no ts yet this session -> unknown / em-dash, regardless of market state', () => {
+    assert.deepEqual(getPriceFreshness(null, Date.now(), true), { tone: 'unknown', label: '—' });
+    assert.deepEqual(getPriceFreshness(undefined, Date.now(), null), { tone: 'unknown', label: '—' });
 });
 
-test('getLastQuoteTimestamp: data_type "fundamentals", symbol matches selected -> null', () => {
-    const payload = { data_type: 'fundamentals', symbol: 'NVDA', _key: 123 };
-    assert.equal(getLastQuoteTimestamp(payload, 'NVDA'), null);
+test('getPriceFreshness: fresh (<=2min), market open -> fresh tone, age label', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 90; // 90s old
+    assert.deepEqual(getPriceFreshness(ts, now, true), { tone: 'fresh', label: '1 นาทีที่แล้ว' });
 });
 
-test('getLastQuoteTimestamp: data_type "quote", symbol matches selected -> returns _key', () => {
-    const payload = { data_type: 'quote', symbol: 'NVDA', _key: 123 };
-    assert.equal(getLastQuoteTimestamp(payload, 'NVDA'), 123);
+test('getPriceFreshness: exactly at the amber boundary (2min) still reads fresh', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 120;
+    assert.equal(getPriceFreshness(ts, now, true).tone, 'fresh');
 });
 
-test('getLastQuoteTimestamp: data_type "quote", symbol "*" (broadcast) -> returns _key regardless of selected', () => {
-    const payload = { data_type: 'quote', symbol: '*', _key: 456 };
-    assert.equal(getLastQuoteTimestamp(payload, 'AAPL'), 456);
+test('getPriceFreshness: just past amber boundary, market open -> stale (amber)', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 121;
+    const result = getPriceFreshness(ts, now, true);
+    assert.equal(result.tone, 'stale');
+    assert.equal(result.label, '2 นาทีที่แล้ว');
 });
 
-test('getLastQuoteTimestamp: data_type "quote", different real ticker than selected -> null', () => {
-    const payload = { data_type: 'quote', symbol: 'AAPL', _key: 789 };
-    assert.equal(getLastQuoteTimestamp(payload, 'NVDA'), null);
+test('getPriceFreshness: 4 minutes old, market open -> stale, not red (the cited "normal" range must not cry wolf)', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 4 * 60;
+    assert.equal(getPriceFreshness(ts, now, true).tone, 'stale');
 });
 
-test('getLastQuoteTimestamp: data_type "quote", symbol matches, no _key -> null (defensive)', () => {
-    const payload = { data_type: 'quote', symbol: 'NVDA' };
-    assert.equal(getLastQuoteTimestamp(payload, 'NVDA'), null);
+test('getPriceFreshness: just past the 6-minute red boundary, market open -> very-stale (red)', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - (6 * 60 + 1);
+    const result = getPriceFreshness(ts, now, true);
+    assert.equal(result.tone, 'very-stale');
+    assert.equal(result.label, '6 นาทีที่แล้ว');
 });
 
-// bd:ui-honesty-2026-09 F3 r3 (Quinn's regression: a non-qualifying message
-// must leave the prior remembered value UNCHANGED, not reset it to null) —
-// nextLastUpdate
-
-test('nextLastUpdate: qualifying quote for the selected symbol -> value advances', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: null };
-    const result = nextLastUpdate(prev, { data_type: 'quote', symbol: 'NVDA', _key: 100 }, 'NVDA');
-    assert.deepEqual(result, { symbol: 'NVDA', timestamp: 100 });
+test('getPriceFreshness: exactly at the 6-minute boundary is still stale (amber), not yet red', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 6 * 60;
+    assert.equal(getPriceFreshness(ts, now, true).tone, 'stale');
 });
 
-test('nextLastUpdate: non-qualifying same-symbol history after a qualifying value -> UNCHANGED (Quinn regression)', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: 100 };
-    const result = nextLastUpdate(prev, { data_type: 'history', symbol: 'NVDA', _key: 200 }, 'NVDA');
-    assert.deepEqual(result, { symbol: 'NVDA', timestamp: 100 });
+test('getPriceFreshness: stale AND market closed -> market-closed overrides amber, not just red', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 3 * 60; // would be amber if the market were open
+    assert.deepEqual(getPriceFreshness(ts, now, false), { tone: 'market-closed', label: 'ตลาดปิด' });
 });
 
-test('nextLastUpdate: non-qualifying other-symbol quote after a qualifying value -> UNCHANGED', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: 100 };
-    const result = nextLastUpdate(prev, { data_type: 'quote', symbol: 'AAPL', _key: 300 }, 'NVDA');
-    assert.deepEqual(result, { symbol: 'NVDA', timestamp: 100 });
+test('getPriceFreshness: very stale AND market closed -> market-closed overrides red (a stale price at 02:00 on a closed SET symbol is not a fault)', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 5 * 3600; // 5 hours old
+    assert.deepEqual(getPriceFreshness(ts, now, false), { tone: 'market-closed', label: 'ตลาดปิด' });
 });
 
-test('nextLastUpdate: symbol change with no qualifying message for the new symbol -> resets to null', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: 100 };
-    const result = nextLastUpdate(prev, { data_type: 'quote', symbol: 'AAPL', _key: 300 }, 'TSLA');
-    assert.deepEqual(result, { symbol: 'TSLA', timestamp: null });
+test('getPriceFreshness: fresh AND market closed -> still fresh, no need to override something that is not alarming', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 30;
+    assert.equal(getPriceFreshness(ts, now, false).tone, 'fresh');
 });
 
-test('nextLastUpdate: full sequence — qualifying, then same-symbol non-qualifying x2 (unchanged), then symbol change (reset)', () => {
-    let state: LastUpdateState = { symbol: 'NVDA', timestamp: null };
-
-    state = nextLastUpdate(state, { data_type: 'quote', symbol: 'NVDA', _key: 100 }, 'NVDA');
-    assert.deepEqual(state, { symbol: 'NVDA', timestamp: 100 });
-
-    state = nextLastUpdate(state, { data_type: 'history', symbol: 'NVDA', _key: 200 }, 'NVDA');
-    assert.deepEqual(state, { symbol: 'NVDA', timestamp: 100 });
-
-    state = nextLastUpdate(state, { data_type: 'quote', symbol: 'AAPL', _key: 300 }, 'NVDA');
-    assert.deepEqual(state, { symbol: 'NVDA', timestamp: 100 });
-
-    state = nextLastUpdate(state, { data_type: 'quote', symbol: 'AAPL', _key: 300 }, 'TSLA');
-    assert.deepEqual(state, { symbol: 'TSLA', timestamp: null });
-});
-
-test('nextLastUpdate: symbol change where the same payload already qualifies for the NEW symbol (broadcast) -> applied immediately, no dropped frame', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: 100 };
-    const result = nextLastUpdate(prev, { data_type: 'quote', symbol: '*', _key: 400 }, 'TSLA');
-    assert.deepEqual(result, { symbol: 'TSLA', timestamp: 400 });
-});
-
-test('nextLastUpdate: null payload, same symbol -> UNCHANGED', () => {
-    const prev: LastUpdateState = { symbol: 'NVDA', timestamp: 100 };
-    const result = nextLastUpdate(prev, null, 'NVDA');
-    assert.deepEqual(result, { symbol: 'NVDA', timestamp: 100 });
+test('getPriceFreshness: unknown market (marketOpen null, e.g. FUND/CRYPTO) -> normal thresholds apply, no closed override', () => {
+    const now = 1_800_000_000_000;
+    const ts = now / 1000 - 10 * 60; // 10 min old
+    const result = getPriceFreshness(ts, now, null);
+    assert.equal(result.tone, 'very-stale');
 });

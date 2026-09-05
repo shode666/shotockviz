@@ -1,6 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import useAppStore from '@/store/appStore';
-import { formatLastUpdate, getLastQuoteTimestamp, nextLastUpdate, type LastUpdateState } from '@/utils/statusBar';
+import { usePriceUpdates } from '@/hooks/usePriceUpdates';
+import { parseSymbol } from '@/utils/formatters';
+import { getSetStatus, getUsStatus } from '@/utils/marketStatus';
+import { getPriceFreshness, PRICE_FRESHNESS_COLOR } from '@/utils/statusBar';
 
 interface StatusBarProps {
     isConnected: boolean;
@@ -8,51 +11,41 @@ interface StatusBarProps {
 }
 
 export default function StatusBar({ isConnected, isAuthenticated }: StatusBarProps) {
-    // Last real *quote* data timestamp for the symbol on screen — scoped to
-    // data_type==='quote' AND (symbol===selected OR symbol==='*') so a
-    // background history/fundamentals sweep for this or another symbol can't
-    // bump this clock (bd:ui-honesty-2026-09 F3 r2 — Chris Medium #1,
-    // `03b-bella-spec-r2-F3.md`). `null` until a qualifying message arrives
-    // for the currently-selected symbol this session.
-    const dataReadyPayload = useAppStore((s) => s.dataReadyPayload);
     const selectedSymbol = useAppStore((s) => s.selectedStock.sym);
 
-    // `dataReadyPayload` is a single store slot overwritten on EVERY
-    // data_ready message (useWebSocket.ts:77), including non-qualifying ones
-    // (history/fundamentals sweeps). Deriving the displayed timestamp fresh
-    // from that slot on every render would let a later non-qualifying
-    // message wipe an already-earned timestamp back to "—" — a regression
-    // Quinn's F3 r3 review pinned (AC3/AC4: a non-qualifying message must
-    // leave the prior value UNCHANGED). So we remember the last qualifying
-    // value here, in component-local state keyed to the selected symbol, via
-    // the pure `nextLastUpdate` reducer in utils/statusBar.ts — no new store
-    // field, no change to setDataReadyPayload/useWebSocket.ts (Bella r2 hard
-    // constraint), so useChartData.ts's own consumption of dataReadyPayload
-    // is untouched.
-    //
-    // The initializer reads the CURRENT store value directly (not via an
-    // effect), so a qualifying message already sitting in the store at mount
-    // time is picked up on the very first render — no missed-first-message
-    // gap.
-    const [remembered, setRemembered] = useState<LastUpdateState>(() => ({
-        symbol: selectedSymbol,
-        timestamp: getLastQuoteTimestamp(dataReadyPayload, selectedSymbol),
-    }));
+    // Same 60s cadence + cache as the sidebar/dashboard (usePriceUpdates) —
+    // this label now shows real staleness of the symbol on screen, derived
+    // from the server `ts` cache_publisher.py:36 stamps into every quote,
+    // instead of the always-"—" data_ready-derived path it replaces
+    // (bd:shotockviz-09j; see utils/statusBar.ts header for the ADR-UH-001
+    // history). Disabled for guests, matching Sidebar's own gating.
+    const { prices } = usePriceUpdates(isAuthenticated ? [selectedSymbol] : [], { enabled: isAuthenticated });
+    const ts = prices[selectedSymbol]?.ts ?? null;
 
-    // "Adjust state during render" (React-documented pattern, not useEffect):
-    // a useEffect here would land one render late, so a qualifying message
-    // that arrives in the same tick as a symbol switch could be missed for a
-    // frame, and a naive effect keyed on `dataReadyPayload` alone would also
-    // re-fire (and could loop) on every non-qualifying message. Comparing
-    // during render and only calling setState when the reducer's output
-    // actually differs keeps this a no-op re-render for non-qualifying
-    // messages (AC3/AC4) while still updating same-frame for qualifying ones
-    // and for symbol switches (AC5).
-    const next = nextLastUpdate(remembered, dataReadyPayload, selectedSymbol);
-    if (next.symbol !== remembered.symbol || next.timestamp !== remembered.timestamp) {
-        setRemembered(next);
-    }
-    const lastUpdateKey = next.timestamp;
+    // Re-render every 30s purely so an already-known timestamp's *displayed
+    // age* advances ("2 นาทีที่แล้ว" -> "3 นาทีที่แล้ว") between polls, without
+    // fabricating anything: `ts` still comes from the server, only the "now"
+    // diffed against it ticks. This is NOT the F3 anti-pattern the
+    // ui-honesty-2026-09 audit removed (a `setInterval` wall clock rendered
+    // AS the update time) — the value shown is still a real server
+    // timestamp's age, just recomputed periodically.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 30_000);
+        return () => clearInterval(t);
+    }, []);
+
+    // Which market-hours model applies, if any (utils/marketStatus.ts only
+    // covers SET and US today — ADR-UH-004). `null` means "don't know",
+    // which getPriceFreshness treats as "no closed-market override" rather
+    // than guessing.
+    const market = parseSymbol(selectedSymbol).market;
+    const marketOpen =
+        market === 'SET' ? getSetStatus().open :
+        market === 'US' ? getUsStatus().open :
+        null;
+
+    const freshness = getPriceFreshness(ts, now, marketOpen);
 
     return (
         <div
@@ -68,8 +61,8 @@ export default function StatusBar({ isConnected, isAuthenticated }: StatusBarPro
                         >
                             {isConnected ? '● Live' : '○ Offline'}
                         </span>
-                        <span className="text-xs" style={{ color: 'var(--color-text-sub)' }}>
-                            ราคา {selectedSymbol} อัปเดตล่าสุด: {formatLastUpdate(lastUpdateKey, Date.now())}
+                        <span className="text-xs" style={{ color: PRICE_FRESHNESS_COLOR[freshness.tone] }}>
+                            ราคา {selectedSymbol}: {freshness.label}
                         </span>
                     </>
                 )}

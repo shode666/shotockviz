@@ -9,6 +9,15 @@ interface PriceData {
     volume?: number;
     type?: string;
     nav_date?: string;
+    /**
+     * Server-side epoch SECONDS this quote was fetched/cached —
+     * `workers/helpers/cache_publisher.py:36` stamps it on every quote
+     * (and the fund-NAV branch, `api/routes/stocks/quotes.py`, forwards
+     * its own `ts`). Was already on the wire and silently dropped before
+     * bd:shotockviz-09j; now declared so StatusBar can compute real price
+     * age instead of showing a permanently empty label.
+     */
+    ts?: number;
 }
 
 interface UsePriceUpdatesOptions {
