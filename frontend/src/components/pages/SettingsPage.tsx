@@ -1,13 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import toast from 'react-hot-toast';
-import { Settings as SettingsIcon, Palette, TrendingUp, Bell, Moon, Sun, BellOff } from 'lucide-react';
+import { Settings as SettingsIcon, Palette, Bell, Moon, Sun, BellOff } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import authService from '@/services/authService';
+import { getCurrentSection } from '@/utils/scrollspy';
 
 const CATEGORIES = [
     { key: 'general', href: '#general', label: 'General', Icon: Palette },
-    { key: 'chart', href: '#chart', label: 'Chart', Icon: TrendingUp },
     { key: 'notification', href: '#notification', label: 'Notification', Icon: Bell },
 ];
 
@@ -36,6 +36,55 @@ export default function SettingsPage() {
     const [telegramChatId, setTelegramChatId] = useState('');
     const [isLoadingSettings, setIsLoadingSettings] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
+
+    // Scrollspy — aria-current follows the section actually in view instead
+    // of a hardcoded first-item default.
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+    const [activeIndex, setActiveIndex] = useState(0);
+
+    useEffect(() => {
+        const container = scrollContainerRef.current;
+        if (!container) return;
+
+        // bd:ui-honesty-2026-09 F2 fix — offsetTop is relative to offsetParent
+        // (here <body>, not the scroll container), so it was in the wrong
+        // coordinate frame vs container.scrollTop. Measured in-page: general
+        // top (container-relative) ~78, notification ~244.9, but max
+        // container.scrollTop is only 207.5 — the last section can never
+        // reach the container's own top, so a plain "top <= scrollTop"
+        // compare could never select it either. Fix: compute each section's
+        // top relative to the container via getBoundingClientRect(), and
+        // compare against scrollTop + an activation offset
+        // (clientHeight * 0.3) so the probe point sits below the visible
+        // top instead of exactly at it. With the measured numbers this
+        // resolves both ends: top (scrollTop=0) -> probe 105 >= general 78
+        // -> index 0; bottom (scrollTop=207.5) -> probe 312.5 >=
+        // notification 244.9 -> index 1.
+        const updateActiveSection = () => {
+            const containerRect = container.getBoundingClientRect();
+            const activationOffset = container.clientHeight * 0.3;
+            const tops = CATEGORIES.map(({ href }) => {
+                const el = container.querySelector<HTMLElement>(href);
+                // bd:ui-honesty-2026-09 Chris Medium #4 — a missing section must
+                // never win as "current". `0` always satisfies `scrollY >= top`,
+                // so a future CATEGORIES entry whose <Section> hasn't shipped yet
+                // would silently mis-highlight. Infinity can never be reached.
+                if (!el) return Number.POSITIVE_INFINITY;
+                const elRect = el.getBoundingClientRect();
+                return elRect.top - containerRect.top + container.scrollTop;
+            });
+            setActiveIndex(getCurrentSection(tops, container.scrollTop + activationOffset));
+        };
+
+        updateActiveSection();
+        container.addEventListener('scroll', updateActiveSection, { passive: true });
+        // Section tops shift with layout (font load, window resize) — recompute then too.
+        window.addEventListener('resize', updateActiveSection);
+        return () => {
+            container.removeEventListener('scroll', updateActiveSection);
+            window.removeEventListener('resize', updateActiveSection);
+        };
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -66,7 +115,7 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="flex-1 overflow-auto p-6" style={{ background: 'var(--color-bg)' }}>
+        <div ref={scrollContainerRef} className="flex-1 overflow-auto p-6" style={{ background: 'var(--color-bg)' }}>
             <div className="max-w-4xl mx-auto animate-fade-in">
 
                 <div className="mb-5">
@@ -84,14 +133,14 @@ export default function SettingsPage() {
                             <a
                                 key={key}
                                 href={href}
-                                aria-current={i === 0 ? 'true' : undefined}
+                                aria-current={i === activeIndex ? 'true' : undefined}
                                 className="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl font-medium transition-all"
                                 style={{
-                                    background: i === 0 ? 'var(--surface-3)' : 'transparent',
-                                    color: i === 0 ? 'var(--color-accent-text-raised)' : 'var(--color-text-sub)',
+                                    background: i === activeIndex ? 'var(--surface-3)' : 'transparent',
+                                    color: i === activeIndex ? 'var(--color-accent-text-raised)' : 'var(--color-text-sub)',
                                 }}
-                                onMouseEnter={(e) => { if (i !== 0) e.currentTarget.style.background = 'var(--surface-2)' }}
-                                onMouseLeave={(e) => { if (i !== 0) e.currentTarget.style.background = 'transparent' }}
+                                onMouseEnter={(e) => { if (i !== activeIndex) e.currentTarget.style.background = 'var(--surface-2)' }}
+                                onMouseLeave={(e) => { if (i !== activeIndex) e.currentTarget.style.background = 'transparent' }}
                             >
                                 <Icon size={13} />
                                 {label}
@@ -124,37 +173,6 @@ export default function SettingsPage() {
                                         </button>
                                     );
                                 })}
-                            </div>
-                        </Section>
-
-                        <Section id="timezone" title="Timezone">
-                            <div className="max-w-[420px]">
-                                <label htmlFor="settings-tz" className="sr-only">Timezone</label>
-                                <select id="settings-tz" className="input-field glass-select" defaultValue="Asia/Bangkok">
-                                    <option value="Asia/Bangkok">Asia/Bangkok (UTC+7) — ไทย</option>
-                                    <option value="America/New_York">America/New_York (UTC−5) — US EST</option>
-                                    <option value="Europe/London">Europe/London (UTC+0) — UK</option>
-                                    <option value="UTC">UTC (UTC+0)</option>
-                                </select>
-                                <p className="mt-2 text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
-                                    ShotockViz แสดงเวลาตาม timezone ของตลาดหุ้นโดยอัตโนมัติ
-                                </p>
-                            </div>
-                        </Section>
-
-                        <Section id="chart" title="Chart Defaults">
-                            <div className="flex flex-col gap-2.5 max-w-[420px]">
-                                {[
-                                    { id: 'settings-tf', label: 'Default Timeframe', options: ['1D', '1W', '1M', '1h', '4h'] },
-                                    { id: 'settings-ct', label: 'Chart Type', options: ['Candlestick', 'Line', 'Area'] },
-                                ].map(({ id, label, options }) => (
-                                    <div key={id}>
-                                        <label htmlFor={id} className="text-[10px] mb-1.5 block" style={{ color: 'var(--color-text-sub)' }}>{label}</label>
-                                        <select id={id} className="input-field glass-select">
-                                            {options.map((o) => <option key={o}>{o}</option>)}
-                                        </select>
-                                    </div>
-                                ))}
                             </div>
                         </Section>
 
