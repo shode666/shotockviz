@@ -185,10 +185,50 @@ export async function mockStockAPIs(page: Page): Promise<void> {
     }),
   );
 
-  // Watchlist — 401 for unauthenticated guests
-  await page.route('**/api/v1/watchlists**', (route) =>
-    route.fulfill({ status: 401, body: JSON.stringify({ detail: 'Not authenticated' }) }),
-  );
+  // Watchlist — 401 for unauthenticated guests.
+  //
+  // bd:shotockviz-f9y — this used to be an UNCONDITIONAL 401, which meant a
+  // test that called mockAuthSession() but not mockWatchlistAPIs() got
+  // silently logged back out: api.ts's global response interceptor clears
+  // the session on ANY 401 (apiErrorHandler.ts handleApiError, not scoped
+  // to a path allowlist), and Sidebar fires GET /watchlists on every mount
+  // whenever isAuthenticated is true. The failure was invisible — the test
+  // just ran as a guest and failed on some unrelated assertion (avatar
+  // button never renders).
+  //
+  // Fix shape: key the response on whether the request actually carries a
+  // bearer token, not on registration order. mockAuthSession()'s
+  // addInitScript() writes access_token to localStorage before goto(), and
+  // api.ts's request interceptor attaches it as `Authorization: Bearer
+  // <token>` to every request — so by the time this route handler runs, it
+  // can tell guest vs "someone called mockAuthSession()" from the request
+  // itself, regardless of whether mockAuthSession() was called before or
+  // after mockStockAPIs() (Playwright routes are matched last-registered-
+  // first: https://playwright.dev route.continue() doc, "last registered
+  // route can always override the previous ones" — order-based fixes are
+  // fragile in either direction).
+  //
+  // The authenticated branch deliberately returns an obviously-synthetic
+  // placeholder watchlist (name/id below), NOT MOCK_WATCHLIST — a test that
+  // needs real watchlist content still MUST call mockWatchlistAPIs()
+  // explicitly. This is a safety net against the *session* getting killed,
+  // not a substitute for the real mock. If a test asserts on watchlist
+  // content and forgot mockWatchlistAPIs(), it now fails LOUDLY (visible
+  // "__unmocked_watchlist_fallback__" placeholder in the DOM/assertion
+  // diff) instead of silently (session wiped, unrelated element missing).
+  await page.route('**/api/v1/watchlists**', (route) => {
+    const auth = route.request().headers()['authorization'];
+    if (!auth) {
+      return route.fulfill({ status: 401, body: JSON.stringify({ detail: 'Not authenticated' }) });
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([
+        { id: -1, name: '__unmocked_watchlist_fallback__', sort_order: 0, items: [] },
+      ]),
+    });
+  });
 
   // System ready
   await page.route('**/api/v1/system/ready', (route) =>

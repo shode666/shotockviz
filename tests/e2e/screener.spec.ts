@@ -52,7 +52,15 @@ test.describe('Screener Page — initial state', () => {
   });
 
   test('shows "กด ▶ Run Screen" placeholder before first run', async ({ page }) => {
-    await expect(page.getByText('ตั้งค่าเงื่อนไขแล้วกด ▶ Run Screen')).toBeVisible();
+    // bd:shotockviz-tl0 — the ▶ is an inline <Play> SVG icon
+    // (ScreenerPage.tsx:180), not a literal "▶" character, and it splits
+    // the copy into two text nodes ("ตั้งค่าเงื่อนไขแล้วกด " + icon + " Run
+    // Screen"). getByText() concatenates an element's descendant text nodes
+    // and normalizes/collapses whitespace by default (verified via
+    // span.textContent -> "ตั้งค่าเงื่อนไขแล้วกด  Run Screen", double space
+    // where the icon sits) — a single-space substring match already accounts
+    // for that collapse. Match on the real text, no manufactured ▶.
+    await expect(page.getByText('ตั้งค่าเงื่อนไขแล้วกด Run Screen')).toBeVisible();
   });
 
   test('shows Export CSV button', async ({ page }) => {
@@ -170,6 +178,18 @@ test.describe('Screener Page — Run Screen flow', () => {
     await expect(page.getByText('ไม่พบหุ้นที่ตรงกับเงื่อนไข')).toBeVisible();
   });
 
+  // bd:shotockviz-tl0 / bd:shotockviz-a5g — NOT a stale-assertion issue like
+  // the test above. Root cause: ScreenerPage.tsx:90 calls r.price.toFixed(2)
+  // and r.chg.toFixed(2) inside handleRowClick, but the real backend
+  // (backend/api/routes/screener.py:248-249) returns price/chg as
+  // pre-formatted strings, not numbers — MOCK_SCREENER_RESULTS above
+  // correctly mirrors that contract. Calling .toFixed() on a string throws
+  // `TypeError: r.price.toFixed is not a function` (confirmed via
+  // page.on('pageerror') during a real click), which fires BEFORE
+  // navigate({to:'/'}) — so the row click no-ops and this test fails for
+  // real: clicking a result row is broken in production too. This is a
+  // genuine product bug (out of tests/ scope for Quinn to fix — see
+  // bd:shotockviz-a5g), left red on purpose rather than weakened to pass.
   test('clicking a result row navigates to chart page', async ({ page }) => {
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
