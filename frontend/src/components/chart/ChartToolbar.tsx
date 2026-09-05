@@ -1,5 +1,6 @@
 import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3 } from 'lucide-react';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
+import { isVwapAvailable } from '@/utils/indicators';
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 const chartTypes = [
@@ -109,14 +110,17 @@ export default function ChartToolbar({
                 {indicators.map((ind) => {
                     const isActive = activeIndicators.includes(ind);
                     const displayLabel = ind.replace(/\s+\d+$/, '');
+                    const isDisabled = ind === 'VWAP' && !isVwapAvailable(selectedTF);
                     return (
                         <button
                             key={ind}
                             onClick={() => onIndicatorToggle?.(ind)}
-                            title={ind}
+                            disabled={isDisabled}
+                            title={isDisabled ? 'VWAP is intraday-only' : ind}
                             aria-label={ind}
                             aria-pressed={isActive}
-                            className={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer transition-colors ${isActive ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+                            aria-disabled={isDisabled}
+                            className={`text-xs px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors ${isDisabled ? 'opacity-40 cursor-not-allowed btn-outline border-violet-500/30 text-violet-400' : `cursor-pointer ${isActive ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}`}
                         >
                             {displayLabel}
                         </button>

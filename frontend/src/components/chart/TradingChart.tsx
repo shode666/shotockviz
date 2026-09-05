@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Timer, Landmark, BarChart3 } from 'lucide-react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
 import useAppStore from '@/store/appStore';
-import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP } from '@/utils/indicators';
+import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP, isVwapAvailable } from '@/utils/indicators';
 import { useChartData } from '@/hooks/useChartData';
 import { useSrLevels } from '@/hooks/useSrLevels';
 import { syncSrPriceLines } from '@/utils/syncSrPriceLines';
@@ -309,9 +309,8 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 setRsiLast(null);
             }
 
-            // Apply VWAP (intraday only: 1m, 5m, 15m, 1h, 4h)
-            const isIntraday = ['1m', '5m', '15m', '1h', '4h'].includes(timeframe);
-            if (activeIndicators.includes('VWAP') && isIntraday) {
+            // Apply VWAP (intraday only — see utils/indicators.ts isVwapAvailable)
+            if (activeIndicators.includes('VWAP') && isVwapAvailable(timeframe)) {
                 if (!currentInds['VWAP']) {
                     currentInds['VWAP'] = chart.addSeries(LineSeries, {
                         color: '#9C27B0', lineWidth: 2, lineStyle: 2, crosshairMarkerVisible: false

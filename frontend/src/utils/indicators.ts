@@ -1,5 +1,18 @@
 // Technical Indicators Calculation Utility
 
+/**
+ * Timeframes on which VWAP is meaningful (intraday only — VWAP resets per
+ * calendar day, see calculateVWAP below; on 1D/1W/1M it silently draws
+ * nothing today, which is the toolbar-affordance bug this fixes).
+ * Single source of truth shared by ChartToolbar.tsx (disables the pill)
+ * and TradingChart.tsx (guards the series render) — bd:ui-honesty-2026-09 F5.
+ */
+const VWAP_INTRADAY_TIMEFRAMES = ['1m', '5m', '15m', '1h', '4h'];
+
+export function isVwapAvailable(timeframe: string): boolean {
+    return VWAP_INTRADAY_TIMEFRAMES.includes(timeframe);
+}
+
 export interface Bar {
     time: number;
     open?: number;
