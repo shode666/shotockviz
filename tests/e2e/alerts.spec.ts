@@ -89,8 +89,9 @@ test.describe('Alerts Page — authenticated with alerts', () => {
     await page.goto('/alerts');
   });
 
-  test('shows alert list with PTT.BK and AAPL', async ({ page }) => {
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 8000 });
+  test('shows alert list with PTT and AAPL', async ({ page }) => {
+    // AlertsPage.tsx renders displaySymbol(a.symbol) — .BK suffix stripped for render.
+    await expect(page.getByText('PTT', { exact: true }).first()).toBeVisible({ timeout: 8000 });
     await expect(page.getByText('AAPL').first()).toBeVisible();
   });
 
@@ -104,7 +105,7 @@ test.describe('Alerts Page — authenticated with alerts', () => {
   });
 
   test('shows delete button for each alert', async ({ page }) => {
-    await page.waitForSelector('text=PTT.BK', { timeout: 8000 });
+    await page.waitForSelector('text=PTT', { timeout: 8000 });
     // Delete button (trash icon or ลบ text) should be visible
     const deleteBtn = page.getByRole('button', { name: /delete|ลบ/i }).first();
     await expect(deleteBtn).toBeVisible();

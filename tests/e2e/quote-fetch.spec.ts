@@ -182,13 +182,17 @@ test.describe('Quote fetch — toolbar price display', () => {
   });
 
   test('selected stock symbol appears in toolbar', async ({ page }) => {
-    await expect(page.getByText('PTT.BK').first()).toBeVisible();
+    // appStore.ts:91 default selectedStock.sym is 'NVDA', not 'PTT.BK' — a
+    // bare getByText('PTT') would pass anyway since PTT is elsewhere in the
+    // guest watchlist, without proving anything about the toolbar. Assert
+    // the toolbar's own selected-stock span (ChartToolbar.tsx:32).
+    await expect(page.locator('span.font-bold.text-sm').first()).toHaveText('NVDA');
   });
 
   test('price is visible in toolbar after load', async ({ page }) => {
     // The toolbar shows selectedStock.price from the store
     // Default selectedStock in appStore has price set when clicking watchlist item
-    await page.locator('aside').getByRole('button').filter({ hasText: 'PTT.BK' }).first().click();
+    await page.locator('aside').getByRole('button').filter({ hasText: 'PTT' }).first().click();
     // After clicking, toolbar should update
     await expect(page.locator('[class*="toolbar"], [class*="panel"]').first()).toBeVisible();
   });

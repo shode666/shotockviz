@@ -5,35 +5,70 @@
 import { test, expect } from '@playwright/test';
 import { mockStockAPIs, mockAuthSession, MOCK_AUTH_ME } from './helpers/mocks';
 
-const MOCK_PORTFOLIO = [
+// Shape matches backend/models/schemas.py HoldingResponse — PortfolioPage.tsx
+// reads `analytics?.holdings` (PortfolioAnalytics), not a flat holdings array.
+// The old flat MOCK_PORTFOLIO (quantity/avg_price/gain_loss field names) was
+// never valid against either GET /portfolio (TransactionResponse: qty/price/
+// type/fee/currency/date) or GET /portfolio/analytics (PortfolioAnalytics:
+// {..., holdings: HoldingResponse[]}) — HoldingsTable.tsx's holdings prop
+// always resolved to [] and rendered "ยังไม่มีหุ้นในพอร์ต", so the two tests
+// below that expected holdings/gain-loss text to appear only ever passed by
+// accident (matching an unrelated element elsewhere in the DOM), not by
+// actually exercising the Holdings table. See Quinn's finding on
+// bd:shotockviz-c73.
+const MOCK_HOLDINGS = [
   {
-    id: 1,
     symbol: 'PTT.BK',
-    quantity: 1000,
-    avg_price: 32.5,
+    qty: 1000,
+    avg_cost: 32.5,
     current_price: 35.5,
-    gain_loss: 3000,
-    gain_loss_pct: 9.23,
+    current_value: 35500,
+    unrealized_pl: 3000,
+    unrealized_pl_pct: 9.23,
+    currency: 'THB',
   },
   {
-    id: 2,
     symbol: 'AAPL',
-    quantity: 10,
-    avg_price: 175.0,
+    qty: 10,
+    avg_cost: 175.0,
     current_price: 187.42,
-    gain_loss: 124.2,
-    gain_loss_pct: 7.1,
+    current_value: 1874.2,
+    unrealized_pl: 124.2,
+    unrealized_pl_pct: 7.1,
+    currency: 'USD',
   },
 ];
 
-async function mockPortfolioAPI(page: any, data = MOCK_PORTFOLIO) {
-  await page.route('**/api/v1/portfolio**', (route: any) =>
-    route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify(data),
-    }),
-  );
+const MOCK_ANALYTICS = {
+  base_currency: 'THB',
+  total_value: 37374.2,
+  total_cost: 34250,
+  unrealized_pl: 3124.2,
+  unrealized_pl_pct: 9.12,
+  holdings: MOCK_HOLDINGS,
+  has_pending_prices: false,
+};
+
+const MOCK_TRANSACTIONS = [
+  { id: 1, symbol: 'PTT.BK', type: 'buy', qty: 1000, price: 32.5, fee: 0, currency: 'THB', date: '2024-01-01', created_at: '2024-01-01T00:00:00Z' },
+  { id: 2, symbol: 'AAPL', type: 'buy', qty: 10, price: 175.0, fee: 0, currency: 'USD', date: '2024-01-02', created_at: '2024-01-02T00:00:00Z' },
+];
+
+async function mockPortfolioAPI(page: any, { holdings = MOCK_HOLDINGS, txns = MOCK_TRANSACTIONS } = {}) {
+  await page.route('**/api/v1/portfolio**', (route: any) => {
+    const url = route.request().url();
+    if (url.includes('/analytics')) {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ ...MOCK_ANALYTICS, holdings }),
+      });
+    }
+    if (url.includes('/performance')) {
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+    }
+    return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(txns) });
+  });
 }
 
 test.describe('Portfolio Page — unauthenticated', () => {
@@ -73,8 +108,19 @@ test.describe('Portfolio Page — authenticated', () => {
   });
 
   test('shows portfolio table with holdings', async ({ page }) => {
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 8000 });
-    await expect(page.getByText('AAPL').first()).toBeVisible();
+    // HoldingsTable.tsx renders displaySymbol(h.symbol) — .BK suffix stripped
+    // for render. Scoped to the holdings table's own symbol cell
+    // (HoldingsTable.tsx td.font-semibold), not "PTT text anywhere on the
+    // page" — the sidebar can transiently render an unrelated 'PTT' row
+    // during the guest->authenticated hydration window, which made the old
+    // bare getByText('PTT') pass for the wrong reason.
+    // Not exact: the symbol cell is a bare text node ("PTT") sibling to a
+    // separate currency-badge <span>THB</span> inside the same <td>
+    // (HoldingsTable.tsx) — there is no element whose OWN text is exactly
+    // "PTT", only one whose text contains it.
+    const table = page.locator('table');
+    await expect(table.getByText('PTT').first()).toBeVisible({ timeout: 8000 });
+    await expect(table.getByText('AAPL').first()).toBeVisible();
   });
 
   test('"+ เพิ่มรายการ" or Add Transaction button is visible', async ({ page }) => {
@@ -120,7 +166,7 @@ test.describe('Portfolio Page — authenticated', () => {
 
   test('portfolio shows gain/loss percentage', async ({ page }) => {
     // Should show positive gain in green
-    await expect(page.getByText(/9\.23%|7\.1%/).first()).toBeVisible({ timeout: 8000 });
+    await expect(page.locator('table').getByText(/9\.23%|7\.1%/).first()).toBeVisible({ timeout: 8000 });
   });
 });
 

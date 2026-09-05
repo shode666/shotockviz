@@ -14,9 +14,15 @@ test.describe('Chart Page — toolbar', () => {
     await page.goto('/');
   });
 
-  test('default selected stock is PTT.BK', async ({ page }) => {
-    // ChartToolbar renders the stock symbol
-    await expect(page.getByText('PTT.BK').first()).toBeVisible();
+  test('default selected stock is NVDA', async ({ page }) => {
+    // appStore.ts:91 sets the default selectedStock.sym to 'NVDA', not
+    // 'PTT.BK' (this test's original premise was wrong on the symbol
+    // itself, not just the .BK suffix — a bare getByText('PTT') would have
+    // passed anyway since PTT is elsewhere in the guest watchlist, without
+    // proving anything about *selection*). Assert the toolbar's own
+    // selected-stock span (ChartToolbar.tsx:32) instead of "text exists
+    // somewhere on the page".
+    await expect(page.locator('span.font-bold.text-sm').first()).toHaveText('NVDA');
   });
 
   test('timeframe buttons are all visible', async ({ page }) => {

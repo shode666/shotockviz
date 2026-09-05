@@ -32,8 +32,11 @@ test.describe('Login Page', () => {
   test('shows the Google Sign-in button container', async ({ page }) => {
     await page.goto('/login');
     // GoogleLogin renders an iframe from accounts.google.com
-    // We check the container div exists
-    const googleContainer = page.locator('[class*="flex justify-center"]');
+    // We check the container div exists — LoginPage.tsx:164 renders
+    // class="flex items-center justify-center" (attribute-substring selector
+    // '[class*="flex justify-center"]' never matched: "items-center" sits
+    // between the two words in the real class string).
+    const googleContainer = page.locator('div.flex.items-center.justify-center').last();
     await expect(googleContainer).toBeVisible();
   });
 
@@ -51,8 +54,12 @@ test.describe('Authenticated state', () => {
     await page.goto('/');
 
     // After mount, checkAuth() is called → GET /api/v1/auth/me → sets user
-    // The avatar button shows first letter of display_name
-    await expect(page.getByRole('button', { name: 'T' })).toBeVisible({ timeout: 5000 });
+    // The avatar button shows first letter of display_name ('Test User' → 'T').
+    // Scoped to <nav> + exact match — unscoped substring 'T' strict-mode-violates
+    // against 13 elements (watchlist rows, chart-type/S-R buttons, etc).
+    await expect(
+      page.locator('nav').getByRole('button', { name: 'T', exact: true })
+    ).toBeVisible({ timeout: 5000 });
   });
 
   test('shows Login link when not authenticated', async ({ page }) => {

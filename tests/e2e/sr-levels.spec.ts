@@ -35,6 +35,15 @@ test.describe('SR Levels toggle — button state', () => {
     });
     await mockStockAPIs(page);
     await page.goto('/');
+    // Hydration race (bd:shotockviz-c73 finding): clicking the toggle before
+    // React attaches the click handler silently drops the click — the DOM
+    // node is server-rendered and "visible"/actionable to Playwright well
+    // before hydration finishes, so `.click()` reports success but
+    // `onToggleSrLevels` never fires. 100% repro in this dev-mode sandbox
+    // without this wait. Every other passing spec in this suite already
+    // waits for networkidle before its first interaction; this describe
+    // block was the one exception.
+    await page.waitForLoadState('networkidle');
   });
 
   test('S/R toggle button is visible in the chart toolbar', async ({ page }) => {
@@ -104,10 +113,13 @@ test.describe('SR Levels — data fetch wiring', () => {
     await page.waitForLoadState('networkidle');
 
     expect(srLevelsFetched).toBe(true);
-    // Default selected stock is PTT.BK (chart.spec.ts's own baseline
-    // assertion) — confirms case is preserved verbatim in the request path,
-    // NOT upper/lowercased client-side (server does the .upper()).
-    expect(decodeURIComponent(requestedUrl)).toContain('/sr-levels/PTT.BK');
+    // Default selected stock is 'NVDA' (appStore.ts:91 — see Quinn's finding
+    // on bd:shotockviz-c73; this test's original premise of 'PTT.BK' as the
+    // default was wrong, same root cause as chart.spec.ts's own fixed
+    // baseline assertion) — confirms case is preserved verbatim in the
+    // request path, NOT upper/lowercased client-side (server does the
+    // .upper()).
+    expect(decodeURIComponent(requestedUrl)).toContain('/sr-levels/NVDA');
   });
 
   test('empty sr-levels response does not crash the chart page', async ({ page }) => {
@@ -162,13 +174,20 @@ test.describe('SR Levels — data fetch wiring', () => {
     await page.goto('/');
     await page.waitForLoadState('networkidle');
 
-    // Click AAPL in the default guest watchlist (sidebar.spec.ts's own
-    // baseline pattern for symbol switch)
-    const aaplRow = page.getByRole('button').filter({ hasText: 'AAPL' }).first();
+    // Click AAPL in the default guest watchlist. Scoped to <aside> (the
+    // sidebar) — Navbar renders before Sidebar in __root.tsx, and its own
+    // search-bar button text ("ค้นหา PTT, AAPL...K") also contains "AAPL",
+    // so an unscoped getByRole('button').filter({hasText:'AAPL'}).first()
+    // resolves to the Navbar search button and opens the search modal
+    // instead of switching the watchlist symbol (sidebar.spec.ts uses this
+    // same unscoped pattern — see Quinn's finding on bd:shotockviz-c73,
+    // not fixed here as sidebar.spec.ts is out of this pass's scope).
+    const aaplRow = page.locator('aside').getByRole('button').filter({ hasText: 'AAPL' }).first();
     await aaplRow.click();
     await page.waitForLoadState('networkidle');
 
-    expect(seen).toContain('PTT.BK');
+    // Default selected stock is 'NVDA' (appStore.ts:91), not 'PTT.BK'.
+    expect(seen).toContain('NVDA');
     expect(seen).toContain('AAPL');
   });
 });
