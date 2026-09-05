@@ -173,7 +173,17 @@ async def get_portfolio_performance(
 
     # Walk day by day and compute portfolio value
     def compute_holdings_on(target_date: date) -> dict[str, float]:
-        """Calculate net qty per symbol from all txns up to target_date."""
+        """Calculate net qty per symbol from all txns up to target_date.
+
+        bd:shotockviz-fin — the threshold below was a hard-coded thousandth
+        (1e-3) while `portfolio_service` closed a position at `QTY_EPSILON`
+        (1e-6). A fractional position between the two (half a thousandth of a
+        US share) was OPEN on the holdings table and CLOSED on this curve for
+        the same book at the same instant; worse, because a symbol that cannot
+        be stated excludes the whole DAY,
+        a position this curve thought was closed could take days off the line
+        that the other two surfaces still counted. One epsilon, imported.
+        """
         h: dict[str, float] = {}
         for t in txns:
             t_date = t.date if isinstance(t.date, date) else t.date.date()
@@ -183,7 +193,7 @@ async def get_portfolio_performance(
             if sym not in h:
                 h[sym] = 0.0
             h[sym] += t.qty if t.type.value == "BUY" else -t.qty
-        return {s: q for s, q in h.items() if q > 0.001}
+        return {s: q for s, q in h.items() if q > portfolio_service.QTY_EPSILON}
 
     points = []
     current = effective_start

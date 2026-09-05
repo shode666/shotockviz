@@ -95,6 +95,67 @@ Accounting rules pinned here (state them once, apply everywhere):
    same judgement, so the two paths cannot disagree. The fix for a genuine
    re-denomination is to correct the old rows.
 
+6. bd:shotockviz-tmz — REALIZED P&L, and the cost-flow rule behind it.
+
+   COST FLOW = MOVING WEIGHTED AVERAGE COST. Not FIFO, not specific-lot.
+   A SELL releases `qty_sold * avg_cost`, where `avg_cost` is taken BEFORE the
+   quantity is reduced — i.e. exactly the number rule 1 already removes from the
+   open position. Three reasons, in order of weight:
+
+     a) The open side has folded on weighted average since bd:shotockviz-msg.
+        Realizing on FIFO while carrying the remainder at average cost means the
+        two halves of the same book are kept on two different cost flows: the
+        cost released and the cost still held would no longer add up to the cost
+        put in, and "realized + unrealized" would stop reconciling to anything.
+        One book, one cost flow.
+
+     b) The data cannot support FIFO honestly. `transactions.date` is a DATE
+        (`models/portfolio.py:45`), there is no lot identifier, and the read
+        paths order by `date` alone — so two trades on the same day have no
+        defined sequence and a FIFO answer would depend on the row order
+        Postgres happened to return. Average cost is unaffected by the ordering
+        of same-day BUYs, so it gives the same number every time it is asked.
+        Inventing a lot sequence the ledger does not record is the same class of
+        move as inventing an FX rate (rule 4 / FX-1).
+
+     c) It is what this user's book means. This is a swing/position trader's own
+        record, used to judge trades — not a filing. ⚠️ General guidance from
+        training memory (not source-verified): tax lot-relief rules differ by
+        jurisdiction (e.g. US brokers commonly default to FIFO with
+        specific-identification available), so these numbers must NOT be treated
+        as tax output — validate with a Thai tax adviser / the user's broker
+        statements before any filing use.
+
+   What a realized number contains:
+     realized_pl = proceeds − cost_released − sell_fee
+                 = qty*price − qty*avg_cost_before − fee
+   The BUY commission is already inside `avg_cost` (rule 1), so it reaches P&L
+   when the shares are sold; the SELL commission is charged here, which is what
+   `Holding.realized_fees` was parked for by bd:shotockviz-fww.
+
+   GRAIN. Two, deliberately:
+     * `RealizedSale` — one per SELL row. The ledger truth; every satang of
+       realized money is in exactly one of these.
+     * `ClosedTrade` — one per ROUND TRIP (flat → position → flat). What the
+       trader actually reads: entry, exit, holding days, result. A position that
+       has been partly scaled out but is still open has realized sales and NO
+       closed trade yet, so `realized_pl` (all sales) and the sum of the closed
+       trades are different numbers on purpose, and both are reported.
+
+   FX. Realized P&L in the base currency needs the rate AT DISPOSAL, which is
+   the SELL row's own `fx_rate`, against a cost released at the rates the lots
+   were bought at. So a sale is convertible only when the position was
+   `fx_complete` at that moment AND the SELL row carries a rate. Otherwise the
+   sale's base amount is None — never 0.0 — and the sale is excluded from the
+   totals by name (`realized_unavailable_symbols`), the same doctrine as rules
+   2/4/5. A THB book is 1.0 by definition throughout, so the common Thai case is
+   always convertible with no backfill.
+
+   Win/loss is judged in the BASE currency, because a trade that gained in USD
+   can have lost in THB and THB is what this user spends. That is also why the
+   ratios below refuse to count a trade they cannot convert instead of falling
+   back to its native sign.
+
 Money is `float` here only because `models/portfolio.py:33-35` stores qty/price/fee
 as `Float`. The Decimal/Numeric migration is a separate bead (Tara N8) and is NOT
 started here. The arithmetic below adds exactly one new term per BUY (`+ fee`),
@@ -103,11 +164,22 @@ so it introduces no new rounding behaviour beyond that term.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date as _date
 from typing import Callable, Iterable, Mapping, Sequence
 
-# Positions below this size are treated as fully closed. Also used as the
-# float-drift guard after a SELL (the previous code used 1e-6 in portfolio.py
-# and a *different* 0.001 "active" threshold in dashboard.py — unified here).
+# THE quantity epsilon. Positions at or below this size are treated as fully
+# closed; it is also the float-drift guard after a SELL.
+#
+# bd:shotockviz-fin — this is the ONLY definition. It started as 1e-6 in
+# portfolio.py against a different 0.001 "active" threshold in dashboard.py;
+# those two were unified here by bd:shotockviz-msg, but a THIRD copy survived as
+# a bare `0.001` literal in `api/routes/portfolio_performance.py`'s
+# `compute_holdings_on`. A position between the two values (say 0.0005 of a
+# fractional US share) was therefore OPEN on the holdings table and CLOSED on
+# the equity curve of the same book at the same instant — the curve silently
+# dropped it and, because an excluded symbol excludes the whole day, could drop
+# whole days with it. Every "is this position closed?" decision in the product
+# imports this constant; none re-states the number.
 QTY_EPSILON = 1e-6
 
 # The one currency every total in this module is stated in.
@@ -157,6 +229,42 @@ def _check_band_invariant() -> None:
 
 
 _check_band_invariant()
+
+
+def assert_currency_band_coverage(currencies: Iterable) -> None:
+    """Every recordable currency must have a plausibility band. Enforced, not documented.
+
+    bd:shotockviz-mh1. `FX_PLAUSIBLE_RANGE` is not a sanity nicety — it is the
+    discriminator that makes a quote's orientation DERIVABLE (rule 4 / FX-4).
+    `read_fx_quote` starts with `band = FX_PLAUSIBLE_RANGE.get(currency)` and
+    returns None when there is none, so a currency added to
+    `models.portfolio.Currency` without a band would not fail: every live quote
+    for it would silently become "no rate available", the position would drop
+    out of every total into `fx_unavailable_symbols`, and it would look like a
+    cold cache rather than a missing constant. That is a bug that reads as data.
+
+    So the enum cannot be extended without the band: `models/portfolio.py` calls
+    this at import, immediately after `Currency` is defined, and a missing band
+    stops the whole app from starting rather than degrading one screen.
+
+    Only the BAND is mandatory. `FX_FALLBACK_RATES` is deliberately optional —
+    having no last-resort constant for a currency makes `resolve_fx` decline,
+    which is the honest outcome; having no band makes it decline *silently for
+    the wrong reason*.
+
+    Accepts enum members or plain strings (`Currency`, or a list of codes).
+    """
+    codes = {str(getattr(c, "value", c)).upper() for c in currencies}
+    missing = sorted(codes - {BASE_CURRENCY} - set(FX_PLAUSIBLE_RANGE))
+    if missing:
+        raise ValueError(
+            f"Currency {missing} has no FX_PLAUSIBLE_RANGE band in "
+            "services/portfolio_service.py. Add one (strictly above 1.0, stated "
+            "as base-per-1-unit) in the same commit that adds the currency — "
+            "without it read_fx_quote() cannot decide the orientation of that "
+            "pair's quote and every position in it would silently report 'no "
+            "rate available' forever (bd:shotockviz-mh1 / -ss3)."
+        )
 
 
 def _currency_str(value) -> str:
@@ -337,6 +445,74 @@ def default_fx(currency: str) -> FxRate | None:
 
 
 @dataclass
+class RealizedSale:
+    """One SELL row, priced against the cost it released (rule 6).
+
+    The ledger grain: every satang of realized money is in exactly one of these.
+    `*_base` are None — never 0.0 — when this disposal cannot be converted
+    (the position was not `fx_complete` at that moment, or the SELL row carries
+    no rate of its own).
+    """
+
+    symbol: str
+    when: _date | None
+    qty: float
+    price: float
+    proceeds: float        # qty * price, NATIVE, gross of the sell fee
+    cost_released: float   # qty * avg_cost BEFORE the qty was reduced
+    fee: float             # SELL commission, charged here (bd:shotockviz-fww)
+    realized_pl: float     # proceeds - cost_released - fee, NATIVE
+    currency: str = BASE_CURRENCY
+    fx_rate: float | None = None          # rate AT DISPOSAL (the SELL's own)
+    proceeds_base: float | None = None
+    cost_released_base: float | None = None
+    realized_pl_base: float | None = None
+    fee_base: float | None = None
+    # True when more was sold than was held. The book cannot state the cost of
+    # shares it has no record of buying, so `cost_released` is only what it
+    # could account for and the realized figure is overstated by the rest.
+    # Reported, never silently absorbed.
+    oversold: bool = False
+
+
+@dataclass
+class ClosedTrade:
+    """One completed ROUND TRIP for a symbol: flat → position → flat (rule 6).
+
+    What the trader reads. `entry_price` is the weighted-average cost actually
+    released by this round trip's sales — it INCLUDES the capitalised buy
+    commission (rule 1), so it is the real breakeven, not the screen price.
+    `exit_price` is the weighted-average sale price GROSS of the sell fee; the
+    fee is in `fees` and is already subtracted from `realized_pl`.
+    """
+
+    symbol: str
+    currency: str
+    qty: float
+    opened_on: _date | None
+    closed_on: _date | None
+    entry_price: float
+    exit_price: float
+    fees: float                       # sell-side commission on this round trip
+    realized_pl: float                # NATIVE
+    realized_pl_base: float | None    # None = this trip cannot be converted
+    sales: int = 1                    # how many SELL rows closed it (scale-outs)
+
+    @property
+    def holding_days(self) -> int | None:
+        if self.opened_on is None or self.closed_on is None:
+            return None
+        return (self.closed_on - self.opened_on).days
+
+    @property
+    def realized_pl_pct(self) -> float | None:
+        """Return on the cost actually put at risk. None on a zero-cost trip —
+        a percentage of nothing is undefined, not infinite (see also `ace`)."""
+        cost = self.entry_price * self.qty
+        return (self.realized_pl / cost * 100) if cost else None
+
+
+@dataclass
 class Holding:
     """Net open position for one symbol, built from raw transactions."""
 
@@ -353,6 +529,15 @@ class Holding:
     # just the first one. More than one means `cost_basis` below is a sum of
     # different units and is not a number.
     currencies: set[str] = field(default_factory=set)
+    # ── rule 6 / bd:shotockviz-tmz — the realized side ───────────────────────
+    # Every SELL, in order. Sales at index >= `round_open_index` belong to the
+    # round trip that is still open (a scale-out on a position still held).
+    sales: list[RealizedSale] = field(default_factory=list)
+    closed_trades: list[ClosedTrade] = field(default_factory=list)
+    # Date the CURRENT round trip opened (None while flat), so a symbol bought,
+    # closed and bought again reports two trades instead of one long one.
+    opened_on: _date | None = None
+    round_open_index: int = 0
 
     @property
     def currency_conflict(self) -> bool:
@@ -467,6 +652,10 @@ def build_holdings(txns: Iterable) -> dict[str, Holding]:
         rate = _txn_fx_rate(t)  # rule 4 / FX-1; 1.0 for a base-currency txn
 
         if txn_type == "BUY":
+            # Rule 6: the round trip opens on the first BUY made while flat, so a
+            # symbol bought, fully closed and bought again is two trades.
+            if h.opened_on is None:
+                h.opened_on = _as_date(getattr(t, "date", None))
             h.qty += qty
             lot_cost = qty * price + fee  # rule 1: buy fee -> cost basis
             h.cost_basis += lot_cost
@@ -477,20 +666,101 @@ def build_holdings(txns: Iterable) -> dict[str, Holding]:
             else:
                 h.cost_basis_base += lot_cost * rate
         else:  # SELL
+            held_before = h.qty
+            fx_complete_before = h.fx_complete
             avg = h.avg_cost  # avg BEFORE reducing qty
             avg_base = (h.cost_basis_base / h.qty) if h.qty > QTY_EPSILON else 0.0
+            cost_released = qty * avg
+            cost_released_base = qty * avg_base
             h.qty -= qty
-            h.cost_basis -= qty * avg
+            h.cost_basis -= cost_released
             # Same weighted-average removal on the base side; the SELL's own rate
             # is irrelevant to the shares still held (it belongs to realized P&L).
-            h.cost_basis_base -= qty * avg_base
+            h.cost_basis_base -= cost_released_base
             h.realized_fees += fee  # rule 1: sell fee -> realized, not cost basis
+
+            # ── rule 6 / bd:shotockviz-tmz: record what this disposal made ────
+            proceeds = qty * price
+            # Convertible only if the cost side was complete AND this SELL row
+            # carries the rate at disposal. Otherwise None, never 0.0.
+            convertible = fx_complete_before and rate is not None
+            h.sales.append(RealizedSale(
+                symbol=symbol,
+                when=_as_date(getattr(t, "date", None)),
+                qty=qty,
+                price=price,
+                proceeds=proceeds,
+                cost_released=cost_released,
+                fee=fee,
+                realized_pl=proceeds - cost_released - fee,
+                currency=_currency_str(getattr(t, "currency", None)),
+                fx_rate=rate if convertible else None,
+                proceeds_base=proceeds * rate if convertible else None,
+                cost_released_base=cost_released_base if convertible else None,
+                fee_base=fee * rate if convertible else None,
+                realized_pl_base=(
+                    proceeds * rate - cost_released_base - fee * rate
+                    if convertible else None
+                ),
+                oversold=qty > held_before + QTY_EPSILON,
+            ))
+
             if abs(h.qty) < QTY_EPSILON:  # float-drift guard
                 h.qty = 0.0
                 h.cost_basis = 0.0
                 h.cost_basis_base = 0.0
+                # bd:shotockviz-jgn — `fx_complete` describes the OPEN lots, and
+                # there are now none, so it is vacuously true again. Leaving it
+                # False here was sticky forever: a position closed entirely and
+                # reopened with lots that ALL carry rates still reported
+                # `cost_basis_source="current_rate"` and `fx_pl=None`, i.e. the
+                # book claimed it could not separate an FX return it demonstrably
+                # could. `currencies` is deliberately NOT reset — rule 5 judges a
+                # symbol over all of its rows, closed lots included.
+                h.fx_complete = True
+                _close_round_trip(h)
 
     return holdings
+
+
+def _as_date(value) -> _date | None:
+    """`transactions.date` is a DATE, but tolerate a datetime from any caller."""
+    if value is None:
+        return None
+    if isinstance(value, _date):
+        # datetime is a subclass of date; normalise it so a subtraction of two
+        # trade dates cannot come back as a timedelta with hours in it.
+        return value.date() if hasattr(value, "hour") else value
+    return None
+
+
+def _close_round_trip(h: Holding) -> None:
+    """Fold the sales that closed this position into one `ClosedTrade` (rule 6)."""
+    legs = h.sales[h.round_open_index:]
+    h.round_open_index = len(h.sales)
+    opened_on, h.opened_on = h.opened_on, None
+    if not legs:
+        return  # position reached zero without a sale (empty/oversold edge)
+
+    qty = sum(s.qty for s in legs)
+    cost = sum(s.cost_released for s in legs)
+    proceeds = sum(s.proceeds for s in legs)
+    bases = [s.realized_pl_base for s in legs]
+    h.closed_trades.append(ClosedTrade(
+        symbol=h.symbol,
+        currency=legs[-1].currency,
+        qty=qty,
+        opened_on=opened_on,
+        closed_on=legs[-1].when,
+        entry_price=cost / qty if qty else 0.0,
+        exit_price=proceeds / qty if qty else 0.0,
+        fees=sum(s.fee for s in legs),
+        realized_pl=sum(s.realized_pl for s in legs),
+        # One unconvertible leg makes the whole trip unconvertible — summing an
+        # unknown as 0 is the failure mode rule 4 exists to forbid.
+        realized_pl_base=None if any(b is None for b in bases) else sum(bases),
+        sales=len(legs),
+    ))
 
 
 def _txn_fx_rate(t) -> float | None:
@@ -686,6 +956,116 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
         totals.unrealized_pl / totals.total_cost * 100 if totals.total_cost else 0.0
     )
     return totals
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Realized P&L — bd:shotockviz-tmz. Cost flow: moving weighted average (rule 6).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class RealizedBook:
+    """The closed side of the book, stated in `BASE_CURRENCY` like every total.
+
+    `realized_pl` counts EVERY sale — including a scale-out on a position still
+    held, which is real money already taken off the table. `closed_positions_pl`
+    counts only completed round trips, so the two differ by exactly the partial
+    sales of still-open positions. Both are reported because a header that
+    disagrees with the table underneath it is how this book got into trouble
+    before (bd:shotockviz-la4).
+
+    Exclusions follow the same doctrine as rules 2/4/5 — never "it was zero":
+      * rows disagree on a currency -> `currency_conflict_symbols`
+      * a disposal that cannot be converted -> `realized_unavailable_symbols`
+    """
+
+    base_currency: str = BASE_CURRENCY
+    realized_pl: float = 0.0            # all convertible sales
+    realized_fees: float = 0.0          # sell-side commission inside the above
+    # How many disposals the two numbers above actually counted. Zero is what
+    # distinguishes "nothing has been sold" from "the sales netted to exactly
+    # 0.00" — a caller must be able to tell those apart before printing.
+    counted_sales: int = 0
+    closed_positions_pl: float = 0.0    # completed round trips only
+    closed_positions: list[ClosedTrade] = field(default_factory=list)
+    total_trades: int = 0               # convertible closed round trips
+    wins: int = 0
+    losses: int = 0
+    scratches: int = 0                  # exactly 0.0 — neither, and counted
+    gross_profit: float = 0.0
+    gross_loss: float = 0.0             # positive magnitude
+    currency_conflict_symbols: list[str] = field(default_factory=list)
+    realized_unavailable_symbols: list[str] = field(default_factory=list)
+    oversold_symbols: list[str] = field(default_factory=list)
+
+    @property
+    def win_rate(self) -> float | None:
+        """Wins / closed trips, in percent. None when nothing has closed yet —
+        0% would claim every trade lost. A scratch (exactly 0.0) sits in the
+        denominator only: it was not a win."""
+        return (self.wins / self.total_trades * 100) if self.total_trades else None
+
+    @property
+    def profit_factor(self) -> float | None:
+        """Gross profit / gross loss. None when there is no loss to divide by —
+        that is undefined, not "infinitely good"."""
+        return (self.gross_profit / self.gross_loss) if self.gross_loss > 0 else None
+
+
+def build_realized(holdings: Mapping[str, Holding]) -> RealizedBook:
+    """Aggregate the realized side of `build_holdings`'s fold (rule 6).
+
+    Takes the holdings map rather than the raw transactions on purpose: the
+    realized records are produced by the SAME fold that maintains the open
+    position, so the cost released here and the cost still carried there cannot
+    drift apart. A second fold over the transactions is what this module exists
+    to prevent.
+    """
+    book = RealizedBook()
+    unconvertible: set[str] = set()
+    oversold: set[str] = set()
+
+    for symbol in sorted(holdings):
+        h = holdings[symbol]
+        # Rule 5: a symbol whose rows mix currencies has no statable cost, so it
+        # has no statable realized P&L either. Named, not silently dropped.
+        if h.currency_conflict:
+            book.currency_conflict_symbols.append(symbol)
+            continue
+
+        for s in h.sales:
+            if s.oversold:
+                oversold.add(symbol)
+            if s.realized_pl_base is None:
+                unconvertible.add(symbol)
+                continue
+            book.realized_pl += s.realized_pl_base
+            book.realized_fees += s.fee_base or 0.0
+            book.counted_sales += 1
+
+        for trade in h.closed_trades:
+            book.closed_positions.append(trade)
+            if trade.realized_pl_base is None:
+                continue  # already named via its legs above
+            book.closed_positions_pl += trade.realized_pl_base
+            book.total_trades += 1
+            if trade.realized_pl_base > 0:
+                book.wins += 1
+                book.gross_profit += trade.realized_pl_base
+            elif trade.realized_pl_base < 0:
+                book.losses += 1
+                book.gross_loss += -trade.realized_pl_base
+            else:
+                book.scratches += 1
+
+    # Most recent trade first — a trade log is read from the top.
+    book.closed_positions.sort(
+        key=lambda t: (t.closed_on.isoformat() if t.closed_on else "", t.symbol),
+        reverse=True,
+    )
+    book.realized_unavailable_symbols = sorted(unconvertible)
+    book.oversold_symbols = sorted(oversold)
+    return book
 
 
 # ─────────────────────────────────────────────────────────────────────────────

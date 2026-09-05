@@ -4,7 +4,7 @@ from sqlalchemy import select, delete, update
 from sqlalchemy.orm import selectinload
 
 from core.database import get_db
-from core.symbol_utils import is_ambiguous_bare_thai_symbol
+from core.symbol_utils import ambiguous_bare_symbol_detail, is_ambiguous_bare_thai_symbol
 from models.user import User
 from models.watchlist import Watchlist, WatchlistItem
 from models.schemas import WatchlistCreate, WatchlistUpdate, WatchlistItemAdd, WatchlistResponse, WatchlistReorderRequest
@@ -100,13 +100,12 @@ async def add_stock(
     # ".BK" — a bare symbol here cannot be resolved to one or the other, so
     # reject it and say so, rather than silently registering it as the
     # wrong instrument (see workers/symbol_registrar.py _classify_market).
+    # bd:shotockviz-3p6 — wording moved to core/symbol_utils so the portfolio
+    # route, which now makes the same refusal, cannot word it differently.
     if is_ambiguous_bare_thai_symbol(sym):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                f"'{sym}' is ambiguous. For the SET stock, type '{sym}.BK'. "
-                f"For a Thai mutual fund, use its exact fund code."
-            ),
+            detail=ambiguous_bare_symbol_detail(sym),
         )
 
     result = await db.execute(

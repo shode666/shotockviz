@@ -9,11 +9,12 @@ from sqlalchemy import select
 
 from core.database import get_db
 from core import cache_keys
+from core.symbol_utils import ambiguous_bare_symbol_detail, is_ambiguous_bare_thai_symbol
 from models.user import User
 from models.portfolio import Transaction
 from models.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics,
-    HoldingResponse, FxRateInfo,
+    HoldingResponse, FxRateInfo, ClosedPositionResponse, RealizedBookResponse,
 )
 from api.middleware.auth import get_current_user
 from services import portfolio_service, stock_service
@@ -279,6 +280,13 @@ async def get_analytics(
     )
     totals = portfolio_service.summarize(valued)
 
+    # bd:shotockviz-tmz — the closed side. Built from `holdings` (ALL symbols,
+    # including the fully-closed ones `active_holdings` drops) by the same fold
+    # that produced the open positions above, so cost released and cost still
+    # held cannot drift apart. Summary only here; the per-trade log is
+    # GET /portfolio/realized so this hot path does not grow with trade history.
+    realized = portfolio_service.build_realized(holdings)
+
     holding_responses = [
         HoldingResponse(
             symbol=v.symbol,
@@ -339,6 +347,105 @@ async def get_analytics(
         # the fund stage then resolved is not pending; a cached but unusable
         # price is).
         has_pending_prices=bool(totals.unpriced_symbols),
+        # bd:shotockviz-tmz. `counted_sales` (not `realized_pl != 0`) guards the
+        # money fields: a genuine break-even sale must print 0.00, while a book
+        # with nothing sold must print nothing — "there are no closed trades" is
+        # a different statement from "the closed trades made nothing". Same
+        # None-not-zero doctrine as fx_pl.
+        realized_pl=round(realized.realized_pl, 2) if realized.counted_sales else None,
+        realized_fees=round(realized.realized_fees, 2) if realized.counted_sales else None,
+        closed_positions_pl=(
+            round(realized.closed_positions_pl, 2) if realized.total_trades else None
+        ),
+        total_trades=realized.total_trades,
+        win_rate=round(realized.win_rate, 2) if realized.win_rate is not None else None,
+        profit_factor=(
+            round(realized.profit_factor, 4) if realized.profit_factor is not None else None
+        ),
+        realized_unavailable_symbols=realized.realized_unavailable_symbols,
+    )
+
+
+@router.get("/realized", response_model=RealizedBookResponse)
+async def get_realized(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """The closed-trade record — bd:shotockviz-tmz.
+
+    COST FLOW: moving weighted average, stated in the payload (`cost_flow`) and
+    argued in services/portfolio_service.py rule 6. Not FIFO: the open side has
+    folded on average cost since bd:shotockviz-msg (so FIFO here would stop
+    realized + unrealized reconciling to the cost actually put in), and
+    `transactions.date` is a DATE with no lot id, so a FIFO answer would depend
+    on the row order Postgres happened to return for same-day trades.
+
+    Two grains, both reported because they are different numbers:
+      `realized_pl`          — EVERY sale, scale-outs on still-open positions
+                               included. Money already off the table.
+      `closed_positions_pl`  — completed round trips only, i.e. the sum of the
+                               rows in `closed_positions`.
+
+    Everything is in `base_currency`, converted at the rate AT DISPOSAL (the
+    SELL row's own `fx_rate`) against cost released at the lots' own rates. A
+    disposal that cannot be converted is named in
+    `realized_unavailable_symbols` and left out — never counted as zero.
+
+    NOT tax output: see the AI-persona note on rule 6. Lot-relief rules differ
+    by jurisdiction and this is one book's own convention.
+
+    CQRS: pure read, DB only — no cache, no external call.
+    """
+    result = await db.execute(
+        select(Transaction).where(Transaction.user_id == user.id).order_by(Transaction.date)
+    )
+    txns = result.scalars().all()
+
+    book = portfolio_service.build_realized(portfolio_service.build_holdings(txns))
+
+    return RealizedBookResponse(
+        base_currency=book.base_currency,
+        realized_pl=round(book.realized_pl, 2) if book.counted_sales else None,
+        realized_fees=round(book.realized_fees, 2) if book.counted_sales else None,
+        closed_positions_pl=(
+            round(book.closed_positions_pl, 2) if book.total_trades else None
+        ),
+        total_trades=book.total_trades,
+        wins=book.wins,
+        losses=book.losses,
+        scratches=book.scratches,
+        win_rate=round(book.win_rate, 2) if book.win_rate is not None else None,
+        profit_factor=(
+            round(book.profit_factor, 4) if book.profit_factor is not None else None
+        ),
+        closed_positions=[
+            ClosedPositionResponse(
+                symbol=t.symbol,
+                currency=t.currency,
+                base_currency=book.base_currency,
+                qty=t.qty,
+                opened_on=t.opened_on,
+                closed_on=t.closed_on,
+                holding_days=t.holding_days,
+                entry_price=round(t.entry_price, 4),
+                exit_price=round(t.exit_price, 4),
+                fees=round(t.fees, 2),
+                realized_pl=round(t.realized_pl, 2),
+                realized_pl_pct=(
+                    round(t.realized_pl_pct, 2) if t.realized_pl_pct is not None else None
+                ),
+                # None stays None: "this trip cannot be stated in THB", which is
+                # not the same claim as "it made nothing".
+                realized_pl_base=(
+                    round(t.realized_pl_base, 2) if t.realized_pl_base is not None else None
+                ),
+                sales=t.sales,
+            )
+            for t in book.closed_positions
+        ],
+        realized_unavailable_symbols=book.realized_unavailable_symbols,
+        currency_conflict_symbols=book.currency_conflict_symbols,
+        oversold_symbols=book.oversold_symbols,
     )
 
 
@@ -351,6 +458,25 @@ async def add_transaction(
     """Add a buy or sell transaction."""
     currency = body.currency.upper() if body.currency else "THB"
     symbol = body.symbol.upper()
+
+    # bd:shotockviz-3p6 — the same refusal `watchlist.py` already makes, for the
+    # same reason. SCB / TISCO / ASP (and the other Thai fund-house prefixes) are
+    # simultaneously real SET tickers and fund-code prefixes; the app's accepted
+    # convention is that a SET ticker carries an explicit ".BK".
+    #
+    # Since bd:shotockviz-m6q the registrar REFUSES to write a guessed FUND row
+    # for these, so the data stays clean — but this endpoint fired
+    # `register_symbol.delay()` and returned 201 regardless, so a transaction on
+    # a bare "SCB" was accepted, never resolved to an instrument, and never got
+    # a name or a price, with nothing anywhere telling the user why. Silence
+    # after a refusal is worse than the wrong guess it replaced: the user has no
+    # reason to suspect anything and no idea what to type instead.
+    if is_ambiguous_bare_thai_symbol(symbol):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ambiguous_bare_symbol_detail(symbol),
+        )
+
     # bd:shotockviz-7ju — refuse before writing, loudly. See rule 5.
     await _assert_currency_consistent(db, user.id, symbol, currency)
     txn = Transaction(

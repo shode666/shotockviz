@@ -4,6 +4,10 @@ from typing import TYPE_CHECKING
 from sqlalchemy import String, DateTime, Float, Integer, Date, Enum, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
+# bd:shotockviz-mh1 — see the `assert_currency_band_coverage(Currency)` call
+# below. `services/portfolio_service.py` imports nothing from the app (stdlib
+# only), so this direction cannot cycle.
+from services.portfolio_service import assert_currency_band_coverage
 
 # bd:deps-2026-09 WP-B5 (03-stan-refactor-strategy.md §1.2 F821 finding) —
 # forward-ref string "User" in `Mapped["User"]` below needs a real import
@@ -21,6 +25,16 @@ class TransactionType(str, PyEnum):
 class Currency(str, PyEnum):
     THB = "THB"
     USD = "USD"
+
+
+# bd:shotockviz-mh1 — adding a member above without also adding its
+# FX_PLAUSIBLE_RANGE band in services/portfolio_service.py raises HERE, at
+# import, so the app refuses to start. Without the band `read_fx_quote` cannot
+# derive that pair's orientation and silently returns "no rate available" for
+# every quote of it — a missing constant that reads as a cold cache. Enforced
+# rather than documented, because the comment version of this rule is exactly
+# what someone would forget.
+assert_currency_band_coverage(Currency)
 
 
 class Transaction(Base):

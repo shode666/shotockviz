@@ -1,5 +1,6 @@
 """Pydantic schemas for request/response validation."""
 from datetime import datetime, date
+from datetime import date as _date_type  # noqa: F401 — see TransactionUpdate.date
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -145,12 +146,44 @@ class WatchlistResponse(BaseModel):
 
 # ─── Portfolio ─────────────────────────────────────────────────────────────
 
+# ── bd:shotockviz-ace — what a transaction's numbers are allowed to be ───────
+# The spec question was "is qty=0 / price=0 a validation error?". F7's AC is an
+# emptiness check, and `formValidation.ts` correctly treats the STRING "0" as
+# non-empty; that is a different question from whether the VALUE is a legal
+# transaction. Answered here, server-side, once, for all three numeric fields:
+#
+#   qty   > 0   A transaction of zero shares is not an event. A negative qty is
+#               a DIRECTION, and direction is `type` (BUY/SELL) — allowing it
+#               would let "BUY -10" act as a sell that bypasses every SELL-side
+#               rule (realized P&L, sell-fee treatment, close detection).
+#   price >= 0  ZERO IS LEGAL AND DELIBERATE. A bonus-share issue / stock
+#               dividend / free warrant allotment really is acquired at 0, and a
+#               SET book meets those. The consequence — `cost_basis` 0, so
+#               `unrealized_pl_pct` is None — is the CORRECT answer (a return on
+#               a zero cost basis is undefined, not infinite), not the bug; the
+#               bug would be printing a percentage for it. Negative is never a
+#               price.
+#   fee   >= 0  A negative fee is a rebate, not a commission. Today it flows
+#               straight into `cost_basis` on a BUY and LOWERS the trader's
+#               stated breakeven, and inflates realized P&L on a SELL — money
+#               invented by a minus sign. A genuine rebate belongs in its own
+#               field or the note, not in the commission.
+#
+# `allow_inf_nan=False` on all three: `Field(gt=0)` already rejects NaN (every
+# NaN comparison is False), but `inf` passes gt/ge and would poison cost basis,
+# every total, and the equity curve. Non-finite money is not money.
+#
+# Frontend half (another agent — see hand-off): mirror qty>0 / price>=0 / fee>=0
+# as inline field errors so the user is not told "422" by the server, and
+# confirm a zero PRICE explicitly ("ราคา 0 — หุ้นปันผล/ได้รับแจก?") because it
+# is legal but is far more often a typo.
+
 class TransactionCreate(BaseModel):
     symbol: str
     type: str  # BUY or SELL
-    qty: float
-    price: float
-    fee: float = 0.0
+    qty: float = Field(gt=0, allow_inf_nan=False)
+    price: float = Field(ge=0, allow_inf_nan=False)
+    fee: float = Field(default=0.0, ge=0, allow_inf_nan=False)
     currency: str = "THB"  # THB or USD
     date: date
     note: Optional[str] = None
@@ -165,14 +198,31 @@ class TransactionCreate(BaseModel):
 
 
 class TransactionUpdate(BaseModel):
-    qty: Optional[float] = None
-    price: Optional[float] = None
-    fee: Optional[float] = None
+    # bd:shotockviz-ace — same rule as TransactionCreate above. The edit route
+    # writes qty/price/fee straight onto the row (`_ALLOWED_UPDATE_FIELDS`), so
+    # an unvalidated PUT was a second door to exactly the values the POST is
+    # about to start refusing. `Optional` means "not supplied"; a supplied value
+    # is held to the same standard.
+    qty: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
+    price: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
+    fee: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
     currency: Optional[str] = None
-    date: Optional[date] = None
+    # bd:shotockviz-qml — the field name `date` shadows the `datetime.date`
+    # import once a default is present: pydantic v2 resolves the annotation
+    # via `vars(cls)` as localns, which now holds the class attribute `date`
+    # (the FieldInfo/default), so `Optional[date]` resolved to
+    # `Optional[NoneType]` instead of `Optional[datetime.date]` — every PUT
+    # carrying a `date` key 422'd regardless of value. `TransactionCreate.date`
+    # and `TransactionResponse.date` are unaffected: both are REQUIRED (no
+    # `= None` default), so there is no class attribute named `date` to shadow
+    # the import. Using the `_date_type` alias (imported once, module top)
+    # only in the annotation — not renaming the field itself — keeps the wire
+    # contract (`{"date": "..."}"`) and the attribute name (`.date`) identical;
+    # only the name looked up during annotation resolution changes.
+    date: Optional[_date_type] = None
     note: Optional[str] = None
     # Explicit correction only — never recomputed silently on any other edit.
-    fx_rate: Optional[float] = Field(default=None, gt=0)
+    fx_rate: Optional[float] = Field(default=None, gt=0, allow_inf_nan=False)
 
 
 class TransactionResponse(BaseModel):
@@ -259,6 +309,65 @@ class PortfolioAnalytics(BaseModel):
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
     has_pending_prices: bool = False
+    # ── realized side (bd:shotockviz-tmz) ─────────────────────────────────────
+    # Summary only, in `base_currency`. The per-trade log lives on
+    # GET /portfolio/realized so this hot path does not grow with the user's
+    # trade history. Cost flow is MOVING WEIGHTED AVERAGE — see
+    # services/portfolio_service.py rule 6.
+    # None (not 0.0) whenever nothing convertible has been realized: 0 would
+    # claim the closed trades made nothing.
+    realized_pl: Optional[float] = None          # every sale, incl. scale-outs
+    realized_fees: Optional[float] = None        # sell commission inside the above
+    closed_positions_pl: Optional[float] = None  # completed round trips only
+    total_trades: int = 0                        # completed round trips
+    win_rate: Optional[float] = None             # % of round trips with base P&L > 0
+    profit_factor: Optional[float] = None        # None when there is no loss yet
+    # Symbols whose disposals cannot be converted to base (no rate at disposal,
+    # or the position was not FX-complete when sold) — excluded, not zeroed.
+    realized_unavailable_symbols: List[str] = []
+
+
+class ClosedPositionResponse(BaseModel):
+    """One completed round trip — flat → position → flat (bd:shotockviz-tmz)."""
+    symbol: str
+    currency: str = "THB"
+    base_currency: str = "THB"
+    qty: float
+    opened_on: Optional[date] = None
+    closed_on: Optional[date] = None
+    holding_days: Optional[int] = None
+    # Weighted-average cost released by this trip, INCLUDING the capitalised buy
+    # commission — the real breakeven, not the screen price.
+    entry_price: float
+    # Weighted-average sale price, GROSS of the sell fee (which is in `fees` and
+    # is already subtracted from realized_pl).
+    exit_price: float
+    fees: float
+    realized_pl: float                       # native currency
+    realized_pl_pct: Optional[float] = None  # None on a zero-cost trip
+    realized_pl_base: Optional[float] = None  # None = not convertible, NOT zero
+    sales: int = 1                           # SELL rows that closed it
+
+
+class RealizedBookResponse(BaseModel):
+    """GET /portfolio/realized — the closed-trade record (bd:shotockviz-tmz)."""
+    base_currency: str = "THB"
+    cost_flow: str = "moving_average"   # stated, not implied — see rule 6
+    realized_pl: Optional[float] = None
+    realized_fees: Optional[float] = None
+    closed_positions_pl: Optional[float] = None
+    total_trades: int = 0
+    wins: int = 0
+    losses: int = 0
+    scratches: int = 0                  # exactly 0.0 — in the denominator only
+    win_rate: Optional[float] = None
+    profit_factor: Optional[float] = None
+    closed_positions: List[ClosedPositionResponse] = []
+    realized_unavailable_symbols: List[str] = []
+    currency_conflict_symbols: List[str] = []
+    # More was sold than the book records buying — the realized figure for these
+    # is overstated by the cost of the shares it has no record of.
+    oversold_symbols: List[str] = []
 
 
 # ─── Alert ─────────────────────────────────────────────────────────────────
