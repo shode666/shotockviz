@@ -20,8 +20,6 @@ localhost {
 	# WebSocket — long timeout for /api/ws/* live prices
 	@ws path /api/ws/*
 	reverse_proxy @ws backend:8000 {
-		header_up Connection {>Connection}
-		header_up Upgrade {>Upgrade}
 		transport http {
 			read_timeout 1h
 			write_timeout 1h
