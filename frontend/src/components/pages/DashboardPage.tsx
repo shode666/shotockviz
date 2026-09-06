@@ -19,6 +19,7 @@ import { ErrorState } from '@/components/ui/ErrorState';
 import { formatPrice, formatPct, upColor, displaySymbol } from '@/utils/formatters';
 import { useMarketStatus } from '@/hooks/useMarketStatus';
 import { buildCurveQualifications, type CurveQualificationTone } from '@/utils/curveQualifications';
+import { realFxRates } from '@/utils/portfolioQualifications';
 
 const CURVE_TONE_ICON: Record<CurveQualificationTone, typeof AlertTriangle> = {
     error: AlertTriangle,
@@ -210,27 +211,45 @@ export default function DashboardPage() {
                                         {portfolio.position_count} หลักทรัพย์
                                     </div>
                                     {/* bd:shotockviz-fnn — one honest line about the rate behind
-                                        the number above. Rendered only when the book has FX at all. */}
-                                    {portfolio.fx_rates?.length > 0 && (
-                                        <div className="text-[10px] mt-1 leading-snug" style={{ color: 'var(--color-text-sub)' }}>
-                                            {portfolio.fx_rates.map((r: any) => (
-                                                <div key={r.currency}>
-                                                    {r.currency}/{r.base ?? 'THB'} {formatPrice(r.rate, 4)}
-                                                    {r.estimated && (
-                                                        <span style={{ color: 'var(--color-yellow)' }}> · ประมาณการ</span>
-                                                    )}
+                                        the number above. Rendered only when the book has FX at
+                                        all. bd:shotockviz-0e9 — this used to read
+                                        `portfolio.fx_rates` directly, so a pure-THB book (whose
+                                        only rate is a `source: "identity"` placeholder, rate=1.0,
+                                        added by the backend so downstream math has something to
+                                        key off of) still rendered "THB/THB 1.0000" and an FX
+                                        return line. Same non-fix q5o hit on the Portfolio page:
+                                        the shared filter is `realFxRates()` in
+                                        `portfolioQualifications.ts` (identity = not a real FX
+                                        disclosure); the decision of *which rates count* is
+                                        shared with that page. The rendering here stays this
+                                        card's own compact 2-line form rather than Portfolio's
+                                        full qualification block (currency-conflict / pending-
+                                        price / fx-unavailable prose) — this is a dashboard
+                                        summary tile, not the portfolio page of record. */}
+                                    {(() => {
+                                        const dashFxRates = realFxRates(portfolio) as any[];
+                                        if (dashFxRates.length === 0) return null;
+                                        return (
+                                            <div className="text-[10px] mt-1 leading-snug" style={{ color: 'var(--color-text-sub)' }}>
+                                                {dashFxRates.map((r: any) => (
+                                                    <div key={r.currency}>
+                                                        {r.currency}/{r.base ?? 'THB'} {formatPrice(r.rate, 4)}
+                                                        {r.estimated && (
+                                                            <span style={{ color: 'var(--color-yellow)' }}> · ประมาณการ</span>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                                <div>
+                                                    ผลตอบแทนจากค่าเงิน:{' '}
+                                                    {portfolio.fx_pl == null
+                                                        ? <span style={{ color: 'var(--color-yellow)' }}>ไม่ทราบ</span>
+                                                        : <span style={{ color: upColor(portfolio.fx_pl) }}>
+                                                            {portfolio.fx_pl >= 0 ? '+' : '-'}{formatPrice(Math.abs(portfolio.fx_pl), 0)}
+                                                        </span>}
                                                 </div>
-                                            ))}
-                                            <div>
-                                                ผลตอบแทนจากค่าเงิน:{' '}
-                                                {portfolio.fx_pl == null
-                                                    ? <span style={{ color: 'var(--color-yellow)' }}>ไม่ทราบ</span>
-                                                    : <span style={{ color: upColor(portfolio.fx_pl) }}>
-                                                        {portfolio.fx_pl >= 0 ? '+' : '-'}{formatPrice(Math.abs(portfolio.fx_pl), 0)}
-                                                    </span>}
                                             </div>
-                                        </div>
-                                    )}
+                                        );
+                                    })()}
                                     {/* Sparkline — bd:shotockviz-a6p: the curve's FX basis
                                         (bd:shotockviz-la4) rendered ABOVE the line it
                                         qualifies, never after. A THB-only book (fx_basis

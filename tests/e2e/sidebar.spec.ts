@@ -56,7 +56,13 @@ test.describe('Sidebar — guest / default watchlist', () => {
   });
 
   test('clicking AAPL stock button keeps user on chart page', async ({ page }) => {
-    const aaplBtn = page.getByRole('button').filter({ hasText: 'AAPL' }).first();
+    // bd:shotockviz-al7 — scoped to <aside> (the sidebar). Navbar renders
+    // before Sidebar in __root.tsx and its search-bar button text also
+    // contains "AAPL" ("ค้นหา PTT, AAPL...K"), so an unscoped
+    // getByRole('button').filter({ hasText: 'AAPL' }) resolves to the
+    // Navbar search button instead — same shape as Quinn's fix in
+    // sr-levels.spec.ts.
+    const aaplBtn = page.locator('aside').getByRole('button').filter({ hasText: 'AAPL' }).first();
     await expect(aaplBtn).toBeVisible({ timeout: 8000 });
     await aaplBtn.click();
     // Stays on home / chart route
@@ -64,7 +70,9 @@ test.describe('Sidebar — guest / default watchlist', () => {
   });
 
   test('clicking NVDA stock button in sidebar navigates to chart for NVDA', async ({ page }) => {
-    const nvdaBtn = page.getByRole('button').filter({ hasText: 'NVDA' }).first();
+    // bd:shotockviz-al7 — same unscoped-click defect shape as the AAPL cases
+    // below; scoped to <aside> for the same reason.
+    const nvdaBtn = page.locator('aside').getByRole('button').filter({ hasText: 'NVDA' }).first();
     await expect(nvdaBtn).toBeVisible({ timeout: 8000 });
     await nvdaBtn.click();
     // Toolbar should now display NVDA as selected symbol
@@ -73,7 +81,8 @@ test.describe('Sidebar — guest / default watchlist', () => {
   });
 
   test('clicking stock in sidebar does NOT navigate away from /', async ({ page }) => {
-    const aaplBtn = page.getByRole('button').filter({ hasText: 'AAPL' }).first();
+    // bd:shotockviz-al7 — scoped to <aside>; see note above.
+    const aaplBtn = page.locator('aside').getByRole('button').filter({ hasText: 'AAPL' }).first();
     await aaplBtn.click();
     await expect(page).toHaveURL('/');
   });
