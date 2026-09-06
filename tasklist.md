@@ -324,6 +324,25 @@ backend/
   - **Effort:** 3 hours
   - 📁 **Files:** `backend/core/config.py` (FINNHUB_API_KEY), `backend/workers/` (new Celery task), `backend/models/stock.py` (StockEvent model)
   - ⚠️ **Pitfalls:** Finnhub free tier = 60 calls/min — ใช้ rate limiter, batch fetch for watchlist symbols only (ไม่ fetch all stocks)
+- [x] Corporate actions must reach holdings and alert levels (`bd:shotockviz-eb1`)
+  - **Why:** `corporate_actions` ถูก populate ทุกวันตั้งแต่ V2 แต่ portfolio ไม่เคยอ่าน — หลัง split 2:1 จะโชว์ขาดทุน ~50% ที่ไม่เคยเกิดขึ้น และ alert level เก่ายิงผิดราคา
+  - **Rule:** split เปลี่ยน *หน่วย* ที่ position ถูก quote ไม่ใช่ *เงิน* ที่จ่ายไป → transaction row ไม่ถูกเขียนทับ, restate ตอนอ่าน (`qty ÷ ratio`, `price × ratio`), `qty*price` invariant
+  - [x] `services/corporate_actions.py` — rule เดียว, อ่าน table เดิมผ่าน loader เดิม + Redis key เดิมของ `price_adjuster`
+  - [x] `build_holdings(txns, splits=, as_of=)` — จุดเดียวใน fold ที่ corporate action แตะ book
+  - [x] 4 surfaces: `/portfolio/analytics`, `/portfolio/realized`, dashboard summary, equity curve (curve restate ตาม `as_of` ของแต่ละวัน เพราะ close ใน cache เป็น raw)
+  - [x] DIV ไม่แตะ cost basis (จะ fabricate กำไร) · RIGHTS ไม่แตะ position (ไม่มี record ว่า subscribe หรือไม่) → รายงานชื่อไว้แทน
+  - [x] Alert level rebase in place ตอนบันทึก split + `alerts.value_as_of` (migration `20260906_0008`)
+  - **Acceptance:** 2:1 split บน lot 100 @ 50 → qty 200, avg_cost 25, cost_basis 5,000 ไม่เปลี่ยน, P&L = 0 เมื่อ quote = 25
+  - 📁 **Files:** `backend/services/corporate_actions.py`, `backend/services/portfolio_service.py`, `backend/services/price_adjuster.py`, `backend/api/routes/{portfolio,dashboard,portfolio_performance,alerts}.py`, `backend/workers/corporate_actions_fetcher.py`, `backend/models/alert.py`, `backend/tests/test_corporate_actions_split.py`
+  - ⚠️ **Pitfalls:** ratio convention ของ table คือ 0.5 = 2:1 (ไม่ใช่ 2.0) · เทียบ `txn_date < ex_date` แบบ strict — trade ในวัน ex-date อยู่ในหน่วยใหม่แล้ว
+- [x] `GET /api/health` 2.23s → probe off the request path (`bd:shotockviz-d71`)
+  - **Why:** Celery `inspect().ping()` เป็น broadcast RPC ที่รอครบ `timeout=2.0` ทุกครั้ง — ไม่ใช่งานช้า แต่เป็นการรอคงที่
+  - **Rule:** endpoint ที่เร็วขึ้นแต่เลิกพิสูจน์ว่า worker ยังอยู่ = แย่กว่าเดิม → probe เหมือนเดิมทุกอย่าง ย้ายที่ยืนอย่างเดียว
+  - [x] publish ผล probe ลง Redis, serve จากที่นั่น, refresh เบื้องหลัง; cold cache ยัง probe inline 2s (ห้าม claim "ok" ที่ยังไม่ได้พิสูจน์)
+  - [x] เพิ่ม field `celery_checked_at` (additive) — shape/ความหมายของ 3 key เดิมไม่เปลี่ยน
+  - [x] เลิกเปิด Redis connection ใหม่ต่อ call → ใช้ shared pool ตาม precedent ของ `/system/ready` ในไฟล์เดียวกัน
+  - 📁 **Files:** `backend/api/routes/system.py`
+  - ⚠️ **Pitfalls:** compose healthcheck (`curl -f`, interval 30s × 3 retries) อ่านแค่ status code — และ celery "fail" ไม่เคย set `degraded` อยู่แล้ว
 
 ---
 
@@ -452,8 +471,8 @@ backend/
   - **Effort:** 6 hours
   - 📁 **Files:** `frontend/src/components/chart/TradingChart.tsx` (add line series), `frontend/src/components/chart/ChartToolbar.tsx` (add Compare button), `frontend/src/services/stockService.js` (fetch 2nd symbol data)
   - ⚠️ **Pitfalls:** Normalize ด้วย % change (ไม่ใช่ raw price) — NVDA $180 vs AAPL $150 เทียบไม่ได้ ต้อง normalize from start, ใช้ right price scale (`priceScaleId: 'right'`) สำหรับ 2nd symbol
-- [ ] Drawing tools: verify all 6 tools work (Trend, H-Line, Fib, Rect, Arrow, Pitchfork)
-  - ⛔ **Blocked / superseded 2026-09-05** — `DrawingToolbar.tsx` was removed (`bd:shotockviz-bct` F1): none of the 6 tools persisted anything, so there is nothing to verify. Real user-drawn S/R lines are tracked as `bd:shotockviz-474`.
+- [x] Drawing tools: verify all 6 tools work (Trend, H-Line, Fib, Rect, Arrow, Pitchfork)
+  - ⛔ **Superseded 2026-09-05, H-Line piece shipped 2026-09-06** — `DrawingToolbar.tsx` was removed (`bd:shotockviz-bct` F1): none of the 6 tools persisted anything, so there was nothing to verify. Only **Horizontal Line** was rebuilt with real persistence (`bd:shotockviz-474`) — via `sr_levels` (`source='user_created'`), NOT `drawings.py`/`Drawing`, which was confirmed to have zero frontend callers and is a dead parallel path. Trend/Fib/Rect/Arrow/Pitchfork remain not built and are not planned by this bead — see `REQUIREMENTS.md` FR-CHART-003.
   - **Steps:**
     - [ ] Test each tool on NVDA 1D chart: draw → save → reload page → verify persistence
     - [ ] Fix any tool that doesn't render or save correctly
@@ -463,8 +482,8 @@ backend/
   - **Effort:** 4 hours
   - 📁 **Files:** `frontend/src/components/chart/DrawingToolbar.tsx` (tools), `frontend/src/components/chart/TradingChart.tsx` (render drawings), `backend/api/routes/drawings.py` (CRUD API), `backend/models/drawing.py` (DB model)
   - 🔗 **Reference:** `drawings.py` API มีอยู่แล้ว — GET/POST/DELETE per user per symbol, ดูว่า frontend เรียกถูก endpoint ไหม
-- [ ] Drawing save/load: verify per-user per-symbol persistence via `/api/drawings`
-  - ⛔ **Blocked 2026-09-05** — no UI produces a drawing to save since `bd:shotockviz-bct` F1. See `bd:shotockviz-474`.
+- [x] Drawing save/load: verify per-user per-symbol persistence via `/api/drawings`
+  - ⛔ **Superseded 2026-09-06** — `/api/v1/drawings` (`drawings.py`/`Drawing`) has zero frontend callers and stayed that way; the real per-user-owned persistence that shipped is per-user PER-SYMBOL (not per-timeframe — a price level is the same level on every timeframe) via `/api/v1/sr-levels` (`bd:shotockviz-474`). Verified in a real browser: create → reload → still there; delete → reload → gone; DB confirmed 0 leftover `user_created` rows after cleanup.
   - **Steps:**
     - [ ] Test: create drawing → `GET /api/drawings?symbol=NVDA` returns saved drawings
     - [ ] Test: different user doesn't see other user's drawings
@@ -564,6 +583,14 @@ backend/
     - [ ] Top 5 sectors labeled, rest grouped as "Other"
   - **Acceptance:** Pie chart shows "Technology 45%, Financials 20%, Energy 15%, ..." based on holdings
   - **Effort:** 3 hours
+  - ⚠️ **Still open, and NOT what `bd:shotockviz-916` built** — this one is by SECTOR and needs a sector per symbol, which nothing currently stores. Recharts is also not an option (no-new-deps NFR, ADR-UH-003); the per-symbol chart below is inline SVG.
+- [x] Per-symbol allocation breakdown (FR-PORT-002) — `bd:shotockviz-916`, 2026-09-06
+  - Denominator is `PortfolioAnalytics.total_value` (base-currency market value of the positions the totals could state) — the same number the summary card prints, so the chart cannot state a different book.
+  - A position the totals excluded (unpriced / no FX rate / currency conflict) gets **no slice** and is named with its reason under the chart. Never a 0% wedge.
+  - `build_allocation()` in `backend/services/portfolio_service.py` reads `summarize()`'s output — inclusion is decided once, not re-decided per surface.
+  - Top 8 names + one "อื่นๆ (N รายการ)" slice; inline-SVG donut, no charting dependency (`frontend/src/utils/allocation.ts`, `PortfolioPage.tsx`).
+- [x] Risk metrics (FR-PORT-003) — **struck**, not built. `bd:shotockviz-916`, 2026-09-06
+  - Sharpe / Beta / Max Drawdown all need a portfolio RETURN series; what exists is a market-value curve with cash flows, omitted days and a `constant_current_rate` FX basis. Full reasoning in `REQUIREMENTS.md` FR-PORT-003.
 - [ ] Equity curve (P&L over time) sparkline/chart
   - **Why:** ดู performance ของ portfolio เทียบกับ benchmark (SET50, S&P500)
   - **Steps:**
@@ -808,6 +835,7 @@ backend/
   - **Effort:** 16 hours (complex algorithm + UI)
   - 📁 **Files:** สร้าง `backend/services/pattern_detector.py` (new), `frontend/src/components/chart/TradingChart.tsx` (draw highlights)
   - ⚠️ **Pitfalls:** Pattern detection เป็น advanced topic — เริ่มจาก pivot point detection (local min/max) ก่อน แล้วค่อย match patterns, อาจใช้ library `ta-lib` หรือ implement custom, ระวัง false positive — ควร require minimum confidence threshold
+- [x] Pre-hydration interactions no longer silently dropped — ✅ bd:shotockviz-6h3 (2026-09-06, Uma): SSR controls carry `inert`/`disabled` + `.awaiting-hydration` until React attaches (`hooks/useHydrated.ts`); ⌘K pressed pre-hydration is queued by an inline `<head>` script (`utils/prehydration.ts`) and honored by SearchModal at mount. Sidebar rows + page-level controls deliberately deferred (mixed content/control — `inert` would hide prices from AT).
 - [x] Support/Resistance level auto-draw — ✅ bd:features-2026-09 (2026-09-05: auto-pivot + manual import + user lines + toggle; touch-count strength not implemented)
   - **Steps:**
     - [ ] Algorithm: find price levels where price touched ≥3 times (within 0.5% tolerance)

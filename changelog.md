@@ -8,6 +8,250 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### TypeScript strict mode enabled — type gate is finally honest (2026-09-06)
+
+**`npx tsc --noEmit -p .` exits clean for the first time since the initial commit.**
+`bd:shotockviz-9z0` (Stan). `frontend/tsconfig.json` had `"strict": false`
+since `1b6ff0d`; TanStack Router refuses to type its API without
+`strictNullChecks`, so the gate permanently failed with one router.tsx
+error and every bd this session carried "exactly ONE pre-existing error"
+as baseline — a real new type error was one line away from being mistaken
+for it.
+
+- Flipped `"strict": true` → 201 errors across 11 files, fixed without
+  blanket `any`/`@ts-ignore`: typed `useRef`/`useState` generics, props
+  interfaces (TradingChart, ChartToolbar), API payload shapes (RightPanel
+  `Fundamentals/QuoteData/Holding/NewsItem`, AlertsPage `AlertRow`,
+  ScreenerPage `ScreenerResult` per `screener.py:189-190`), and a
+  `toSeriesData()` boundary adapter in TradingChart (null indicator points
+  now become the lib's documented whitespace gaps instead of out-of-contract
+  `value: null`).
+- **Real bug found by the checker:** `utils/indicators.ts` VWAP — a
+  close-only bar (optional `high`/`low`) made `typicalPrice` NaN and the NaN
+  poisoned cumPV/VWAP for the rest of the day. Fixed with close fallback +
+  2 regression tests (red-proven against the old formula).
+- 2 narrow, documented assertions kept: `lineWidth: 1.5 as LineWidth`
+  (TradingChart ×2 — preserves today's prod rendering; lib type is 1|2|3|4,
+  typings.d.ts:4797) and the standard `Object.keys() as (keyof ...)[]` idiom.
+- Gates: tsc exit 0 · `npm run build` ✓ · unit 140/140 (was 138) ·
+  E2E 226 passed / 0 failed.
+- Follow-up scoped: `useChartData.bars: any[]` (pre-existing explicit any —
+  typing it means modeling lightweight-charts' branded intraday/daily `Time`
+  duality) · `noUncheckedIndexedAccess` (dev-gate target, next ratchet).
+
+
+### pre-hydration interactions: honest inert state + queued Cmd+K (2026-09-06)
+
+**A control that is not ready yet now says so — the click can no longer vanish.**
+`bd:shotockviz-6h3` (Uma). SSR paints the whole UI before React attaches its
+handlers; during that window a click on the S/R toggle (`ChartToolbar.tsx`) or
+a ⌘K (`SearchModal.tsx`) was silently dropped — 100% reproducible, and the
+real cause behind `search.spec.ts`/`sr-levels.spec.ts` looking like selector
+bugs. Same failure `bd:ui-honesty-2026-09` spent an engagement removing, in
+the time dimension.
+
+**Fix — two mechanisms, no global loading gate:**
+- New `hooks/useHydrated.ts` (`useSyncExternalStore`, server snapshot `false`)
+  → `inert`/`disabled` are baked into the SSR HTML itself, so the *browser*
+  blocks the interaction before any JS exists. ChartToolbar control groups go
+  `inert` + `.awaiting-hydration` (opacity .6, `cursor: progress`, soft fade
+  on enable — deliberately distinct from permission-disabled `opacity-40 +
+  cursor-not-allowed`), toolbar gets `aria-busy`; S/R + "+ Level" buttons and
+  the Navbar search/theme buttons get `disabled`. Price readout and watchlist
+  stay out of the inert scope so AT can read content while JS loads; nav
+  `<Link>`s are real `<a href>` that navigate natively pre-JS and are NOT
+  gated.
+- ⌘K has no pixels to make inert (the Navbar advertises it), so a
+  self-contained inline `<head>` script (`utils/prehydration.ts`, injected via
+  `__root.tsx` `head().scripts`) queues the *intent* pre-hydration;
+  `SearchModal` consumes it on mount and opens. Only this one idempotent
+  intent is queued — arbitrary click replay was rejected as ambiguous and
+  worse than a visibly-blocked click.
+
+Verified in-browser (Playwright, throttled + JS-blocked loads): before = early
+click/⌘K dropped; after = click physically blocked while `disabled`/`inert`
+(not focusable either), ⌘K queued → modal opens at hydration, zero hydration-
+mismatch console errors, zero leftover `inert`/`.awaiting-hydration` after
+boot. Tests 138/138 (`utils/prehydration.test.ts` executes the real inline
+script against a fake window). Deliberately left for a follow-up: Sidebar
+watchlist rows (content+control mixed — `inert` would strip prices from the
+a11y tree) and page-level controls.
+
+**The one drawing tool this trader actually needs is back, for real this time.**
+`bd:shotockviz-474`. `bd:ui-honesty-2026-09` F1 removed the whole 6-tool drawing
+toolbar because none of it persisted — shapes vanished on reload. This closes
+the carved-out piece: `POST`/`DELETE /api/v1/sr-levels/{..}` (added to the
+existing read-only `GET /api/v1/sr-levels/{symbol}`, `backend/api/routes/
+sr_levels.py`) let a logged-in user mark a price as support or resistance, with
+an optional label, and it survives a reload — because it is a real row in the
+`sr_levels` table (`source='user_created'`, owned via the nullable `user_id`
+FK that table already had) using columns that already existed, no migration.
+`GET` stays unauthenticated for guests (byte-for-byte unchanged — still
+`manual_import`/`auto_pivot` only) and now additionally returns the caller's
+own `user_created` rows when a valid token is present; nobody but the owner
+ever sees one.
+
+**`drawings.py`/`Drawing` (generic tool_type + arbitrary `data_json` shapes,
+mounted at `/api/v1/drawings` but with zero frontend callers) was confirmed a
+dead parallel path from an earlier full-toolbar design and is NOT the home
+this feature uses — resurrecting a generic "any shape, any tool" engine for
+one horizontal-line feature would be the same class of overclaiming this
+engagement removed toolbar-wide. It is left in place, untouched, still dead.
+
+**Frontend:** `ChartToolbar.tsx` gets a "+ Level" control (disabled + a
+"sign in" title when logged out, same honest pattern F5 used for VWAP) and a
+row of delete chips for the caller's own levels — every chip is deletable by
+construction, since the GET route never returns anyone else's `user_created`
+row. New `AddSrLevelModal.tsx` + `utils/srLevelValidation.ts` (price > 0,
+inline Thai error, no silent-fail submit — ADR-UH-003). `useSrLevels()` gained
+a `refetch()`; the hook itself moved up to `ChartPage.tsx` so the chart's
+drawn lines, the delete-chip list and the modal's post-create refresh all
+read one fetch instead of three that could disagree.
+
+**Proximity digest excludes user-created levels — deliberately.**
+`workers/sr_proximity_digest.py` still queries `manual_import`/`auto_pivot`
+only. A personal entry/stop/target scratch mark is a different kind of fact
+than a curated/computed level worth a 2x/day heads-up, and "notify me at this
+price" is already Alerts' job — folding private marks into the digest would
+duplicate that feature and could page a `MAX_SYMBOLS_PER_MESSAGE=20`-limited
+message full of scratch marks nobody but the owner should see.
+
+**Verified in a real browser against the dev stack**: minted a token for user
+1, created a resistance level at 777.77 on NVDA, reloaded — line count and
+delete chip both survived; deleted it, reloaded — both gone. `sr_levels` table
+confirmed to have 0 `user_created` rows left afterward. `REQUIREMENTS.md`
+FR-CHART-003 updated to strike through the 5 tools that remain unbuilt and
+describe what actually ships.
+
+- 📁 Backend: `backend/api/routes/sr_levels.py`, `backend/models/schemas.py`
+  (`SRLevelCreate`), `backend/tests/test_sr_levels_endpoint.py` (+12 tests)
+- 📁 Frontend: `frontend/src/components/chart/{ChartToolbar,TradingChart}.tsx`,
+  `frontend/src/components/pages/ChartPage.tsx`,
+  `frontend/src/components/chart/AddSrLevelModal.tsx` (new),
+  `frontend/src/hooks/useSrLevels.ts`, `frontend/src/services/stockService.ts`,
+  `frontend/src/utils/srLevelValidation.ts` (+ test, new)
+- No migration — `sr_levels` (added `bd:features-2026-09`) already had
+  `source IN ('manual_import','auto_pivot','user_created')` and a nullable
+  `user_id` FK; this bead only starts writing the third value.
+
+### portfolio allocation, and three risk metrics struck rather than faked (2026-09-06)
+
+**The book now shows what share is in each name.** `bd:shotockviz-916`,
+FR-PORT-002. `build_allocation()` in `services/portfolio_service.py` splits
+`PortfolioTotals.total_value` across the positions that produced it, and the new
+`allocation` block on `GET /api/v1/portfolio/analytics` carries the slices, the
+denominator, the basis (`current_value_base` — a share of market value, not of
+cost) and, by name and reason, everything left out. It is built from
+`summarize()`'s output rather than from the raw book, so inclusion is decided in
+exactly one place: the chart cannot become a fourth surface that disagrees with
+the header, the holdings table and the equity curve about one book.
+
+**An excluded position gets no wedge, and is named.** The three exclusions the
+totals already make — no usable quote (`bd:shotockviz-2w8`), no FX rate for the
+currency (`bd:shotockviz-fnn`/`-sbe`), rows disagreeing on a currency
+(`bd:shotockviz-7ju`) — arrive as `allocation.excluded` with a reason each and
+are rendered under the chart. A 0% slice was rejected: it reads as "this name is
+worth nothing", which is the fabricated-loss claim `2w8` exists to remove, and
+drawing the position at its *cost basis* instead was rejected too, because a
+cost-shaped area inside a market-value ring makes every percentage a percentage
+of nothing. Slice areas come from `value_base`, never from the rounded
+`weight_pct`, so the ring closes on the same numbers the total is summed from.
+
+**No charting dependency.** `lightweight-charts` draws time series; the donut is
+inline SVG (one `stroke-dasharray` circle per slice, `pathLength=100`) with the
+grouping, geometry and exclusion sentence as pure functions in
+`frontend/src/utils/allocation.ts`. Top 8 names get their own slice on a 40-60
+name book; the tail becomes one "อื่นๆ (N รายการ)" slice that states its count
+and combined weight. No-new-deps NFR, ADR-UH-003.
+
+**Sharpe, Beta and Max Drawdown struck from FR-PORT-003.** All three need a
+portfolio *return* series. What exists is `/portfolio/performance`, a
+market-value curve that moves with deposits and withdrawals, omits any day with
+an unpriced or unconvertible symbol, and is stated on a
+`fx_basis: "constant_current_rate"` basis (`bd:shotockviz-la4`) — peak-to-trough
+on it measures portfolio size, not performance. Sharpe additionally has no
+risk-free rate anywhere in this system. Beta's blocker is **not** a missing
+benchmark, contrary to the first reading: `^SET.BK`/`^GSPC` are kept warm by
+`workers/price_fetcher.py:47` and already serve `/stocks/{symbol}/rs`; the
+blockers are the same return series plus the unmade decision of which index a
+mixed SET+US book should be measured against. Reasoning recorded in
+`REQUIREMENTS.md` FR-PORT-003 so it can be re-opened deliberately.
+
+### dashboard FX disclosure, a mis-scoped sidebar click, and one flake that didn't reproduce (2026-09-06)
+
+**The dashboard had its own copy of the identity-FX bug q5o already fixed.**
+`bd:shotockviz-0e9`. `DashboardPage.tsx`'s portfolio card read `portfolio.fx_rates`
+directly — a second, independent implementation written before
+`utils/portfolioQualifications.ts` existed — so a pure-THB book still rendered
+"THB/THB 1.0000" and an FX-return line. Routed through the same `realFxRates()`
+filter the Portfolio page uses (identity rate = not a real FX disclosure); the
+*decision* of which rates count is shared, the rendering stays this card's own
+compact 2-line form rather than Portfolio's full qualification block. Verified in
+browser: seeded one THB-only PTT.BK transaction on user 1, dashboard rendered
+value/PnL/sparkline with no FX line; row deleted after.
+
+**`sidebar.spec.ts` was clicking the Navbar search button.** `bd:shotockviz-al7`.
+Three assertions (`getByRole('button').filter({ hasText: 'AAPL'|'NVDA' })`)
+matched the Navbar's search-bar text before the Sidebar row, same defect shape
+Quinn already fixed in `sr-levels.spec.ts`. Scoped all three to `page.locator('aside')`.
+
+**F11 (`ui-honesty-2026-09.spec.ts`) did not reproduce.** `bd:shotockviz-5t9`.
+The suspected cause — F11 seeding/deleting alert rows that other specs also
+touch — does not hold against the current test: F11 fully intercepts
+`**/api/v1/alerts**` via `page.route()` and never writes to the real DB, no
+spec running near it in file order does either, and the real WebSocket rejects
+the tests' fake `mock-access-token` before accept (`main.py`'s
+`decode_access_token` check), so no live backend event can reach it either. A
+full 225-test suite run (190 passed / 35 pre-existing failures, 11.2 min) at
+current `HEAD` passed F11 cleanly. Left as-is — no wait/reorder added, per
+instruction not to paper over an unreproduced interaction; flagged to Oliver as
+likely a one-off resource/timing flake under the heavy single-worker run rather
+than a deterministic shared-fixture race.
+
+### corporate actions reach the book, and /api/health stops waiting (2026-09-06)
+
+**A stock split fabricated a loss on every held symbol.** `bd:shotockviz-eb1`.
+The `corporate_actions` table has been populated daily since the V2 workers
+landed, and the chart could adjust for it, but the portfolio never looked: it
+folded raw transactions while valuing them against a live quote that is always
+post-split. After a 2:1 that reads as a 50% loss on a position that did not move.
+
+The rule, stated once and applied on all four surfaces (holdings, dashboard
+summary, realized trade log, equity curve): *a split changes the units a
+position is quoted in, not the money that was paid for it.* Raw transaction rows
+are never rewritten — they are what the contract note says — and pre-ex-date lots
+are restated at read time (`qty ÷ ratio`, `price × ratio`), leaving `qty*price`,
+the cost basis, the capitalised commission and every realized figure invariant.
+The restatement reads the same table through the same loader and the same Redis
+key the chart's price adjuster uses, so the two cannot reach different
+conclusions about the same split. The equity curve restates *as of each day it
+walks*, because the cached closes it multiplies are raw.
+
+Dividends deliberately do not touch a cost basis (that would fabricate a gain,
+the mirror of the bug). A rights offering deliberately does not touch a position
+either: nothing records whether the user subscribed, so the affected symbols are
+named (`rights_unstatable_symbols`) rather than adjusted on a guess.
+
+**An untouched alert level fired at the wrong price.** Same bead. A price alert
+is the opposite case from a transaction — not a record of the past but a standing
+instruction compared every 60 s against a live quote — so it is rebased in place,
+once, when the split is recorded. That needed a new `alerts.value_as_of` column
+(migration `20260906_0008`): neither `created_at` nor `updated_at` says which
+units a level is in, and each fails in a different direction. Existing rows are
+backfilled conservatively, from `updated_at`, so the backfill can only ever fail
+to rebase — never rewrite a level that is already correct. RSI thresholds, volume
+multipliers and crosses are not prices and are never touched.
+
+**`GET /api/health` took 2.23 s.** `bd:shotockviz-d71`. Not slow work — a fixed
+wait: the Celery `inspect().ping()` is a broadcast RPC that sits out its whole
+2 s timeout on every call. The probe is unchanged (same broadcast, same timeout,
+same "ok"/"fail" meaning); only its position moved, off the request path and into
+a Redis-published result refreshed in the background. The endpoint still proves
+the workers are alive — a fast endpoint that stopped doing so would be worse than
+a slow one — and now says *when* it last proved it, in a new additive
+`celery_checked_at` field. The per-call fresh Redis connection went too, in favour
+of the shared pool this file's own `/system/ready` already insists on.
+
 ### alerts + portfolio — the night the silent failures got found (2026-09-05/06)
 
 `bd:shotockviz-*` · 43 commits `34136c2` → `6a54191` · 48 issues closed.
