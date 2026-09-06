@@ -28,6 +28,7 @@ EXPECTED_ICT = {
     "compute-auto-pivots": (18, 0, "after SET close 16:30, before US open 21:30"),
     "sr-digest-set-open": (9, 30, "30 min before SET opens at 10:00"),
     "sr-digest-us-premarket": (19, 30, "30 min before US pre-market at 20:00"),
+    "gap-list-digest": (20, 0, "the trader's own US pre-market check habit, not a lead time"),
 }
 
 

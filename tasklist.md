@@ -169,6 +169,9 @@ backend/
 - [x] **Telegram bot token was logged in plaintext** — `bd:shotockviz-pdb`, 2026-09-06, `370565b`
   - The token is a path segment of the Telegram API URL and httpx logs request URLs at INFO; `setup_logging()` was only ever called by `main.py`, so no worker had the suppression. Wired into Celery's `after_setup_logger` signals + a handler-level redaction filter.
   - ⚠️ The token appeared in dev `docker logs` before this fix — rotating it is the user's call.
+- [x] **20:00 ICT overnight-gap Telegram digest, scoped to one user's book** — `bd:shotockviz-06z`, 2026-09-06, not yet committed
+  - New `backend/workers/gap_list_digest.py`, mirrors `sr_proximity_digest.py`'s shape; `gap-list-digest` crontab(20:00 ICT) added to `celery_app.py` + `test_beat_schedule_ict.py::EXPECTED_ICT`. Book = watchlist ∪ open holdings (via `portfolio_service.build_holdings`/`active_holdings`); gap = the existing `change_pct` already in `quote:{symbol}` (not recomputed); no invented magnitude threshold — reused the "alert.value is always user-supplied, never hardcoded" discipline from `alert_checker.py`. 23 new tests, red-proven by mutation.
+  - ⚠️ **BLOCKED from being armed** by open `bd:shotockviz-4d9` (dev stack has a real `TELEGRAM_BOT_TOKEN` + the user's real `telegram_chat_id`, no dry-run guard yet). `celery-beat`/`celery-worker` were deliberately NOT restarted so this schedule entry stays dormant — restarting them on the next US trading day before `4d9` lands will send a real Telegram message to the user's phone at 20:00 ICT.
 - [x] Diagnose why `celery-worker` container isn't populating Redis quotes — confirmed working (check_all_alerts + fetch_overview_prices succeeding)
 - [x] Fix `price_fetcher.py` yfinance batch signature — already uses `fast_info` correctly
 - [ ] Add Celery task monitoring: log success/failure counts per run

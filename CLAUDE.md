@@ -64,7 +64,7 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
 | Backend | FastAPI (Python 3.13) + SQLAlchemy 2 + Pydantic 2 |
 | Database | PostgreSQL 16 + TimescaleDB (time-series) |
 | Cache | Redis 7 (caching + Celery broker + WebSocket pub/sub) |
-| Background | Celery 5.6 + Beat — **18** registered task modules (`backend/workers/celery_app.py:13-33`), not 8 — see § Celery Workers |
+| Background | Celery 5.6 + Beat — **20** registered task modules (`backend/workers/celery_app.py:13-34`), not 8 — see § Celery Workers |
 | Data | Yahoo Finance + SEC Open Data API (Thai fund NAV, Finnomena fallback — no `pythainav` dependency, `backend/requirements.txt:59`) + Stooq (US fallback) |
 | Proxy | Caddy 2 (reverse proxy + auto TLS) |
 
@@ -243,15 +243,18 @@ instead, per `bd:shotockviz-24c`.
 
 - **CQRS (Command Query Responsibility Segregation)** — API endpoints are pure-read (Redis/PostgreSQL only). Celery workers are the sole data ingesters (Yahoo Finance, pythainav, Stooq). On cache miss, API triggers Celery task via `request_data_fetch()` → worker fetches → caches → publishes WS `data_ready` → frontend re-fetches automatically.
 - **2-layer read cache (API side)** — Redis L1 (sub-ms) → PostgreSQL L2 (10-50ms). API never touches external services.
-- **Celery write side** — **18** registered task modules
-  (`backend/workers/celery_app.py:13-33`, not 8): `price_fetcher` (quotes),
+- **Celery write side** — **20** registered task modules
+  (`backend/workers/celery_app.py:13-34`, not 8; this was stale at **18** —
+  `pipeline_health` (landed 2026-09-06, `bd:shotockviz-5e7`) was already
+  missing from this count before `gap_list_digest` below added a 20th):
+  `price_fetcher` (quotes),
   `alert_checker`, `alert_symbol_refresher`, `housekeeping`, `name_fetcher`,
   `fundamentals_fetcher`, `fund_fetcher`, `history_prefetcher`,
   `on_demand_listener`, `symbol_registrar`, `index_populator`,
-  `news_fetcher`, `sr_auto_pivot`, `sr_proximity_digest`,
+  `news_fetcher`, `sr_auto_pivot`, `sr_proximity_digest`, `pipeline_health`,
   `corporate_actions_fetcher`, `financials_history_fetcher`,
-  `earnings_events_fetcher`, `fgi_fetcher`. Full schedule → § Celery
-  Workers below.
+  `earnings_events_fetcher`, `fgi_fetcher`, `gap_list_digest`
+  (`bd:shotockviz-06z`). Full schedule → § Celery Workers below.
 - **TimescaleDB hypertable** — `StockPrice1m` + `ohlcv_bars` for efficient time-series queries with auto-compression
 - **WebSocket push** — Redis pub/sub `price_updates` channel → WebSocket broadcast: `price_update`, `data_ready`, `nav_update`, `alert_triggered`, `names_ready`
 - **Google OAuth** — `@react-oauth/google` with `useGoogleOneTapLogin` in `__root.tsx` for seamless re-auth. **NO custom token management code on frontend.**
@@ -319,7 +322,9 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 
 ## Celery Workers (CQRS Write Side)
 
-> 18 modules registered in `backend/workers/celery_app.py:13-33`, not 8.
+> 20 modules registered in `backend/workers/celery_app.py:13-34`, not 8
+> (`pipeline_health` and `gap_list_digest` were the two missing from the
+> previously-stated 18 — see § Key Architecture Decisions above).
 > Schedules below are from `celery_app.py` (`beat_schedule`).
 >
 > **⚠️ Every `crontab()` in `beat_schedule` is ICT, not UTC.** `conf.timezone`
@@ -349,10 +354,12 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 | `news_fetcher` | 30min | Google News RSS (`feedparser`) | `cache:news:{symbol}` |
 | `sr_auto_pivot` | Daily 18:00 ICT | OHLCV bars → computed pivot levels | — (writes `sr_levels` table, `source='auto_pivot'`) |
 | `sr_proximity_digest` | 2x/day: 09:30 ICT + 19:30 ICT, **weekdays only** | Reads `sr_levels` + quote cache → Telegram | — (read-only, sends Telegram) |
+| `pipeline_health` | Every 5 min, plain-interval (not a crontab, no ICT/UTC concern) | Reads `quote:{symbol}` freshness for `price_fetcher`'s always-on canaries | — (read-only, sends Telegram on stale/recovered edge only) |
 | `corporate_actions_fetcher` | Daily 02:00 ICT | yfinance (dividends/splits) | — (writes `stock_events` table) |
 | `financials_history_fetcher` | Daily 01:00 ICT | yfinance (10y financial statements) | — (writes financials table) |
 | `earnings_events_fetcher` | Daily 06:00 ICT | yfinance (EPS actual vs. estimate) | — (writes earnings_events table) |
 | `fgi_fetcher` | 30min | CNN Fear & Greed Index | `fgi:current` |
+| `gap_list_digest` | Daily 20:00 ICT, **US trading days only** (`bd:shotockviz-06z`) | Reads `quote:{symbol}`/`fund:{symbol}` for each user's watchlist ∪ open holdings → Telegram | — (read-only, sends Telegram) |
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->

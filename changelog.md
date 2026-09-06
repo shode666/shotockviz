@@ -8,6 +8,65 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### A 20:00 ICT overnight-gap Telegram digest, scoped to one user's book (2026-09-06)
+
+`bd:shotockviz-06z`. He already checks US pre-market at 20:00 ICT one symbol
+at a time (CLAUDE.md § Stakeholder Context); this puts every symbol he holds
+or watches in one Telegram message instead.
+
+- New `backend/workers/gap_list_digest.py` — mirrors `sr_proximity_digest.py`'s
+  shape (pure compute/build functions, DB/Redis task shell, claim-before-send
+  SETNX run-lock, one user's failure never blocking the rest), scheduled
+  `crontab(hour=20, minute=0)` (ICT) via `gap-list-digest` in
+  `celery_app.py`'s `beat_schedule`, added to
+  `test_beat_schedule_ict.py::EXPECTED_ICT`.
+- **"The gap" is not recomputed** — it is `change_pct`, already written into
+  `quote:{symbol}` by `price_fetcher.yfinance_batch_quotes()` from yfinance's
+  own `fast_info.last_price` / `fast_info.previous_close`. Freshness is a
+  guarantee, not an estimate: the key's 120s TTL means a present read is
+  provably ≤120s old; an absent key (e.g. a SET symbol hours after 16:30 ICT
+  close) is read as "no fresh price right now" and the symbol is dropped —
+  never shown with a stale number relabelled live. If a user's WHOLE book
+  comes back this way, the digest still sends and says so explicitly, rather
+  than staying silent (which would be indistinguishable from "no gaps").
+- **"Book" = watchlist ∪ open holdings**, not either alone — holdings read
+  through `portfolio_service.build_holdings`/`active_holdings` (the one
+  shared fold), symbol set only, no P&L or split restatement needed for a
+  membership list.
+- **No invented magnitude threshold.** Checked first: every threshold-shaped
+  alert type in this codebase (RSI, Volume Spike, Price Above/Below,
+  `alert_checker.py:127-142`) uses a user-supplied `alert.value`, never a
+  hardcoded default. Reusing that discipline here means no global "notable
+  gap %" cutoff exists to invent — every symbol with a fresh, non-fund quote
+  is listed, ranked by `abs(change_pct)` descending, capped at 20 rows purely
+  for Telegram's message-length limit. A per-user configurable minimum,
+  mirroring `alert.value`, is the natural next step if noise turns out to be
+  a real problem — filed as an open question, not guessed at.
+- A Thai fund's `fund:{symbol}` NAV fallback (`bd:shotockviz-ubw`) is read
+  like every other consumer, then explicitly excluded from this digest's
+  output: `fund_payload_to_quote` forces `change_pct=0.0` for every NAV
+  (honestly — a NAV has no gap concept), and showing that zero here would
+  misrepresent "not applicable" as "measured, flat".
+- 23 new tests (`test_gap_list_digest.py`) plus 1 fund-consumer-list
+  assertion (`test_ubw_fund_quote_fallback.py`). Red-proven by mutation, not
+  assumed: reverted the fund-type exclusion, the `abs()` in the sort key, and
+  the holdings half of the book union one at a time and confirmed each
+  breaks exactly the test written for it, then restored the real code.
+- **🔴 Inherits the same unresolved risk as `bd:shotockviz-4d9` (open, P1)**:
+  this dev stack has a real `TELEGRAM_BOT_TOKEN` and the dev DB's user id=1
+  carries the same live `telegram_chat_id` as prod, with no code-level
+  dry-run guard yet. The new `gap-list-digest` beat entry was added to
+  `celery_app.py` but **`celery-beat`/`celery-worker` were deliberately NOT
+  restarted** — Celery beat does not hot-reload its schedule, so the entry
+  stays dormant in the already-running process. Today (2026-09-06) is a
+  Sunday, so even a restart would hit the existing weekend gate and skip;
+  **on the next US trading day, restarting `celery-beat` with this code
+  before `4d9` is resolved will send a real Telegram message to the user's
+  phone at 20:00 ICT.** Do not restart `celery-beat`/`celery-worker` on this
+  stack until `4d9` lands.
+- Gates: backend **752 passed, 2 skipped** (baseline 728 + 24: 23 new +
+  1 new `EXPECTED_ICT` parametrize row). No frontend touched.
+
 ### Wave 3 — honesty on cached numbers, a concentration limit, a dead-pipeline detector (2026-09-06)
 
 `bd:shotockviz-kmi`, `3ir`, `032`, `ubw`, `f14`, `5e7`, `649`.

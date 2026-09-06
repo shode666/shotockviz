@@ -149,6 +149,7 @@ def test_every_consumer_uses_the_one_converter():
         "api/routes/dashboard.py",
         "workers/alert_checker.py",
         "workers/sr_proximity_digest.py",
+        "workers/gap_list_digest.py",
     ]
     for rel in consumers:
         src = (root / rel).read_text()

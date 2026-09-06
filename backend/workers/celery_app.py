@@ -26,6 +26,7 @@ celery_app = Celery(
         "workers.sr_auto_pivot",
         "workers.sr_proximity_digest",
         "workers.pipeline_health",
+        "workers.gap_list_digest",
         # V2 workers
         "workers.corporate_actions_fetcher",
         "workers.financials_history_fetcher",
@@ -208,6 +209,18 @@ celery_app.conf.beat_schedule = {
         "task": "workers.sr_proximity_digest.send_sr_proximity_digest",
         "schedule": crontab(hour=19, minute=30),  # 19:30 ICT
         "args": ("us_premarket",),
+    },
+    # bd:shotockviz-06z — overnight-gap Telegram digest, scoped to one
+    # user's own book (watchlist ∪ open holdings). 20:00 ICT is the trader's
+    # own existing US pre-market check habit (CLAUDE.md § Stakeholder
+    # Context), so this fires AT that time rather than 30 min before it like
+    # the S/R digests above — there is no "session about to open" lead time
+    # to give here, the whole point is the number as of the moment he looks.
+    # Gated on the US trading day via sr_proximity_digest's own
+    # "us_premarket" slot predicate (workers/gap_list_digest.py docstring).
+    "gap-list-digest": {
+        "task": "workers.gap_list_digest.send_gap_list_digest",
+        "schedule": crontab(hour=20, minute=0),  # 20:00 ICT
     },
     # bd:shotockviz-5e7 — "nothing tells the user the data pipeline has
     # died". Plain-interval schedule (seconds), same shape as
