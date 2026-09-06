@@ -8,6 +8,67 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Wave 5 — the backlog's own follow-ups, and two bugs found while verifying them (2026-09-06)
+
+`bd:shotockviz-rdu`, `wx3`, `f14.1`, `5e7.1`, `06z.1`, `649.1`, `cjb`.
+
+- **A standing alert now needs NEW data to re-fire, not just elapsed time.**
+  The 60-minute cooldown is a wall clock and a wall clock does not know
+  whether the number being compared has changed. A Thai fund's once-daily NAV
+  therefore re-notified once per cooldown for the rest of the day — ~24
+  identical messages from one crossing (`rdu`) — and so did every indicator
+  alert, whose closed daily bar is equally constant intraday (`wx3`).
+  Re-eligibility now also requires the compared value's own as-of to be newer
+  than `alerts.triggered_data_at`, the as-of of the data the alert last fired
+  on. **`rdu`'s mechanism could not simply be extended**: it compared against
+  `triggered_at` (when we fired), which works only because a quote's `ts` is
+  roughly "now". A closed bar's timestamp is a date in the past, so that
+  comparison is false from the first fire and would have turned every
+  indicator alert into fire-once-forever. Not a second cooldown —
+  `alert_cooldown_minutes` remains the only timing setting.
+- **Screener and news say how old their numbers are** (`f14.1`). Screener
+  rows carry the `time_unix` of the exact bar their indicators were computed
+  from — a stamped fact, not the TTL inference the fundamentals path needs.
+  Proven in a browser: US rows read "51 ชม. 58 นาทีที่แล้ว" while Thai rows
+  read "62 ชม. 58 นาที" in the same table. News stamps the fetch time and
+  keeps it separate from each article's `published_at`.
+- **Fundamentals and history stamp a real `ts`** (`5e7.1`), and pipeline
+  health now covers fundamentals at a 6h threshold derived from its measured
+  4h beat. History is **reported but not alerted on**, deliberately:
+  `prefetch_history` fills cold keys only, so a quiet canary is
+  indistinguishable from a dead worker and alerting would page for nothing.
+  The `ohlcv` cache key stays a bare list — `alert_checker` hard-gates on
+  `isinstance(bars, list)`, so wrapping it would have silently killed every
+  indicator alert.
+- **The trader's thresholds are stored server-side** (`649.1`, `06z.1`) —
+  migration `20260906_0011`, `GET/PATCH /api/v1/settings/trader`. The gap
+  threshold has **no invented default**: unset reproduces the original
+  behaviour exactly. The 20-row cap stays a length guard and the message says
+  so when it truncates.
+- **The screener was printing the string `nan` as a price** (`cjb`), for
+  GOOGL and GLD, on screen. yfinance returned a 2026-09-04 row with a real
+  volume and NaN OHLC and the writer persisted it; RSI still read as a
+  plausible 47.8 because Wilder smoothing never touches the last close, which
+  is why it survived. Fixed at both ends — the reader drops non-finite bars
+  (keeping the as-of honest by moving it back to the bar actually used) and
+  the two writers refuse to persist them, with a test that blocks a future
+  writer. Production had 0 such rows.
+  **⚠️ `WHERE close != close` finds none of these** — Postgres treats NaN as
+  equal to itself, unlike IEEE 754 and unlike Python. The first sweep
+  reported zero affected rows for exactly that reason. Use
+  `close = 'NaN'::float8`.
+- **The E2E suite caught two contract breaks the unit tests could not.** The
+  run went 226 → 214 passed, 12 failed: the news response shape changed and
+  the old bare-array mocks rendered an empty list *silently*; and the new
+  settings read, unmocked, returned 401, which clears the auth session
+  globally and dropped the whole Portfolio page to "กรุณาเข้าสู่ระบบ". Mocks
+  updated to the shipped contracts; the auth-clearing hazard filed rather
+  than patched around.
+- Gates: backend **878 passed, 2 skipped** · tsc exit 0 · frontend unit
+  157/157 · E2E **226 passed, 0 failed** · alembic single head
+  `20260906_0012`.
+
+
 ### Deployed to production — 2026-09-06 14:30 ICT
 
 17 commits, GHCR run `34019069152`, 1m15s. Verified on the droplet after:
