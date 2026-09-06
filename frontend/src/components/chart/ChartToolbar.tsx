@@ -1,6 +1,7 @@
 import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3, Plus, X } from 'lucide-react';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { isVwapAvailable } from '@/utils/indicators';
+import useHydrated from '@/hooks/useHydrated';
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 const chartTypes = [
@@ -30,10 +31,21 @@ export default function ChartToolbar({
     userLevels = [],
     onDeleteLevel,
 }) {
+    // bd:shotockviz-6h3 — before hydration the SSR buttons have no handlers,
+    // so a click was silently dropped. Same honesty rule as the F5/VWAP and
+    // sign-in patterns below, applied in the time dimension: control groups
+    // are `inert` (browser blocks the click natively — the attribute is in
+    // the SSR HTML itself) + .awaiting-hydration until React attaches.
+    // The price/symbol readout is content, not a control — it stays out of
+    // the inert groups so AT can read it while JS is still loading.
+    const hydrated = useHydrated();
+    const awaiting = !hydrated;
+    const awaitingCls = awaiting ? ' awaiting-hydration' : '';
     return (
         <div
             className="panel border-b flex items-center gap-3 px-4 py-2 flex-wrap"
             style={{ borderBottomWidth: 1, borderBottomStyle: 'solid' }}
+            aria-busy={awaiting}
         >
             {/* Stock info */}
             <div className="flex items-center gap-2 mr-2">
@@ -61,7 +73,7 @@ export default function ChartToolbar({
             <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />
 
             {/* Timeframes */}
-            <div className="flex gap-1 items-center">
+            <div className={`flex gap-1 items-center${awaitingCls}`} inert={awaiting}>
                 {timeframes.map((tf) => {
                     const isActive = selectedTF === tf;
                     const isLoadingThis = isActive && isLoading;
@@ -91,7 +103,7 @@ export default function ChartToolbar({
             <div className="w-px h-4" style={{ background: 'var(--color-border)' }} />
 
             {/* Chart types */}
-            <div className="flex gap-1">
+            <div className={`flex gap-1${awaitingCls}`} inert={awaiting}>
                 {chartTypes.map(({ Icon, type, title }) => (
                     <button
                         key={type}
@@ -115,7 +127,7 @@ export default function ChartToolbar({
                 full string (bd:ux-2026-09 user-fix — pills wrapped to 2
                 lines / "MA 20" etc; rounded-lg not rounded-full so a 2-char
                 label like "BB" doesn't render as a circle). */}
-            <div className="flex gap-1">
+            <div className={`flex gap-1${awaitingCls}`} inert={awaiting}>
                 {indicators.map((ind) => {
                     const isActive = activeIndicators.includes(ind);
                     const displayLabel = ind.replace(/\s+\d+$/, '');
@@ -144,10 +156,11 @@ export default function ChartToolbar({
                 pattern as the indicator toggles above. */}
             <button
                 onClick={() => onToggleSrLevels?.()}
+                disabled={awaiting}
                 title="Toggle support/resistance levels"
                 aria-label="Toggle support/resistance levels"
                 aria-pressed={showSrLevels}
-                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer transition-colors ${showSrLevels ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap cursor-pointer transition-colors ${showSrLevels ? 'bg-[var(--color-accent-strong)] text-white border-transparent' : 'btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}${awaitingCls}`}
             >
                 <Rows3 size={12} />
                 S/R
@@ -160,11 +173,11 @@ export default function ChartToolbar({
                 it right now. */}
             <button
                 onClick={() => isAuthenticated && onAddLevel?.()}
-                disabled={!isAuthenticated}
-                aria-disabled={!isAuthenticated}
+                disabled={!isAuthenticated || awaiting}
+                aria-disabled={!isAuthenticated || awaiting}
                 title={isAuthenticated ? 'Add a horizontal support/resistance level' : 'Sign in to add a level'}
                 aria-label="Add horizontal level"
-                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors ${!isAuthenticated ? 'opacity-40 cursor-not-allowed btn-outline border-violet-500/30 text-violet-400' : 'cursor-pointer btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors ${!isAuthenticated ? 'opacity-40 cursor-not-allowed btn-outline border-violet-500/30 text-violet-400' : 'cursor-pointer btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}${awaitingCls}`}
             >
                 <Plus size={12} />
                 Level

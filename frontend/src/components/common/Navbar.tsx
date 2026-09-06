@@ -9,6 +9,7 @@ import useAuthStore from '@/store/authStore'
 import ShotockLogo from './ShotockLogo'
 import { type MarketStatusResult } from '@/utils/marketStatus'
 import { useMarketStatus } from '@/hooks/useMarketStatus'
+import useHydrated from '@/hooks/useHydrated'
 
 const navItems = [
     { to: '/dashboard', label: 'Dashboard', Icon: LayoutDashboard },
@@ -41,6 +42,13 @@ function MarketBadge({ status }: { status: MarketStatusResult }) {
 export default function Navbar() {
     const { theme, toggleTheme, setSearchOpen } = useAppStore()
     const { user, isAuthenticated, isLoading, logout } = useAuthStore()
+    // bd:shotockviz-6h3 — search + theme are onClick-only: dead until React
+    // attaches. Honest `disabled` (baked into the SSR HTML, browser-enforced
+    // before any JS) + .awaiting-hydration until then. The nav <Link>s are
+    // real <a href> and navigate natively pre-JS, so they are NOT gated —
+    // disabling them would break navigation that already works.
+    const hydrated = useHydrated()
+    const awaitingCls = hydrated ? '' : ' awaiting-hydration'
     const matches = useMatches()
     const currentPath = matches[matches.length - 1]?.pathname || '/'
     const navigate = useNavigate()
@@ -145,7 +153,8 @@ export default function Navbar() {
                     {/* Search */}
                     <button
                         onClick={() => setSearchOpen(true)}
-                        className="flex items-center gap-2 px-3 rounded-lg text-[11px] border transition-colors"
+                        disabled={!hydrated}
+                        className={`flex items-center gap-2 px-3 rounded-lg text-[11px] border transition-colors${awaitingCls}`}
                         style={{ height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
                     >
                         <Search size={12} />
@@ -164,8 +173,9 @@ export default function Navbar() {
                     {/* Theme Toggle */}
                     <button
                         onClick={toggleTheme}
+                        disabled={!hydrated}
                         aria-label="สลับธีม"
-                        className="flex items-center justify-center rounded-lg border transition-colors"
+                        className={`flex items-center justify-center rounded-lg border transition-colors${awaitingCls}`}
                         style={{ width: 30, height: 30, background: 'var(--surface-1)', borderColor: 'var(--color-border)', color: 'var(--color-text-sub)' }}
                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--surface-2)'; e.currentTarget.style.color = 'var(--color-text)' }}
                         onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--surface-1)'; e.currentTarget.style.color = 'var(--color-text-sub)' }}

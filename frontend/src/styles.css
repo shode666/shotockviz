@@ -363,6 +363,24 @@ body {
   100% { background-position: -200% 0; }
 }
 
+/* ─── Pre-hydration state (bd:shotockviz-6h3) ─────────────────────────────
+   SSR paints controls before React attaches their handlers; until then the
+   control is server-marked `inert`/`disabled` + this class, so it visibly
+   cannot be attempted instead of silently dropping the click.
+   Deliberately distinct from permission-disabled (opacity-40 +
+   cursor-not-allowed): this is "not ready *yet*", hence cursor: progress
+   and a soft fade back to full opacity when hydration lands.
+   Scoped to a class, NOT [inert] — RightPanel uses `inert` for its closed
+   drawer and must not inherit this look. */
+.awaiting-hydration {
+  opacity: 0.6;
+  cursor: progress;
+  transition: opacity 0.2s ease;
+}
+[aria-busy='true'] {
+  cursor: progress;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    GLOBAL GLASSMORPHISM SYSTEM
    Applies to ALL modals, popups, drawers, dropdowns, tooltips, select menus.

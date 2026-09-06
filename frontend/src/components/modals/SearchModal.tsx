@@ -4,6 +4,7 @@ import { Search, Clock, X, TrendingUp, Star, ArrowRight, Zap, ArrowUp, ArrowDown
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
+import { consumePreHydrationIntents, type PreHydrationWindow } from '@/utils/prehydration';
 
 // ── Local-storage helpers ─────────────────────────────────────────────────────
 const RECENT_KEY = 'shotock_recent_searches';
@@ -152,6 +153,15 @@ export default function SearchModal() {
     const inputRef = useRef<HTMLInputElement>(null);
     const listRef  = useRef<HTMLDivElement>(null);
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    // bd:shotockviz-6h3 — a Cmd/Ctrl+K pressed before hydration was captured
+    // by the inline <head> script (see __root.tsx) instead of being silently
+    // dropped. Consume the queued intent once, on mount, and tear the
+    // bootstrap listener down so the live listener below is the only one left.
+    useEffect(() => {
+        const { openSearch } = consumePreHydrationIntents(window as unknown as PreHydrationWindow);
+        if (openSearch) setSearchOpen(true);
+    }, []);
 
     // Global Cmd/Ctrl+K
     useEffect(() => {

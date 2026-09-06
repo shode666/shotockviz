@@ -14,6 +14,7 @@ import useAppStore from '@/store/appStore'
 import useAuthStore from '@/store/authStore'
 import useWebSocket from '@/hooks/useWebSocket'
 import useBackendReady from '@/hooks/useBackendReady'
+import { PRE_HYDRATION_CAPTURE_SCRIPT } from '@/utils/prehydration'
 
 import appCss from '@/styles.css?url'
 
@@ -64,6 +65,11 @@ export const Route = createRootRoute({
       { rel: 'preconnect', href: 'https://fonts.gstatic.com', crossOrigin: 'anonymous' },
       { rel: 'stylesheet', href: 'https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Noto+Sans+Thai:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap' },
     ],
+    // bd:shotockviz-6h3 — runs in <head> before the app bundle: queues
+    // Cmd/Ctrl+K pressed during the pre-hydration window so the shortcut
+    // the Navbar advertises (⌘K) is never silently dropped. Consumed +
+    // torn down by SearchModal on mount (utils/prehydration.ts).
+    scripts: [{ children: PRE_HYDRATION_CAPTURE_SCRIPT }],
   }),
   shellComponent: RootDocument,
   component: RootComponent,
