@@ -156,6 +156,19 @@ backend/
 # Phase 2: Data Reliability & Real-time
 
 ## Celery Workers
+- [x] **Fix every cron job firing 7 hours early** — `bd:shotockviz-rwq` (P0), 2026-09-06, `370565b`
+  - `conf.timezone` is `Asia/Bangkok`; Celery evaluates `crontab()` against `conf.timezone` and `enable_utc=True` does not change that. All 8 crontab entries had been written as UTC with a `# = HH:MM ICT` comment doing the conversion, so all 8 fired 7h early.
+  - Restated in ICT wall-clock. `backend/tests/test_beat_schedule_ict.py` (11 tests) asserts each job's intended ICT time — **add new scheduled jobs to that map.**
+  - ⚠️ **Pitfall for anyone adding a beat entry: write the ICT time you want, do NOT convert to UTC.**
+- [x] **S/R digest trading-day gate** — `bd:shotockviz-3fx`, 2026-09-06, `370565b`
+  - `sr_proximity_digest` had no weekday check and sent a full digest on a Sunday. `is_trading_day_for_slot()` gates per slot in the target exchange's own timezone, before any I/O.
+  - ⚠️ Exchange **holidays are deliberately not covered** — no holiday calendar exists in this codebase and a hardcoded list would rot silently. A test asserts the gap so it stays visible.
+- [x] **Prod celery-worker could not import `models`** — `bd:shotockviz-18r`, fix committed `370565b`, **verification pending a deploy**
+  - `celery` is a console script (`sys.path[0]` = `/usr/local/bin`), and Celery keeps CWD on `sys.path` only long enough to load the app module, so forked pool workers could not resolve any lazy `from models... import` inside a task body. Prod had therefore never delivered a single S/R digest.
+  - Invisible in dev because `docker-compose.dev.yml` sets `PYTHONPATH: /app` and `docker-compose.ghcr.yml` does not. Fixed in `backend/Dockerfile` (`ENV PYTHONPATH=/app`) so the dev/prod divergence cannot recur.
+- [x] **Telegram bot token was logged in plaintext** — `bd:shotockviz-pdb`, 2026-09-06, `370565b`
+  - The token is a path segment of the Telegram API URL and httpx logs request URLs at INFO; `setup_logging()` was only ever called by `main.py`, so no worker had the suppression. Wired into Celery's `after_setup_logger` signals + a handler-level redaction filter.
+  - ⚠️ The token appeared in dev `docker logs` before this fix — rotating it is the user's call.
 - [x] Diagnose why `celery-worker` container isn't populating Redis quotes — confirmed working (check_all_alerts + fetch_overview_prices succeeding)
 - [x] Fix `price_fetcher.py` yfinance batch signature — already uses `fast_info` correctly
 - [ ] Add Celery task monitoring: log success/failure counts per run
