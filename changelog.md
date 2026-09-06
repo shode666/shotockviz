@@ -8,6 +8,49 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Wave 6 — the last four follow-ups (2026-09-06)
+
+`bd:shotockviz-tjh`, `5e7.2`, `f14.2`, `649.1.1`.
+
+- **A decorative background read can no longer log the user out** (`tjh`).
+  `apiErrorHandler` clears the auth session on ANY 401 — deliberate, and
+  untouched. What changed is which requests get to trigger it: a request is
+  exempt only when it says so (`skipAuthClearOn401`), and that flag is on the
+  two `GET /settings/trader` hydration reads only. Both PATCH saves stay
+  unflagged, so a genuinely expired session still logs out. **Fail safe, not
+  fail open** — a test 401s the same URL without the flag and asserts the
+  session is still cleared, proving the exemption is per-request, not
+  per-path. The alternative (auth-gating every background read) was rejected
+  in code: it would re-plumb ~10 reads that were never in question.
+- **The fundamentals TTL guess was deleted, not labelled** (`f14.2`). All
+  three writers of `fundamentals:{symbol}` now stamp a real `ts` — including
+  one found while auditing that has no callers today but writes the same key
+  — so `_fundamentals_as_of_ts` could be removed outright. `ts` is now either
+  a real stamp or `None` meaning genuinely unknown; it is never estimated.
+  Every reader was audited before changing what is written, the discipline
+  that stopped `bd:shotockviz-5e7.1` from silently killing every indicator
+  alert.
+- **History liveness is now provable** (`5e7.2`). Two canary symbols, taken
+  from `price_fetcher.FALLBACK_IDX` rather than invented, refresh
+  unconditionally on every beat — bypassing the cold-key gate that made the
+  old signal indistinguishable from a dead worker. The cost is stated rather
+  than buried: **+88 yfinance calls/day, forever**, and why two symbols and
+  not more. The 1-hour threshold is 2x the measured 1800s cadence, with the
+  multiplier declared as assumed. `result["history"]` and
+  `result["history_canary"]` stay separate on purpose: one cannot alert, the
+  other can, and merging them would blur that.
+- **The settings save path has tests, including the failure** (`649.1.1`).
+  Five E2E scenarios, red-proven by five in-place mutations each reverted
+  with a diff check. The 401/500 split is the substance: inline-error cases
+  use 500, because a 401 on save is a logout by the `tjh` decision, and
+  asserting an inline error there would have locked in the wrong failure mode.
+- Filed, not papered over: `bd:shotockviz-2qw` — a 401 mid-save shows the
+  component's inline save error *on top of* the logout, inviting a retry on a
+  form the user no longer has a session for.
+- Gates: backend **906 passed, 2 skipped** · tsc exit 0 · frontend unit
+  157 utils + 13 services · E2E **231 passed, 0 failed**.
+
+
 ### Wave 5 — the backlog's own follow-ups, and two bugs found while verifying them (2026-09-06)
 
 `bd:shotockviz-rdu`, `wx3`, `f14.1`, `5e7.1`, `06z.1`, `649.1`, `cjb`.
