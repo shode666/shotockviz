@@ -17,7 +17,7 @@ from models.schemas import (
     HoldingResponse, FxRateInfo, ClosedPositionResponse, RealizedBookResponse,
 )
 from api.middleware.auth import get_current_user
-from services import portfolio_service, stock_service
+from services import corporate_actions, portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
@@ -178,7 +178,14 @@ async def get_analytics(
     # bd:shotockviz-msg — one shared computation with dashboard.py (commission
     # in cost basis on BUY, realized on SELL: bd:shotockviz-fww). See
     # services/portfolio_service.py for the accounting rules.
-    holdings = portfolio_service.build_holdings(txns)
+    #
+    # bd:shotockviz-eb1 / rule 7 — pre-split lots are restated into today's
+    # units here, from the SAME corporate_actions table and the SAME Redis key
+    # the chart's price adjuster reads (`corp_actions:{SYMBOL}`). Without this
+    # the quote is post-split and the book is pre-split, which shows a ~50% loss
+    # on a 2:1 that never happened.
+    splits = await corporate_actions.load_actions([t.symbol for t in txns])
+    holdings = portfolio_service.build_holdings(txns, splits=splits)
 
     # Filter out sold positions
     active = portfolio_service.active_holdings(holdings)
@@ -297,6 +304,10 @@ async def get_analytics(
             currency=v.currency,
             currency_conflict=v.currency_conflict,
             currencies=v.currencies,
+            # bd:shotockviz-eb1 — a doubled share count must read as an
+            # adjustment, not as corrupt data.
+            split_adjusted=v.split_adjusted,
+            rights_unstatable=v.rights_unstatable,
             current_price=v.current_price,
             # `is not None`, not truthiness: a legitimate 0.0 P&L is a real
             # answer, not a missing one.
@@ -342,6 +353,8 @@ async def get_analytics(
         ],
         fx_unavailable_symbols=totals.fx_unavailable_symbols,
         currency_conflict_symbols=totals.currency_conflict_symbols,
+        split_adjusted_symbols=totals.split_adjusted_symbols,
+        rights_unstatable_symbols=totals.rights_unstatable_symbols,
         holdings=holding_responses,
         # Derived from the positions actually left unpriced (a cache "miss" that
         # the fund stage then resolved is not pending; a cached but unusable
@@ -401,7 +414,14 @@ async def get_realized(
     )
     txns = result.scalars().all()
 
-    book = portfolio_service.build_realized(portfolio_service.build_holdings(txns))
+    # bd:shotockviz-eb1 / rule 7 — same restatement as /portfolio/analytics, so
+    # the entry/exit prices in the trade log are in the same units as the chart
+    # the user checks them against. No money changes: a split leaves
+    # `qty*price` invariant, so every realized figure here is unchanged.
+    splits = await corporate_actions.load_actions([t.symbol for t in txns])
+    book = portfolio_service.build_realized(
+        portfolio_service.build_holdings(txns, splits=splits)
+    )
 
     return RealizedBookResponse(
         base_currency=book.base_currency,

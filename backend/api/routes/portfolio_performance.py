@@ -43,7 +43,7 @@ from models.user import User
 from models.portfolio import Transaction
 from api.middleware.auth import get_current_user
 from api.routes.portfolio import fx_quote_cached
-from services import portfolio_service, stock_service
+from services import corporate_actions, portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
@@ -125,8 +125,20 @@ async def get_portfolio_performance(
     # through the same cache-only path (`fx_quote_cached`). A symbol that cannot
     # be converted, or whose rows mix currencies (rule 5), is excluded by name
     # and excludes every day it is held on.
+    # bd:shotockviz-eb1 / rule 7. The curve is the surface where the split
+    # restatement has to be dated, not just applied: `history_map` below holds
+    # RAW closes (`stock_service.read_history` — the price adjuster is only
+    # invoked by /stocks/{sym}/history?adjusted=true), so on a day before the
+    # ex-date the close is in PRE-split units and the share count multiplied by
+    # it must be too. `compute_holdings_on` therefore restates `as_of` the day it
+    # is walking, and today's holdings/curve endpoint both end on the same
+    # number. Applying today's factor to every day would halve the whole
+    # pre-split history of the line — a crash that never happened, which is the
+    # same failure class as the dropped-symbol dip bd:shotockviz-la4 fixed.
+    splits = await corporate_actions.load_actions(symbols)
+
     plan = portfolio_service.curve_fx_plan(
-        portfolio_service.build_holdings(txns),
+        portfolio_service.build_holdings(txns, splits=splits),
         portfolio_service.build_fx_rates(txns, await fx_quote_cached()),
     )
     excluded = set(plan.fx_unavailable_symbols) | set(plan.currency_conflict_symbols)
@@ -192,7 +204,17 @@ async def get_portfolio_performance(
             sym = t.symbol
             if sym not in h:
                 h[sym] = 0.0
-            h[sym] += t.qty if t.type.value == "BUY" else -t.qty
+            # bd:shotockviz-eb1 / rule 7 — restate this lot into the units in
+            # force ON `target_date` (not today's), so the share count and the
+            # raw close it is about to be multiplied by are the same units.
+            # Splits with an ex-date after `target_date` are deliberately not
+            # applied: on that day they had not happened yet.
+            qty, _price = corporate_actions.restate(
+                float(t.qty or 0.0),
+                float(t.price or 0.0),
+                corporate_actions.split_factor(splits.get(sym.upper()), t_date, target_date),
+            )
+            h[sym] += qty if t.type.value == "BUY" else -qty
         return {s: q for s, q in h.items() if q > portfolio_service.QTY_EPSILON}
 
     points = []

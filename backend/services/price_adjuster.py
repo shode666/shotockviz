@@ -53,7 +53,7 @@ async def adjust_prices(
     if not bars:
         return []
 
-    actions = await _load_corporate_actions(symbol)
+    actions = await load_corporate_actions(symbol)
     if not actions:
         return bars  # No actions → return raw data unchanged
 
@@ -113,8 +113,15 @@ async def adjust_prices(
     return adjusted
 
 
-async def _load_corporate_actions(symbol: str) -> list[dict]:
-    """Load corporate actions from Redis cache → PostgreSQL."""
+async def load_corporate_actions(symbol: str) -> list[dict]:
+    """Load corporate actions from Redis cache → PostgreSQL.
+
+    bd:shotockviz-eb1 — made public (was `_load_corporate_actions`) so
+    `services/corporate_actions.py` can restate the PORTFOLIO through this exact
+    loader and this exact cache entry rather than growing a second reader of the
+    same table. One table, one loader, one Redis key: the chart and the book
+    cannot disagree about a split because they are looking at the same bytes.
+    """
     cache_key = f"corp_actions:{symbol.upper()}"
 
     # L1: Redis
@@ -140,30 +147,47 @@ async def _load_corporate_actions(symbol: str) -> list[dict]:
                 .order_by(CorporateAction.ex_date.desc())
             )
             rows = result.scalars().all()
-            if rows:
-                actions = [
-                    {
-                        "symbol": r.symbol,
-                        "action_type": r.action_type,
-                        "ex_date": r.ex_date.isoformat(),
-                        "value": float(r.value) if r.value is not None else None,
-                        "ratio": float(r.ratio) if r.ratio is not None else None,
-                        "source": r.source,
-                    }
-                    for r in rows
-                ]
-                # Cache
-                try:
-                    from services.stock_service import get_redis
-                    r = await get_redis()
-                    await r.setex(cache_key, _ADJUSTED_CACHE_TTL, json.dumps(actions))
-                except Exception:
-                    pass
-                return actions
+            actions = [
+                {
+                    "symbol": r.symbol,
+                    "action_type": r.action_type,
+                    "ex_date": r.ex_date.isoformat(),
+                    "value": float(r.value) if r.value is not None else None,
+                    "ratio": float(r.ratio) if r.ratio is not None else None,
+                    "source": r.source,
+                }
+                for r in rows
+            ]
+            # Cache — INCLUDING the empty result (bd:shotockviz-eb1). "This
+            # symbol has no corporate actions" is the answer for most of a Thai
+            # book and it used to be the one answer that was never cached, so
+            # every miss went to Postgres again. That was free while the only
+            # caller was `?adjusted=true` (which nothing sends); now the
+            # portfolio calls this once per held symbol on every dashboard and
+            # analytics read, and 40 uncacheable PG round-trips per request is a
+            # regression, not a detail. `"[]"` is a truthy string, so the L1
+            # branch above serves it correctly.
+            #
+            # Staleness is bounded by the writer, not by the TTL:
+            # workers/corporate_actions_fetcher.py DELETEs this key whenever it
+            # records anything for the symbol.
+            try:
+                from services.stock_service import get_redis
+                r = await get_redis()
+                await r.setex(cache_key, _ADJUSTED_CACHE_TTL, json.dumps(actions))
+            except Exception:
+                pass
+            return actions
     except Exception as e:
         logger.debug("Failed to load corporate actions", symbol=symbol, error=str(e))
 
+    # DB unreachable — return empty WITHOUT caching. "We could not ask" must not
+    # be published as "there are no corporate actions".
     return []
+
+
+# Back-compat alias for the pre-bd:shotockviz-eb1 private name.
+_load_corporate_actions = load_corporate_actions
 
 
 def _parse_bar_date(time_val) -> Optional[date]:

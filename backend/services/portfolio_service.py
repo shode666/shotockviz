@@ -156,6 +156,30 @@ Accounting rules pinned here (state them once, apply everywhere):
    ratios below refuse to count a trade they cannot convert instead of falling
    back to its native sign.
 
+7. bd:shotockviz-eb1 — CORPORATE ACTIONS. A split changes the UNITS a position
+   is quoted in, not the money that was paid for it — so raw transactions stay
+   raw and the fold restates every pre-ex-date lot at READ time
+   (qty ÷ factor, price × factor, `qty*price` invariant).
+
+   The rule, its ratio convention, why dividends must NOT touch a cost basis and
+   why a RIGHTS action cannot be applied to a position at all all live in
+   `services/corporate_actions.py`; this module only applies the factor that
+   module computes, at the single point in the fold where `qty` and `price` are
+   read off a row. `splits` is passed IN rather than loaded here so this module
+   stays import-free of the app (see `models/portfolio.py:7-10` — that direction
+   must not cycle) and so every caller demonstrably uses the same table.
+
+   Not passing `splits` leaves the fold behaving exactly as before, which is what
+   keeps the ~40 existing `build_holdings` tests meaningful: they pin the money
+   arithmetic, and a split moves no money.
+
+   A symbol carrying a RIGHTS action is flagged `rights_unstatable` and named in
+   `PortfolioTotals.rights_unstatable_symbols`. It is NOT excluded from the
+   totals: unlike a missing FX rate, its cost basis is still a real number in a
+   real currency — what is unknown is only whether the user subscribed, so the
+   honest report is "this number may be short of shares you paid for", not "we
+   cannot state this position".
+
 Money is `float` here only because `models/portfolio.py:33-35` stores qty/price/fee
 as `Float`. The Decimal/Numeric migration is a separate bead (Tara N8) and is NOT
 started here. The arithmetic below adds exactly one new term per BUY (`+ fee`),
@@ -538,6 +562,16 @@ class Holding:
     # closed and bought again reports two trades instead of one long one.
     opened_on: _date | None = None
     round_open_index: int = 0
+    # ── rule 7 / bd:shotockviz-eb1 — corporate actions ───────────────────────
+    # True when at least one lot of this symbol was restated by a split, i.e.
+    # the qty/avg_cost printed are NOT the numbers on the original contract
+    # note. Surfaced so a doubled share count reads as an adjustment rather
+    # than as data corruption.
+    split_adjusted: bool = False
+    # The symbol has a RIGHTS action. Nothing records whether the user
+    # subscribed, so the position may be short of shares that were paid for.
+    # Reported, never guessed (see services/corporate_actions.py).
+    rights_unstatable: bool = False
 
     @property
     def currency_conflict(self) -> bool:
@@ -593,6 +627,13 @@ class ValuedHolding:
     market_pl_base: float | None = None   # market move, converted at current rate
     fx_pl_base: float | None = None       # currency move on the cost basis
     avg_fx_rate: float | None = None      # weighted rate the cost was bought at
+    # ── rule 7 / bd:shotockviz-eb1 ───────────────────────────────────────────
+    # `qty` / `avg_cost` were restated by a split: they are the position in
+    # TODAY's units, not the numbers on the original contract note.
+    split_adjusted: bool = False
+    # A RIGHTS action exists for this symbol and no subscription is recorded,
+    # so `qty` may be short of shares that were paid for.
+    rights_unstatable: bool = False
 
     @property
     def priced(self) -> bool:
@@ -627,10 +668,39 @@ class PortfolioTotals:
     # Rule 5 / bd:shotockviz-7ju — the symbol's own rows disagree on a currency,
     # so its cost basis mixes units. Excluded from both sides and named.
     currency_conflict_symbols: list[str] = field(default_factory=list)
+    # Rule 7 / bd:shotockviz-eb1 — restated by a split (INCLUDED in the totals;
+    # the restatement is what makes them right) and, separately, symbols whose
+    # share count may be short because a rights subscription is not recorded
+    # (also included — see rule 7 for why this is not an exclusion).
+    split_adjusted_symbols: list[str] = field(default_factory=list)
+    rights_unstatable_symbols: list[str] = field(default_factory=list)
 
 
-def build_holdings(txns: Iterable) -> dict[str, Holding]:
-    """Fold transactions (chronological order) into net positions per symbol."""
+def build_holdings(
+    txns: Iterable,
+    splits: Mapping | None = None,
+    as_of: _date | None = None,
+) -> dict[str, Holding]:
+    """Fold transactions (chronological order) into net positions per symbol.
+
+    `splits` — rule 7 / bd:shotockviz-eb1. A `{SYMBOL: corporate_actions.
+    SymbolActions}` map (built by `services.corporate_actions.load_actions`).
+    When given, every lot dated strictly before a split's ex-date is restated
+    into post-split units at read time: `qty / factor`, `price * factor`, with
+    `qty*price` — the money actually paid — invariant. The raw rows are never
+    written; see `services/corporate_actions.py` for why that asymmetry is
+    deliberate and why dividends/rights are excluded.
+
+    `as_of` — restate only for splits with `ex_date <= as_of`, i.e. state the
+    book in the units in force on that date. `None` (the default) means today,
+    which is the correct basis for a position valued against a live quote. The
+    equity curve passes the day it is walking so that each point's share count
+    and that day's raw close are in the same units.
+
+    Omitting `splits` reproduces the pre-eb1 fold exactly.
+    """
+    from services import corporate_actions as _ca
+
     holdings: dict[str, Holding] = {}
 
     for t in txns:
@@ -647,6 +717,22 @@ def build_holdings(txns: Iterable) -> dict[str, Holding]:
 
         qty = float(t.qty or 0.0)
         price = float(t.price or 0.0)
+
+        # Rule 7: the ONE point where a corporate action touches the book. It is
+        # here, before any arithmetic, so the split cannot reach cost basis,
+        # realized P&L or the FX conversion by a different route on each screen.
+        if splits is not None:
+            actions = splits.get(symbol.upper()) or splits.get(symbol)
+            if actions is not None:
+                if getattr(actions, "has_rights", False):
+                    h.rights_unstatable = True
+                factor = _ca.split_factor(
+                    actions, _as_date(getattr(t, "date", None)), as_of
+                )
+                if factor != 1.0:
+                    qty, price = _ca.restate(qty, price, factor)
+                    h.split_adjusted = True
+
         fee = float(getattr(t, "fee", 0.0) or 0.0)
         txn_type = getattr(t.type, "value", t.type)
         rate = _txn_fx_rate(t)  # rule 4 / FX-1; 1.0 for a base-currency txn
@@ -835,6 +921,8 @@ def value_holdings(
                 currency="/".join(sorted(h.currencies)),
                 currency_conflict=True,
                 currencies=sorted(h.currencies),
+                split_adjusted=h.split_adjusted,
+                rights_unstatable=h.rights_unstatable,
             ))
             continue
 
@@ -853,6 +941,8 @@ def value_holdings(
             current_value=value,
             unrealized_pl=pl,
             unrealized_pl_pct=pl_pct,
+            split_adjusted=h.split_adjusted,
+            rights_unstatable=h.rights_unstatable,
         )
 
         rate = resolve(h.currency)
@@ -916,6 +1006,14 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
     totals = PortfolioTotals()
 
     for v in valued:
+        # Rule 7 — recorded for EVERY row, before any exclusion: these two are
+        # qualifications on a number that IS being reported, not reasons to drop
+        # it, so they must not be skipped by a `continue` below.
+        if v.split_adjusted:
+            totals.split_adjusted_symbols.append(v.symbol)
+        if v.rights_unstatable:
+            totals.rights_unstatable_symbols.append(v.symbol)
+
         # Checked before `priced`: a conflicted position was never priced, and
         # calling it "waiting for a price" would send the user to wait for data
         # that will never fix it (rule 5).

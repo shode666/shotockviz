@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
-from sqlalchemy import String, DateTime, Float, Boolean, Enum, ForeignKey, func
+from sqlalchemy import String, Date, DateTime, Float, Boolean, Enum, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
 
@@ -91,6 +91,25 @@ class Alert(Base):
     alert_type: Mapped[AlertType] = mapped_column(Enum(AlertType), nullable=False)
     condition: Mapped[str] = mapped_column(String(100), nullable=False)
     value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # bd:shotockviz-eb1 — the date `value` was last WRITTEN, i.e. the trading
+    # units it is stated in. It exists because neither existing timestamp says
+    # that and both fail in a different direction:
+    #   created_at — too early. PUT /alerts/{id} can change `value`
+    #     (api/routes/alerts.py:131-137) without touching created_at, so an
+    #     already-post-split level would be rebased a second time.
+    #   updated_at — too late. It has onupdate=now(), so PATCH /toggle (which
+    #     does not touch `value` at all) moves it and would suppress a rebase
+    #     the level still needs.
+    # A price level is a standing instruction compared every 60 s against a live
+    # quote that is always in CURRENT units, so it is rebased in place when a
+    # split is recorded (workers/corporate_actions_fetcher.py::rebase_price_alerts)
+    # — the opposite treatment from a transaction, which is a record of a past
+    # event and is restated at read time instead (services/corporate_actions.py).
+    # This column is the idempotency key for that rewrite: the rebase is guarded
+    # by `value_as_of < ex_date`, so re-running the daily fetcher over the same
+    # split table can never multiply a level twice.
+    # NULL = units unknown -> never rebased (declines rather than guesses).
+    value_as_of: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), default=AlertStatus.ACTIVE)
     channel: Mapped[AlertChannel] = mapped_column(Enum(AlertChannel), default=AlertChannel.TELEGRAM)

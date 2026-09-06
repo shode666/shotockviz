@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -104,6 +106,11 @@ async def create_alert(
         alert_type=_resolve_alert_type(body.alert_type),
         condition=body.condition,
         value=body.value,
+        # bd:shotockviz-eb1 — the trading units `value` is stated in. Stamped on
+        # every write of `value` (here and in update_alert); it is what lets a
+        # split rebase know whether this level predates the split, and it is the
+        # idempotency key that stops the daily fetcher rebasing it twice.
+        value_as_of=date.today(),
         channel=_resolve_channel(body.channel),
     )
     db.add(alert)
@@ -128,13 +135,23 @@ async def update_alert(
     if not alert:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alert not found")
 
-    for field, val in body.model_dump(exclude_unset=True).items():
+    updates = body.model_dump(exclude_unset=True)
+    for field, val in updates.items():
         # bd:shotockviz-675 — route `channel` through the same resolver as
         # create_alert so PUT cannot set 'in_app' either (previously this
         # loop did a raw setattr, bypassing validation entirely).
         if field == "channel":
             val = _resolve_channel(val)
         setattr(alert, field, val)
+
+    # bd:shotockviz-eb1 — re-stamp the units whenever `value` itself is written.
+    # `exclude_unset` is what makes this precise: a PUT that only changes the
+    # condition or the channel leaves the level (and therefore its units) alone,
+    # so it must NOT push value_as_of forward past a split the level still needs
+    # rebasing for. `updated_at` cannot make that distinction, which is the whole
+    # reason this column exists.
+    if "value" in updates:
+        alert.value_as_of = date.today()
     return alert
 
 

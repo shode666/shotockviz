@@ -86,6 +86,119 @@ def _get_watched_symbols(engine) -> list[str]:
         return [row[0] for row in result.fetchall()]
 
 
+# bd:shotockviz-eb1 — only these two alert types hold a PRICE. RSI_OVERBOUGHT /
+# RSI_OVERSOLD hold an oscillator threshold, VOLUME_SPIKE a multiplier, and
+# GOLDEN_CROSS / DEATH_CROSS hold nothing at all
+# (workers/alert_checker.py::_evaluate_indicator_alert) — none of them is
+# denominated in the stock's price, so none of them may be rebased. Scaling an
+# RSI threshold of 70 by a split ratio would be pure nonsense.
+_PRICE_ALERT_TYPES = ("PRICE_ABOVE", "PRICE_BELOW")
+
+
+def rebase_price_alerts(conn, symbol: str, ex_date, ratio: float) -> int:
+    """Restate price-alert levels set BEFORE `ex_date` into post-split units.
+
+    bd:shotockviz-eb1. The one place in this codebase where a corporate action
+    REWRITES a user row, and the asymmetry is deliberate:
+
+      * A transaction is a RECORD OF A PAST EVENT. It must keep saying what the
+        contract note says, so it is restated at read time and never written —
+        `services/corporate_actions.py`.
+      * An alert level is a STANDING INSTRUCTION ABOUT THE FUTURE. There is no
+        past event to preserve. It is compared every 60 s
+        (`workers/alert_checker.py`) against a live quote that is always in
+        CURRENT units, and it is displayed to the user on the alerts screen. If
+        the instruction is restated at read time instead, the checker and the
+        screen show two different levels for the same alert — the exact
+        two-surfaces-disagreeing failure bd:shotockviz-msg/-sbe/-la4 spent three
+        beads unifying — and the checker (sync Celery) would need a second,
+        synchronous reader of the corporate_actions table, which is the other
+        thing this bead exists to avoid.
+
+    So the level is rebased once, in place, at the moment the split is recorded,
+    and `value_as_of` moves with it.
+
+    IDEMPOTENCY. `value_as_of < ex_date` is the guard AND the effect: a rebased
+    row has `value_as_of = ex_date`, so the daily re-run of this task over the
+    same (unchanged) split table matches zero rows. This is what makes it safe
+    for a task whose INSERT is `ON CONFLICT DO UPDATE` and therefore cannot
+    distinguish a new split from one it has already seen a hundred times.
+
+    NOT rebased, on purpose:
+      * `value_as_of IS NULL` — units unknown, so no rebase can be justified.
+        Declines instead of guessing (same doctrine as `transactions.fx_rate`).
+      * `status = 'TRIGGERED'` — a fired alert is a historical record of what
+        fired at what level, not a live instruction. Rewriting it would falsify
+        the log. A *paused* alert (`is_active = false`, still `ACTIVE`) IS
+        rebased: it will be re-armed later and must be right when it is.
+
+    The original value is written to the log before it is overwritten — this
+    task is the only writer and there is no alert-history table, so the log is
+    the audit trail. Returns the number of rows rebased.
+    """
+    from sqlalchemy import text
+
+    rebased = 0
+    try:
+        # SAVEPOINT. `conn` is the caller's live transaction, and the split rows
+        # this task exists to record have already been INSERTed into it. Without
+        # the nesting, one failing statement here (most likely
+        # `alerts.value_as_of` not existing because migration 20260906_0008 has
+        # not been applied) aborts that whole transaction, and the final
+        # `conn.commit()` in `_fetch_actions_for_symbol` throws away the
+        # corporate-action rows too — turning a skipped nice-to-have into data
+        # loss on the table everything else depends on.
+        with conn.begin_nested():
+            # `alert_type` / `status` are Postgres ENUM columns and the bound
+            # parameters arrive as text, so both are cast explicitly — an
+            # untyped parameter compared against an enum is a driver-dependent
+            # coin flip ("operator does not exist: alerttype = text"), not
+            # something to leave to chance in a query that rewrites
+            # money-adjacent user rows.
+            rows = conn.execute(text(
+                "SELECT id, value FROM alerts "
+                "WHERE symbol = :symbol "
+                "  AND alert_type::text IN (:type_above, :type_below) "
+                "  AND value IS NOT NULL "
+                "  AND value_as_of IS NOT NULL "
+                "  AND value_as_of < :ex_date "
+                "  AND status::text = 'ACTIVE'"
+            ), {
+                "symbol": symbol.upper(),
+                "type_above": _PRICE_ALERT_TYPES[0],
+                "type_below": _PRICE_ALERT_TYPES[1],
+                "ex_date": ex_date,
+            }).fetchall()
+
+            for alert_id, old_value in rows:
+                new_value = float(old_value) * ratio
+                conn.execute(text(
+                    "UPDATE alerts SET value = :new_value, value_as_of = :ex_date "
+                    "WHERE id = :id"
+                ), {"new_value": new_value, "ex_date": ex_date, "id": alert_id})
+                # WARNING, not INFO: this is a silent-looking change to a number
+                # the user typed themselves, and the pre-image exists nowhere
+                # else — this log IS the audit trail.
+                logger.warning(
+                    "Alert level rebased for stock split",
+                    alert_id=alert_id,
+                    symbol=symbol.upper(),
+                    ex_date=str(ex_date),
+                    ratio=ratio,
+                    old_value=float(old_value),
+                    new_value=new_value,
+                )
+                rebased += 1
+    except Exception as e:
+        logger.warning(
+            "Alert rebase skipped — alerts not updated for this split",
+            symbol=symbol, ex_date=str(ex_date), error=str(e),
+        )
+        return 0
+
+    return rebased
+
+
 def _fetch_actions_for_symbol(symbol: str, engine, redis_client) -> int:
     """Fetch dividends and splits for a single symbol via yfinance."""
     import yfinance as yf
@@ -125,24 +238,35 @@ def _fetch_actions_for_symbol(symbol: str, engine, redis_client) -> int:
     try:
         splits = ticker.splits
         if splits is not None and not splits.empty:
+            # bd:shotockviz-eb1 — collect and sort by ex-date ASCENDING before
+            # writing. The alert rebase below is guarded by
+            # `value_as_of < ex_date` and stamps `value_as_of = ex_date`, so two
+            # splits applied newest-first would leave the older one permanently
+            # skipped. yfinance happens to return this Series in ascending order;
+            # the ordering is load-bearing, so it is enforced here rather than
+            # assumed off a library's iteration order.
+            rows = []
+            for idx, ratio in splits.items():
+                if ratio and float(ratio) != 1.0 and float(ratio) > 0:
+                    # yfinance split ratio: "4.0" means 4:1 → our ratio = 1/4 = 0.25
+                    rows.append((idx.date(), round(1.0 / float(ratio), 6)))
+            rows.sort(key=lambda r: r[0])
+
             with engine.connect() as conn:
-                for idx, ratio in splits.items():
-                    if ratio and float(ratio) != 1.0:
-                        ex_date = idx.strftime("%Y-%m-%d")
-                        # yfinance split ratio: "4.0" means 4:1 → our ratio = 1/4 = 0.25
-                        split_ratio = 1.0 / float(ratio) if float(ratio) > 0 else 1.0
-                        conn.execute(text(
-                            "INSERT INTO corporate_actions "
-                            "(symbol, action_type, ex_date, ratio, source) "
-                            "VALUES (:symbol, 'SPLIT', :ex_date, :ratio, 'yfinance') "
-                            "ON CONFLICT ON CONSTRAINT uq_corp_action_symbol_type_date "
-                            "DO UPDATE SET ratio = :ratio, source = 'yfinance'"
-                        ), {
-                            "symbol": symbol.upper(),
-                            "ex_date": ex_date,
-                            "ratio": round(split_ratio, 6),
-                        })
-                        actions_count += 1
+                for ex_date, split_ratio in rows:
+                    conn.execute(text(
+                        "INSERT INTO corporate_actions "
+                        "(symbol, action_type, ex_date, ratio, source) "
+                        "VALUES (:symbol, 'SPLIT', :ex_date, :ratio, 'yfinance') "
+                        "ON CONFLICT ON CONSTRAINT uq_corp_action_symbol_type_date "
+                        "DO UPDATE SET ratio = :ratio, source = 'yfinance'"
+                    ), {
+                        "symbol": symbol.upper(),
+                        "ex_date": ex_date.isoformat(),
+                        "ratio": split_ratio,
+                    })
+                    actions_count += 1
+                    rebase_price_alerts(conn, symbol, ex_date, split_ratio)
                 conn.commit()
     except Exception as e:
         logger.debug("Split fetch failed", symbol=symbol, error=str(e))

@@ -268,6 +268,14 @@ class HoldingResponse(BaseModel):
     # totals and named in PortfolioAnalytics.currency_conflict_symbols.
     currency_conflict: bool = False
     currencies: List[str] = []
+    # bd:shotockviz-eb1 — `qty`/`avg_cost` were restated by a stock split and are
+    # in TODAY's units, not the units on the original contract note. The raw
+    # transaction rows are untouched (services/corporate_actions.py).
+    split_adjusted: bool = False
+    # A RIGHTS action exists for this symbol and nothing records whether the user
+    # subscribed, so `qty` may be short of shares that were paid for. Reported,
+    # never guessed — the position is still counted in the totals.
+    rights_unstatable: bool = False
     current_price: Optional[float] = None
     current_value: Optional[float] = None
     unrealized_pl: Optional[float] = None
@@ -306,6 +314,11 @@ class PortfolioAnalytics(BaseModel):
     fx_unavailable_symbols: List[str] = []
     # bd:shotockviz-7ju — symbols excluded because their own rows mix currencies.
     currency_conflict_symbols: List[str] = []
+    # bd:shotockviz-eb1 — restated for a split (still INCLUDED in the totals: the
+    # restatement is what makes them right) / share count possibly short because
+    # a rights subscription is not recorded (also included).
+    split_adjusted_symbols: List[str] = []
+    rights_unstatable_symbols: List[str] = []
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
     has_pending_prices: bool = False
@@ -397,6 +410,11 @@ class AlertResponse(BaseModel):
     channel: str
     triggered_at: Optional[datetime] = None
     created_at: datetime
+    # bd:shotockviz-eb1 — the date `value` was last written, i.e. the trading
+    # units the level is stated in. Surfaced so a level that has been rebased by
+    # a split is readable as such off the API instead of looking like the user
+    # mistyped it. NULL on a legacy row whose units could not be established.
+    value_as_of: Optional[date] = None
 
     model_config = ConfigDict(from_attributes=True)
 

@@ -19,7 +19,7 @@ from models.user import User
 from models.portfolio import Transaction
 from models.alert import Alert
 from api.middleware.auth import get_current_user_optional
-from services import portfolio_service, stock_service
+from services import corporate_actions, portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/dashboard -> /dashboard,
@@ -121,7 +121,14 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
         # divide-by-zero guard that silently halved avg cost for any fractional
         # position) and used a 0.001 "active" threshold instead of 1e-6. Both
         # screens now share services/portfolio_service.py.
-        holdings = portfolio_service.build_holdings(txns)
+        #
+        # bd:shotockviz-eb1 / rule 7 — the same split restatement /portfolio
+        # applies, from the same table and the same Redis key. Left off here it
+        # would be bd:shotockviz-msg all over again: the dashboard summary and
+        # the holdings table would state different share counts for the same
+        # book at the same instant.
+        splits = await corporate_actions.load_actions([t.symbol for t in txns])
+        holdings = portfolio_service.build_holdings(txns, splits=splits)
 
         active = portfolio_service.active_holdings(holdings)
         if not active:
