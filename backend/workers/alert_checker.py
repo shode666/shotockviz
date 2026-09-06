@@ -489,37 +489,29 @@ def _send_telegram_alert(db, alert, current_price: float):
             f"Current price: {current_price}\n"
             f"Time: {datetime.now(timezone.utc).isoformat()}"
         )
-        url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-
         # R1 (04-sara-telegram-spec.md §9) — 1 retry with short backoff;
         # a lost Telegram send after the DB commit is at-most-once and
-        # accepted (outbox pattern is over-engineering for 1 user).
-        last_error = None
-        for _attempt in range(2):
-            try:
-                resp = httpx.post(
-                    url,
-                    json={"chat_id": user.telegram_chat_id, "text": text},
-                    timeout=10,
-                )
-                if resp.status_code == 200:
-                    logger.info(
-                        "Telegram alert sent",
-                        alert_id=alert.id,
-                        symbol=alert.symbol,
-                        type=alert.alert_type.value,
-                        price=current_price,
-                        target=alert.value,
-                    )
-                    return
-                last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-            except httpx.HTTPError as e:
-                last_error = str(e)
+        # accepted (outbox pattern is over-engineering for 1 user). Both the
+        # retry and the dry-run guard now live in
+        # services/telegram_notify.py (bd:shotockviz-4d9) — this must never
+        # POST directly again, or dev regains the ability to page the user
+        # from a laptop.
+        from services.telegram_notify import send_telegram_message
 
-        logger.error(
-            "Failed to send Telegram alert after retry",
-            alert_id=alert.id,
-            error=last_error,
-        )
+        if send_telegram_message(
+            user.telegram_chat_id, text, context="alert_checker"
+        ):
+            logger.info(
+                "Telegram alert sent",
+                alert_id=alert.id,
+                symbol=alert.symbol,
+                type=alert.alert_type.value,
+                price=current_price,
+                target=alert.value,
+            )
+        else:
+            logger.error(
+                "Failed to send Telegram alert after retry", alert_id=alert.id
+            )
     except Exception as e:
         logger.error("Failed to send Telegram alert", error=str(e))

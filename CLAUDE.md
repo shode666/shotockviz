@@ -303,6 +303,15 @@ See `.env.example` for full list. Key vars:
 - `JWT_SECRET_KEY` — Token signing
 - `FINNHUB_API_KEY` — Free tier for enhanced data
 - `TELEGRAM_BOT_TOKEN` — Alert notifications
+- `TELEGRAM_DRY_RUN` — leave unset. Outbound Telegram is real only when
+  `APP_ENV=production`; anywhere else every notification is logged in full
+  (`TELEGRAM DRY RUN — message NOT sent`) instead of being sent, even with a
+  real token and a real chat id in the DB (`bd:shotockviz-4d9`,
+  `backend/services/telegram_notify.py`). Set it to `false` to send for real
+  from a non-production environment — a deliberate act, not a default. **This
+  replaces the old instruction telling agents "do not send a real Telegram
+  message": it is now enforced by code, and a test asserts that no module
+  builds the Telegram API URL itself.**
 - `GOOGLE_CLIENT_ID` — OAuth login
 
 ## Stakeholder Context

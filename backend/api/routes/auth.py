@@ -226,23 +226,16 @@ async def _send_telegram_test_message(chat_id: str) -> tuple[bool, str]:
 
     Returns (success, error_detail). error_detail is empty on success.
     """
-    import httpx
+    # bd:shotockviz-4d9 — goes through the project's single outbound
+    # chokepoint so a dev stack cannot message the user's real phone. In dry
+    # run this reports success and logs the message: the account link IS
+    # valid, only the confirmation is suppressed, and telling the user the
+    # link failed would be the wrong answer.
+    from services.telegram_notify import send_telegram_message_async
 
-    if not settings.telegram_bot_token:
-        return False, "TELEGRAM_BOT_TOKEN not configured"
-
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                url,
-                json={"chat_id": chat_id, "text": "เชื่อมต่อ ShotockViz alert สำเร็จ ✅"},
-            )
-        if resp.status_code != 200:
-            body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
-            return False, body.get("description", f"HTTP {resp.status_code}")
-        return True, ""
-    except httpx.HTTPError as e:
-        logger.warning("Telegram test message send failed", chat_id=chat_id, error=str(e))
-        return False, str(e)
+    return await send_telegram_message_async(
+        chat_id,
+        "เชื่อมต่อ ShotockViz alert สำเร็จ ✅",
+        context="auth_link_confirmation",
+    )
 

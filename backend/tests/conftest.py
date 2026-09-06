@@ -26,6 +26,24 @@ from main import app
 # from `asyncio_default_fixture_loop_scope = session` in backend/pytest.ini.
 
 
+@pytest.fixture(autouse=True)
+def _telegram_send_path_is_exercised(monkeypatch):
+    """bd:shotockviz-4d9 — force the REAL send branch on inside the suite.
+
+    `settings.telegram_is_dry_run` defaults to True outside production, which
+    is the point of that setting: a dev stack must not message the user's
+    phone. But tests that assert "one message was sent" would then be
+    asserting against the suppression, not against the code — they would pass
+    with the sender deleted.
+
+    So the suite runs with dry run OFF and every such test patches
+    `httpx.post`, which is what actually keeps the network out of it. The
+    suppression itself is covered separately and explicitly in
+    `tests/test_4d9_telegram_dry_run.py`, which turns it back on.
+    """
+    monkeypatch.setattr(settings, "telegram_dry_run", False)
+
+
 @pytest.fixture
 async def test_db() -> AsyncGenerator[AsyncSession, None]:
     """Create a fresh in-memory SQLite database for each test."""

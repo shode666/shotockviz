@@ -19,6 +19,19 @@ class Settings(BaseSettings):
 
     # App
     app_env: str = "development"
+
+    # bd:shotockviz-4d9 — outbound Telegram is REAL by default only in
+    # production. The dev stack carries a real TELEGRAM_BOT_TOKEN and the
+    # dev DB's user 1 has the same live telegram_chat_id as prod, so every
+    # scheduled notification this project has (S/R digest, gap list,
+    # pipeline health, price alerts) sends to the user's actual phone from
+    # a laptop — both digests received on 2026-09-06 came from dev, not
+    # prod. Until now the only guard was a sentence in CLAUDE.md telling
+    # agents not to send; a rule an agent has to remember is not a guard.
+    #
+    # `None` means "decide from app_env". Set TELEGRAM_DRY_RUN=false to
+    # send for real from a non-production environment — a conscious act.
+    telegram_dry_run: bool | None = None
     debug: bool = True
     workers: int = 4
 
@@ -142,6 +155,19 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
+    @property
+    def telegram_is_dry_run(self) -> bool:
+        """True when outbound Telegram must be logged instead of sent.
+
+        An explicit `TELEGRAM_DRY_RUN` wins in both directions. Unset, dry
+        run is ON everywhere except production: the safe default is the one
+        where a mistake costs a log line rather than a message on someone's
+        phone at 03:00.
+        """
+        if self.telegram_dry_run is not None:
+            return self.telegram_dry_run
+        return not self.is_production
 
     @property
     def sync_database_url(self) -> str:

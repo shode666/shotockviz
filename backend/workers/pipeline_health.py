@@ -169,26 +169,14 @@ def build_recovered_message() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _send_telegram_message(chat_id: str, text: str) -> bool:
-    """Send one Telegram message; 1 retry; never raises. Returns success bool."""
-    import httpx
-    from core.config import settings
+    """Send one Telegram message. Delegates to the project's single outbound
+    chokepoint (bd:shotockviz-4d9), which is what honours
+    `settings.telegram_is_dry_run` — this function must never POST directly
+    again, or dev regains the ability to page the user from a laptop.
+    """
+    from services.telegram_notify import send_telegram_message
 
-    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
-
-    last_error = None
-    for _attempt in range(2):
-        try:
-            resp = httpx.post(url, json={"chat_id": chat_id, "text": text}, timeout=10)
-            if resp.status_code == 200:
-                logger.info("pipeline health alert sent", chat_id=chat_id)
-                return True
-            last_error = f"HTTP {resp.status_code}: {resp.text[:200]}"
-        except httpx.HTTPError as e:
-            last_error = str(e)
-    logger.error("Failed to send pipeline health alert after retry", chat_id=chat_id, error=last_error)
-    return False
-
-
+    return send_telegram_message(chat_id, text, context="pipeline_health")
 def _get_alert_recipients(db) -> list[tuple[int, str]]:
     """Active users with a Telegram chat id — same eligibility shape as
     `sr_proximity_digest`'s user query, minus the watchlist join (this is
