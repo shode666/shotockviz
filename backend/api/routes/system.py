@@ -9,17 +9,15 @@ data_status reflects real service health:
 """
 import asyncio
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import json as _json
 
-import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.database import get_db
-from core.config import settings
 from core.redis import get_redis
 from schemas.common import BaseResponse, CachedLayer
 from schemas.envelope import EnvelopingAPIRoute
@@ -51,6 +49,45 @@ _READY_THRESHOLD = 3  # at least 3 of the probe keys must be cached
 # gunicorn worker could interleave the swap/restore and permanently bury the
 # real sys.stdout under a discarded io.StringIO(). [Chris review §2, High]
 _celery_health_lock = threading.Lock()
+
+# ── bd:shotockviz-d71 — /api/health cost ─────────────────────────────────────
+# Measured on production 2026-09-06: 2.23 s. That is not slow work, it is a
+# FIXED WAIT: `inspect.ping()` is a broadcast RPC with no idea how many replies
+# to expect, so it sits out its whole `timeout=2.0` on every single call. Nothing
+# about the probe can be made faster; what can change is whether a request has to
+# stand next to it.
+#
+# The user rejected the WONTFIX, and the constraint that rejection implies is
+# that a fast endpoint which no longer proves the workers are alive is WORSE than
+# a slow one. So the probe is kept EXACTLY as it is — same broadcast, same 2 s
+# timeout, same "ok"/"fail" meaning — and only its position moves: the result is
+# published to Redis and served from there, refreshed off the request path.
+#
+# What the `celery` field means after this change, stated precisely because the
+# meaning is the thing that must not silently move: "a Celery worker answered a
+# broadcast ping at `celery_checked_at`", where that timestamp is at most
+# _CELERY_PROBE_REFRESH_AFTER + one probe old, and never more than
+# _CELERY_PROBE_TTL old (past that the cache is gone and the next caller pays the
+# 2 s inline probe rather than being told something stale). Before this change it
+# meant the same thing with the timestamp always equal to "now".
+#
+# Is a ≤ ~22 s lag acceptable for this contract? The consumer is the compose
+# healthcheck (`docker-compose.dev.yml:69`, `.prod.yml:60`, `.ghcr.yml:73` —
+# `curl -f`, interval 30 s, 3 retries), which already takes up to 90 s to act on
+# a failure and which — note — never acted on `celery` at all: a celery "fail"
+# does NOT set `degraded` below and never has, so the endpoint returns 200
+# either way. The lag is well inside the noise of the only thing reading it.
+#
+# TTL > refresh-after on purpose: the gap is what lets a stale-but-live value be
+# served while a refresh is in flight, instead of a thundering herd of 2 s pings.
+_CELERY_PROBE_KEY = "health:celery:probe"
+_CELERY_PROBE_TTL = 90               # seconds a probe result may still be served
+_CELERY_PROBE_REFRESH_AFTER = 20     # seconds before a background re-probe fires
+
+# Single-flight guard for the background refresh, and a strong reference to the
+# task so the event loop's weak set cannot collect it mid-flight.
+_celery_refresh_inflight = False
+_celery_refresh_tasks: set = set()
 
 
 def _check_celery_health() -> str:
@@ -88,6 +125,80 @@ def _check_celery_health() -> str:
             sys.stdout, sys.stderr = _old_stdout, _old_stderr
 
 
+async def _probe_and_store() -> tuple[str, str]:
+    """Run the real 2 s broadcast probe and publish the result. Returns (status, iso)."""
+    status_str = await asyncio.to_thread(_check_celery_health)
+    checked_at = datetime.now(timezone.utc).isoformat()
+    try:
+        r = await get_redis()
+        await r.setex(
+            _CELERY_PROBE_KEY,
+            _CELERY_PROBE_TTL,
+            _json.dumps({"status": status_str, "checked_at": checked_at}),
+        )
+    except Exception:
+        # No Redis -> no sharing between gunicorn workers, so every call probes
+        # inline. Slow, correct, and exactly the pre-d71 behaviour.
+        pass
+    return status_str, checked_at
+
+
+async def _refresh_celery_probe() -> None:
+    """Background re-probe. One at a time per process (`_celery_refresh_inflight`)."""
+    global _celery_refresh_inflight
+    try:
+        await _probe_and_store()
+    except Exception:
+        pass
+    finally:
+        _celery_refresh_inflight = False
+
+
+def _schedule_celery_refresh() -> None:
+    global _celery_refresh_inflight
+    if _celery_refresh_inflight:
+        return
+    _celery_refresh_inflight = True
+    try:
+        task = asyncio.create_task(_refresh_celery_probe())
+    except RuntimeError:  # no running loop — cannot happen inside a request
+        _celery_refresh_inflight = False
+        return
+    _celery_refresh_tasks.add(task)
+    task.add_done_callback(_celery_refresh_tasks.discard)
+
+
+async def _celery_liveness() -> tuple[str, str]:
+    """The `celery` field, off the request's critical path (bd:shotockviz-d71).
+
+    Returns (status, checked_at_iso). Serves the last published probe result and
+    kicks off a background re-probe once it is older than
+    `_CELERY_PROBE_REFRESH_AFTER`. Falls back to probing INLINE — the full 2 s —
+    when there is nothing published at all, which is the honest answer for a
+    cold process: "no worker has been proven alive yet" must not be reported as
+    "ok", and a 2 s first call is not a contract this endpoint has to keep.
+    """
+    try:
+        r = await get_redis()
+        raw = await r.get(_CELERY_PROBE_KEY)
+    except Exception:
+        raw = None
+
+    if raw:
+        try:
+            payload = _json.loads(raw)
+            status_str = payload["status"]
+            checked_at = payload["checked_at"]
+            age = datetime.now(timezone.utc) - datetime.fromisoformat(checked_at)
+            if age > timedelta(seconds=_CELERY_PROBE_REFRESH_AFTER):
+                _schedule_celery_refresh()
+            return status_str, checked_at
+        except Exception:
+            pass  # corrupt entry — fall through and re-probe
+
+    return await _probe_and_store()
+
+
 @health_router.get("/health", response_model=BaseResponse[dict])
 async def health_check(
     request: Request,
@@ -102,7 +213,13 @@ async def health_check(
           "data": {
             "database": "ok" | "error",
             "redis":    "ok" | "error",
-            "celery":   "ok" | "fail"
+            "celery":   "ok" | "fail",
+            # bd:shotockviz-d71 — ADDITIVE field. When the celery probe last
+            # actually ran; see the block above _check_celery_health for why the
+            # probe no longer runs inside this request and what "ok" now means.
+            # The 3 keys above are unchanged in name, values and semantics, and
+            # the only consumer (compose `curl -f`) reads the status code alone.
+            "celery_checked_at": "<ISO-8601>"
           },
           "meta": {
             "request_id":   "...",
@@ -125,23 +242,30 @@ async def health_check(
         degraded = True
 
     # ── Redis ─────────────────────────────────────────────────────────────────
+    # bd:shotockviz-d71 — was `aioredis.from_url(...)` + ping + aclose, i.e. a
+    # brand-new TCP connection (and AUTH round-trip) on every healthcheck tick.
+    # `/system/ready` below already carries this project's own ruling on that —
+    # "Use the shared connection pool — never create a new connection per poll"
+    # (system.py, cache_ready_check) — and the healthcheck polls harder than the
+    # frontend does. A pooled `ping()` still proves the server is answering; if
+    # it is not, redis-py raises here exactly as before.
     try:
-        r = await aioredis.from_url(settings.redis_url)
+        r = await get_redis()
         await r.ping()
-        await r.aclose()
         checks["redis"] = "ok"
     except Exception:
         checks["redis"] = "error"
         degraded = True
 
     # ── Celery ────────────────────────────────────────────────────────────────
-    # _check_celery_health() is synchronous (kombu/amqp inspect().ping() blocks
-    # up to ~2s waiting for a broker reply) — offload to a thread so this
-    # gunicorn/uvicorn worker's event loop is never frozen while handling
-    # /api/health (hit by Docker healthcheck + Caddy). Measured event-loop
-    # freeze without to_thread: ~2.1s per call (see outputs/ops-01/01-dave-fix.md).
-    # bd:ops-01
-    checks["celery"] = await asyncio.to_thread(_check_celery_health)
+    # bd:ops-01 kept the 2 s kombu/amqp `inspect().ping()` on the request path
+    # and merely stopped it freezing the event loop (`asyncio.to_thread`) — the
+    # RESPONSE was still ~2.2 s because the request still waited for it.
+    # bd:shotockviz-d71 moves the wait off the request instead of weakening the
+    # probe: same broadcast, same timeout, same meaning, served from the last
+    # published result and refreshed in the background. See the block above
+    # `_check_celery_health` for the meaning statement and the staleness budget.
+    checks["celery"], checks["celery_checked_at"] = await _celery_liveness()
 
     as_of = datetime.now(timezone.utc)
 
