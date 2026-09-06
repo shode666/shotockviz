@@ -19,6 +19,34 @@ const config = defineConfig({
     '__TANSTACK_DEVTOOLS_WS__': JSON.stringify(''),
     '__TANSTACK_ROUTER_DEVTOOLS_WS__': JSON.stringify(''),
   },
+  build: {
+    rollupOptions: {
+      output: {
+        // bd:shotockviz-mj8 — Vite's client and SSR environments (nitro/vite
+        // multi-environment build) independently resolve the content hash for
+        // `@/styles.css?url` (__root.tsx) and land on two DIFFERENT, mutually
+        // exclusive hashes for the same source file: the SSR bundle bakes a
+        // literal `styles-<hashA>.css` string into the compiled route module
+        // that is never written to `public/assets` at all, while the client
+        // build emits the real, served file under `styles-<hashB>.css`.
+        // React 19's stylesheet-precedence hydration then keeps BOTH <link>
+        // tags (they dedupe by href, and the hrefs differ) — one 404s.
+        // Reproduced on a from-scratch build of the initial commit
+        // (1b6ff0d) too, so this is not new: it has existed since project
+        // inception, just invisible because the live client-side href always
+        // wins and the page still renders styled. Pinning the one global
+        // stylesheet to a fixed, unhashed name makes both environments
+        // resolve to the identical literal string, which removes the
+        // divergence outright instead of papering over the 404. Cache
+        // invalidation on deploy is still covered by Nitro's per-file ETag
+        // (content-hash based), not by the filename.
+        assetFileNames: (assetInfo) =>
+          assetInfo.names?.[0] === 'styles.css'
+            ? 'assets/styles.css'
+            : 'assets/[name]-[hash][extname]',
+      },
+    },
+  },
   plugins: [
     nitro({
       rollupConfig: { external: [/^@sentry\//] },
