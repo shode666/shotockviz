@@ -94,36 +94,59 @@ Fundamentals — ALERTED, same shape as price quotes above:
   lock/down-state keys and message builders so a fundamentals outage and
   a price-quote outage are independent alerts with independent cooldowns.
 
-History — DELIBERATELY NOT ALERTED, ts stamped for visibility only:
+History general diagnostic (`result["history"]`) — STILL NOT ALERTED, ts
+stamped for visibility only:
   `prefetch_history` (workers/history_prefetcher.py) fills COLD keys
-  ONLY (`if redis_client.exists(cache_key): continue`) — there is no
-  symbol it unconditionally refreshes every run the way price's
-  Overview/Crypto slots or ALL of fundamentals's symbol set are. Its
-  effective per-symbol refresh cadence is therefore the 6h cache TTL,
-  not the 30-min beat, AND it is data-dependent: which symbol's cache
+  ONLY (`if redis_client.exists(cache_key): continue`) for any symbol
+  that is NOT one of its own canaries (see next section) — there is no
+  GENERAL symbol it unconditionally refreshes every run. This diagnostic
+  is computed over ALL watched symbols' sibling `:ts` keys
+  (`workers.helpers.symbol_loader.get_watched_symbols()`), so its
+  effective per-symbol refresh cadence is still the 6h cache TTL, not
+  the 30-min beat, AND it is data-dependent: which symbol's cache
   happens to be cold at any given tick, not a fixed set. Two other
-  writers this bd left out of scope
-  (`services/cache_orchestrator.py`, `workers/on_demand_listener.py`)
-  can keep a symbol's PRIMARY key warm indefinitely without ever
-  touching the sibling `:ts` key `cache_and_publish_history()` writes —
-  so in a deployment where those bypass paths happen to serve every
-  watched symbol before its 6h TTL expires, history_prefetcher's own
-  canary would legitimately go quiet FOREVER even though history data
-  overall is fine, and that is indistinguishable, from this signal
-  alone, from history_prefetcher having silently died (the exact CQRS
-  failure mode `_fetch_symbol_history`'s swallowed exceptions can cause,
-  same class as price's empty-dict case). Building a trustworthy
-  threshold here would require giving history_prefetcher an
-  unconditional-refresh canary the way price_fetcher has one
-  (FALLBACK_IDX) — a real production-behavior change (extra yfinance
-  calls every beat for whatever symbols are chosen), which is out of
-  scope for a monitoring bd and is filed as a follow-up instead of
-  silently smuggled in here. Per this bd's own instruction ("if a signal
-  cannot be made non-noisy, leave it out and say why — a detector
-  nobody trusts is worse than one that covers less"), `check_pipeline_
-  health()` reports history's newest sibling-`ts` age as a DIAGNOSTIC
-  value only (`result["history"]`, `is_stale` deliberately left `None`,
-  `alerting: False`) — logged, returned, never pages anyone.
+  writers (`services/cache_orchestrator.py`, `workers/on_demand_
+  listener.py`) can keep a symbol's PRIMARY key warm indefinitely
+  without ever touching the sibling `:ts` key `cache_and_publish_
+  history()` writes — so for THIS general signal, in a deployment
+  where those bypass paths happen to serve every watched symbol before
+  its 6h TTL expires, the newest watched-symbol `:ts` would legitimately
+  go quiet FOREVER even though history_prefetcher is alive and well.
+  That remains untrustworthy as an alert threshold for the reason
+  documented since bd:shotockviz-5e7.1: `check_pipeline_health()`
+  reports it as a DIAGNOSTIC value only (`is_stale` deliberately left
+  `None`, `alerting: False`) — logged, returned, never pages anyone.
+  Per this bd's own instruction ("if a signal cannot be made non-noisy,
+  leave it out and say why — a detector nobody trusts is worse than one
+  that covers less"), this general signal is intentionally left as-is,
+  UNCHANGED by bd:shotockviz-5e7.2 below.
+
+History liveness canary (`result["history_canary"]`) — ALERTED
+(bd:shotockviz-5e7.2), same shape as price/fundamentals above:
+  `history_prefetcher.HISTORY_CANARY_SYMBOLS` ("^GSPC", "^SET.BK" — two
+  entries reused from `price_fetcher.FALLBACK_IDX`, see that module's
+  own comment for the full sizing arithmetic) are refetched
+  UNCONDITIONALLY on every `prefetch_history` run, bypassing that task's
+  cold-key skip, and placed FIRST in its iteration order so their write
+  completes near the start of the run regardless of how long the rest
+  of the (up to 40-60 symbol, CLAUDE.md) watchlist takes afterward. That
+  gives history the same "always advances if the task ran and yfinance
+  answered at least once" property price's Overview/Crypto canaries and
+  fundamentals's full symbol set have — a real, non-data-dependent
+  signal, computed from ONLY those two symbols' sibling `:ts` keys, kept
+  entirely separate from the general diagnostic above (which stays
+  untrustworthy for the reasons that section documents). Threshold
+  derivation: MEASURED `prefetch-history` beat cadence is 1800s
+  (celery_app.py:151-154, `crontab(minute="*/30")`). No execution-time
+  profiling data exists for even the now-bounded (canary-first) portion
+  of that task (ASSUMED, same gap fundamentals's threshold documents) —
+  and unlike price's 1.7x and fundamentals's 1.5x margins, this canary
+  has ZERO operational history yet (it is introduced by this same bd),
+  so a larger, more conservative 2x margin is used:
+  HISTORY_STALE_THRESHOLD_SECONDS = 1800 * 2 = 3600 (1 hour). Uses its
+  own lock/down-state keys and message builders (same claim-before-
+  notify + down/recovered pattern as price and fundamentals) so a
+  history outage is an independent alert with its own cooldown.
 """
 from __future__ import annotations
 
@@ -133,6 +156,8 @@ from datetime import datetime, timezone
 from celery import shared_task
 from core import cache_keys
 from core.logger import get_logger
+from workers.helpers.cache_publisher import history_ts_key
+from workers.history_prefetcher import HISTORY_CANARY_SYMBOLS
 from workers.price_fetcher import FALLBACK_IDX
 
 logger = get_logger(__name__)
@@ -164,10 +189,24 @@ FUNDAMENTALS_STALE_THRESHOLD_SECONDS = 21600  # 6 hours
 _FUNDAMENTALS_ALERT_LOCK_KEY = "lock:pipeline_health:fundamentals:alert"
 _FUNDAMENTALS_DOWN_STATE_KEY = "pipeline_health:fundamentals:down"
 
-# bd:shotockviz-5e7.1 — history's diagnostic-only threshold. NOT used to
-# gate any alert (see module docstring § "History — DELIBERATELY NOT
-# ALERTED"); kept only so `result["history"]["is_stale"]` has a
-# consistent shape to leave `None` rather than omitting the key.
+# bd:shotockviz-5e7.1 — history's GENERAL diagnostic (`result["history"]`)
+# has no threshold. NOT used to gate any alert (see module docstring §
+# "History general diagnostic — STILL NOT ALERTED"); `is_stale` is left
+# `None` rather than omitted, so the returned shape is consistent.
+
+# bd:shotockviz-5e7.2 — history's LIVENESS-CANARY threshold
+# (`result["history_canary"]`). See module docstring § "History liveness
+# canary — ALERTED" for the full derivation:
+#   MEASURED: prefetch-history beats every 1800s (celery_app.py:151-154).
+#   ASSUMED: per-canary execution-time margin (no profiling data, and
+#   this canary has zero operational history yet, unlike price/
+#   fundamentals) — a conservative 2x multiplier is applied rather than
+#   price's 1.7x or fundamentals's 1.5x.
+#   1800 * 2 = 3600.
+HISTORY_STALE_THRESHOLD_SECONDS = 3600  # 1 hour
+
+_HISTORY_ALERT_LOCK_KEY = "lock:pipeline_health:history:alert"
+_HISTORY_DOWN_STATE_KEY = "pipeline_health:history:down"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -259,6 +298,19 @@ def build_fundamentals_down_message(age_seconds: int) -> str:
 
 def build_fundamentals_recovered_message() -> str:
     return "✅ ระบบดึงข้อมูลพื้นฐานกลับมาทำงานปกติแล้ว"
+
+
+def build_history_down_message(age_seconds: int) -> str:
+    minutes = age_seconds // 60
+    return (
+        "🔴 ระบบดึงข้อมูลราคาย้อนหลัง (กราฟ) หยุดทำงาน\n"
+        f"ข้อมูลกราฟล่าสุดที่มีในระบบเก่ากว่า {minutes} นาทีแล้ว "
+        "กราฟที่เห็นในแอปตอนนี้อาจไม่ใช่ข้อมูลล่าสุด"
+    )
+
+
+def build_history_recovered_message() -> str:
+    return "✅ ระบบดึงข้อมูลราคาย้อนหลัง (กราฟ) กลับมาทำงานปกติแล้ว"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -387,10 +439,11 @@ def check_pipeline_health(self, now_utc_iso: str | None = None):
                 else:
                     logger.info("pipeline health: telegram not configured, recovery message not sent")
 
-        # bd:shotockviz-5e7.1 — fundamentals (alerted) and history
-        # (diagnostic only). Each wrapped in its OWN try/except: a DB or
-        # Redis hiccup in either must not stop the price-quote result
-        # above from being returned, and must not trip the outer
+        # bd:shotockviz-5e7.1 / bd:shotockviz-5e7.2 — fundamentals
+        # (alerted), history general diagnostic (NOT alerted), and history
+        # liveness canary (alerted). Each wrapped in its OWN try/except: a
+        # DB or Redis hiccup in any of them must not stop the price-quote
+        # result above from being returned, and must not trip the outer
         # except/self.retry() below (which would needlessly re-run the
         # price section too — harmless given its own lock, but pointless).
         try:
@@ -447,13 +500,13 @@ def check_pipeline_health(self, now_utc_iso: str | None = None):
                                 "pipeline health: telegram not configured, fundamentals recovery message not sent"
                             )
 
-            # History — diagnostic only, see module docstring § "History —
-            # DELIBERATELY NOT ALERTED". No lock/down-state keys, no
-            # notify call: `is_stale` is intentionally left None rather
-            # than computed against a threshold nobody can defend.
+            # History general diagnostic — see module docstring § "History
+            # general diagnostic — STILL NOT ALERTED". No lock/down-state
+            # keys, no notify call: `is_stale` is intentionally left None
+            # rather than computed against a threshold nobody can defend
+            # for THIS data-dependent, any-watched-symbol signal.
             watched_symbols = get_watched_symbols()
             if watched_symbols:
-                from workers.helpers.cache_publisher import history_ts_key
                 raw_history = r.mget(
                     [history_ts_key(cache_keys.ohlcv(s, "1D")) for s in watched_symbols]
                 )
@@ -469,10 +522,61 @@ def check_pipeline_health(self, now_utc_iso: str | None = None):
             }
             logger.info("pipeline health: history diagnostic", **status["history"])
 
+            # bd:shotockviz-5e7.2 — History LIVENESS CANARY, ALERTED. See
+            # module docstring § "History liveness canary — ALERTED" for
+            # the full derivation. Computed ONLY from
+            # `history_prefetcher.HISTORY_CANARY_SYMBOLS` — kept entirely
+            # separate from the general diagnostic above, which stays
+            # untrustworthy for the reasons that section documents. Same
+            # claim-before-notify + down/recovered pattern as price and
+            # fundamentals, with its own lock/down-state keys so a history
+            # outage is an independent alert with an independent cooldown.
+            raw_history_canary = r.mget(
+                [history_ts_key(cache_keys.ohlcv(s, "1D")) for s in HISTORY_CANARY_SYMBOLS]
+            )
+            history_canary_status = compute_staleness(
+                raw_history_canary, now_ts, threshold_seconds=HISTORY_STALE_THRESHOLD_SECONDS,
+            )
+            status["history_canary"] = history_canary_status
+
+            if history_canary_status["has_data"]:
+                if history_canary_status["is_stale"]:
+                    logger.warning(
+                        "pipeline health: history pipeline looks stalled",
+                        age_seconds=history_canary_status["age_seconds"],
+                    )
+                    claimed = r.set(
+                        _HISTORY_ALERT_LOCK_KEY, "1", nx=True, ex=ALERT_COOLDOWN_SECONDS,
+                    )
+                    r.set(_HISTORY_DOWN_STATE_KEY, "1")
+                    if claimed:
+                        if settings.telegram_bot_token:
+                            _notify_all(build_history_down_message(history_canary_status["age_seconds"]))
+                        else:
+                            logger.info("pipeline health: telegram not configured, history alert not sent")
+                    else:
+                        logger.info("pipeline health: history already alerted this cooldown window, skipping")
+                else:
+                    history_was_down = r.get(_HISTORY_DOWN_STATE_KEY)
+                    if history_was_down:
+                        logger.info(
+                            "pipeline health: history pipeline recovered",
+                            age_seconds=history_canary_status["age_seconds"],
+                        )
+                        r.delete(_HISTORY_DOWN_STATE_KEY)
+                        r.delete(_HISTORY_ALERT_LOCK_KEY)
+                        if settings.telegram_bot_token:
+                            _notify_all(build_history_recovered_message())
+                        else:
+                            logger.info(
+                                "pipeline health: telegram not configured, history recovery message not sent"
+                            )
+
         except Exception as exc:
             logger.error("pipeline health: fundamentals/history check failed, skipping this cycle", error=str(exc))
             status.setdefault("fundamentals", {"has_data": None, "newest_ts": None, "age_seconds": None, "is_stale": None, "error": "check_failed"})
             status.setdefault("history", {"has_data": None, "newest_ts": None, "age_seconds": None, "is_stale": None, "alerting": False, "error": "check_failed"})
+            status.setdefault("history_canary", {"has_data": None, "newest_ts": None, "age_seconds": None, "is_stale": None, "error": "check_failed"})
 
         return status
 

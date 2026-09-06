@@ -14,6 +14,70 @@ from workers.helpers.task_timing import timed_task
 logger = get_logger(__name__)
 
 
+# ── Liveness canary (bd:shotockviz-5e7.2) ──────────────────────────────────
+#
+# `prefetch_history` below only ever fetches a symbol whose `ohlcv:{symbol}:{tf}`
+# key is COLD (`if redis_client.exists(cache_key): continue`), so its own
+# write activity is a function of "which symbol happened to be cache-cold
+# this beat", not "did the task run". Two other writers
+# (`services/cache_orchestrator.py`, `workers/on_demand_listener.py` — both
+# out of this bd's file scope) can keep a symbol's PRIMARY key warm forever
+# without ever touching the sibling `:ts` freshness marker
+# `cache_and_publish_history()` stamps (see `cache_publisher.history_ts_key`
+# docstring), so a quiet `:ts` canary built on the general watchlist is
+# indistinguishable from history_prefetcher being dead. Full failure-mode
+# writeup: `workers/pipeline_health.py` module docstring, "bd:shotockviz-
+# 5e7.1 — history and fundamentals".
+#
+# Fix, same shape as `price_fetcher.FALLBACK_IDX` (price_fetcher.py:46-51):
+# a small, hardcoded symbol set refetched EVERY run, unconditionally,
+# bypassing the cold-key skip below — so "this worker ran and its write
+# path still works end to end" becomes provable independent of any
+# watchlist.
+#
+# Reuses TWO existing entries from `price_fetcher.FALLBACK_IDX` rather than
+# inventing new symbols — that list is already this project's audited,
+# always-available (24/7, no market-hours dependency, weekday or weekend)
+# canary pool (see price_fetcher.py's module docstring and its
+# `_always`-gated Overview slot): "^GSPC" (US) and "^SET.BK" (Thai), one
+# from each major market region this app covers, so a single ticker's
+# yfinance flakiness (e.g. one instrument temporarily errors from Yahoo)
+# does not read as "the worker is dead" — `pipeline_health.compute_
+# staleness()` already takes the MAX ts across a canary set for exactly
+# this reason (see its own module docstring), so either symbol succeeding
+# keeps the canary fresh.
+#
+# Why not larger — the arithmetic:
+#   `prefetch-history` beats every 30 min (celery_app.py:151-154,
+#   `crontab(minute="*/30")`, MEASURED) = 48 runs/day.
+#   Each canary symbol is now fetched on EVERY run regardless of cache
+#   state, vs. at most once per 6h TTL (4x/day) before this change — net
+#   NEW calls per symbol = 48 - 4 = 44/day.
+#   2 canary symbols x 44 extra calls/day = 88 extra yfinance
+#   `.history(period="6mo")` calls/day, forever. That is materially
+#   heavier per-call than price_fetcher's canary (one lightweight batched
+#   quote request, not a per-symbol 6-month daily-bar download +
+#   PostgreSQL upsert), so this set is NOT sized to match fundamentals's
+#   canary shape (that task's ENTIRE symbol set is already unconditional —
+#   deliberately not mirrored here, because "every watched symbol, every
+#   run" is 40-60 symbols x 48 runs/day of new load, CLAUDE.md "Watchlist
+#   40-60 symbols", not 2 fixed ones). 2 is the minimum that buys the
+#   single-instrument cross-check above; 1 has no redundancy against a
+#   single ticker's transient failure, and 3+ buys no additional liveness
+#   signal over 2 (a third canary's success/failure carries the same
+#   "did the worker run" bit as the second) for 50% more recurring cost.
+#
+# Canary symbols are placed FIRST in the iteration order below (not
+# appended after the watchlist), so their write completes near the START
+# of the task run regardless of how long the rest of a potentially 40-60
+# symbol watchlist takes afterward — this bounds `pipeline_health`'s
+# staleness threshold to "one beat interval + two canary fetches", not
+# "one beat interval + the whole task's worst-case duration" (see
+# `pipeline_health.HISTORY_STALE_THRESHOLD_SECONDS` for how that bound is
+# used).
+HISTORY_CANARY_SYMBOLS = ["^GSPC", "^SET.BK"]
+
+
 # ── Pure helper: parse yfinance DataFrame row → bar dict ──────────────────────
 
 def _parse_bar(idx, row) -> dict | None:
@@ -134,17 +198,29 @@ def prefetch_history(self):
     """Keep OHLCV history cache warm for all watched symbols.
 
     Flow:
-      1. Get all symbols from watchlist + portfolio
-      2. Skip symbols with fresh Redis cache
-      3. Fetch from Yahoo Finance (1D bars, 6mo range)
-      4. Save to PostgreSQL + Redis (6h TTL)
-      5. Publish data_ready notification
+      1. Unconditionally refresh HISTORY_CANARY_SYMBOLS FIRST — bd:shotockviz
+         -5e7.2 liveness canary, bypasses the cache-freshness skip (see
+         module comment above)
+      2. Get all symbols from watchlist + portfolio
+      3. Skip symbols with fresh Redis cache (canaries from step 1 exempt)
+      4. Fetch from Yahoo Finance (1D bars, 6mo range)
+      5. Save to PostgreSQL + Redis (6h TTL)
+      6. Publish data_ready notification
     """
     import redis as redis_lib
     from sqlalchemy import create_engine
     from core.config import settings
 
-    symbols = get_watched_symbols()
+    watched_symbols = get_watched_symbols()
+
+    # bd:shotockviz-5e7.2 — canaries run FIRST, always, even for a symbol
+    # nobody watches; dedupe against a canary symbol that also happens to
+    # be genuinely watched so it is not processed twice in one run.
+    canary_symbols = list(HISTORY_CANARY_SYMBOLS)
+    canary_set = set(HISTORY_CANARY_SYMBOLS)
+    remaining_symbols = [s for s in watched_symbols if s not in canary_set]
+    symbols = canary_symbols + remaining_symbols
+
     if not symbols:
         logger.info("No symbols to prefetch history for")
         return
@@ -154,12 +230,17 @@ def prefetch_history(self):
 
     updated_count = 0
     cached_count = 0
+    canary_refreshed = 0
     timeframe = "1D"
 
     for symbol in symbols:
         try:
             cache_key = cache_keys.ohlcv(symbol, timeframe)
-            if redis_client.exists(cache_key):
+            is_canary = symbol in canary_set
+            # bd:shotockviz-5e7.2 — canary symbols skip the cold-key gate
+            # entirely; every other symbol keeps the original cost-saving
+            # "only fetch if cache expired" behavior unchanged.
+            if not is_canary and redis_client.exists(cache_key):
                 cached_count += 1
                 continue
 
@@ -178,12 +259,17 @@ def prefetch_history(self):
             # is a companion key rather than a change to `bars`' shape).
             # This is the ONLY call site that ever writes it — other paths
             # that touch the same `cache_key` (services/cache_orchestrator.py,
-            # workers/on_demand_listener.py) don't.
+            # workers/on_demand_listener.py) don't. bd:shotockviz-5e7.2 —
+            # for canary symbols, this fresh `:ts` write on every beat IS
+            # the liveness proof `pipeline_health.HISTORY_STALE_THRESHOLD_
+            # SECONDS` alerts on.
             cache_and_publish_history(
                 redis_client, cache_key, cache_bars,
                 ttl=21600, symbol=symbol, timeframe=timeframe,
             )
             updated_count += 1
+            if is_canary:
+                canary_refreshed += 1
 
         except Exception as e:
             logger.debug("Error fetching history", symbol=symbol, error=str(e))
@@ -192,5 +278,6 @@ def prefetch_history(self):
     logger.info(
         "History prefetch complete",
         total=len(symbols), updated=updated_count, cached=cached_count,
+        canary_refreshed=canary_refreshed, canary_total=len(canary_symbols),
         ts=datetime.now(timezone.utc).isoformat(),
     )
