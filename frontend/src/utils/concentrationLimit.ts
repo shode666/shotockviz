@@ -1,4 +1,5 @@
-// bd:shotockviz-649 — "concentration as a limit, not just a display".
+// bd:shotockviz-649 / bd:shotockviz-649.1 — "concentration as a limit, not
+// just a display" / "...no server-side per-user setting".
 //
 // bd:shotockviz-916 shipped the % breakdown (`utils/allocation.ts`) so he can
 // SEE that one name is 74% of the book; this is the follow-on that TELLS him,
@@ -14,15 +15,17 @@
 // field) and is responsible for exactly two things a backend response cannot
 // do for itself:
 //
-//   1. WHERE THE LIMIT LIVES. Not a new column on `users` (this bead's
-//      backend file scope has no migration and does not touch
-//      `models/user.py`) — `limit_pct` is a per-request parameter, and this
-//      is the ONE place it is remembered: localStorage, keyed by user id, so
-//      "he sets it once" is true on this device across sessions. It is NOT
-//      synced across devices/browsers — that is the honest boundary of this
-//      iteration, and whether it should become a real per-user server
-//      setting (its own migration, its own bead, alongside
-//      `users.telegram_chat_id`) is an open question for Oliver.
+//   1. WHERE THE LIMIT LIVES (bd:shotockviz-649.1 changed this). The saved,
+//      cross-device value now lives server-side —
+//      `users.concentration_limit_pct` (migration 20260906_0011), read/written
+//      via `GET/PATCH /settings/trader` (`api/routes/settings.py`,
+//      `components/portfolio/ConcentrationLimitPanel.tsx`). The
+//      `load/saveConcentrationLimitPct` functions below are now a same-device
+//      CACHE, not the source of truth: they make the first render feel
+//      instant (no flash of the default while the settings GET is in
+//      flight) and are what the panel falls back to if that GET or PATCH
+//      fails — never claimed as "saved" in that case, see the panel's own
+//      `saveError` state.
 //
 //   2. Turning the backend's `not_checked` list into the same sentence
 //      `utils/allocation.ts` already builds for `Allocation.excluded` —

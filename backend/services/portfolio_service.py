@@ -1656,21 +1656,20 @@ def curve_fx_plan(
 # as being told. This answers the position-sizing question directly: did any
 # name cross a threshold he set, this session or any other.
 #
-# WHERE THE LIMIT LIVES — decided, not left implicit. Not a new column on
-# `users` (alongside `telegram_chat_id`) and not a new table: this bead's file
-# scope does not include a migration or `models/user.py`, and inventing a
-# schema change outside a declared scope is the same class of move rule 4 /
-# FX-1 forbids for a rate — persistence is not built here. `limit_pct` is
-# instead a per-request parameter
-# (`GET /portfolio/analytics?concentration_limit_pct=`), computed the same way
-# every other number in this module is: given, not stored. The client
-# (`frontend/src/utils/concentrationLimit.ts`) persists the trader's choice in
-# localStorage, so "he sets it once" is true ON HIS DEVICE — the honest
-# boundary of this iteration. Whether the threshold should become a genuine
-# server-side per-user setting (its own migration, its own bead) is an open
-# question for Oliver, not decided here by building around the gap.
-# `DEFAULT_CONCENTRATION_LIMIT_PCT` applies until he has set one, so there is
-# always something to check against instead of nothing.
+# WHERE THE LIMIT LIVES — bd:shotockviz-649 shipped `limit_pct` as a pure
+# per-request parameter (`GET /portfolio/analytics?concentration_limit_pct=`)
+# because that bead's file scope had no migration and did not touch
+# `models/user.py`; the client (`frontend/src/utils/concentrationLimit.ts`)
+# persisted the trader's choice in localStorage only, device-local.
+# bd:shotockviz-649.1 closed that gap: `users.concentration_limit_pct`
+# (models/user.py, migration 20260906_0011) is now the trader's saved,
+# cross-device value, written via `PATCH /settings/trader`
+# (api/routes/settings.py). `build_concentration_check` below still takes a
+# plain `limit_pct: float` and does not read `User` itself — the ONE place
+# that resolves "which limit applies to this request" (explicit query param,
+# else the trader's saved column, else `DEFAULT_CONCENTRATION_LIMIT_PCT`) is
+# `api/routes/portfolio.py`'s `get_analytics`, so this module stays a pure
+# function of the values it's given, same as before.
 #
 # RULE 1 / RULE 5 COLLISION — the one this bead was told to expect. A limit is
 # a statement about a %, and a position in `Allocation.excluded` (rule 2

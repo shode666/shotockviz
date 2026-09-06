@@ -47,6 +47,62 @@ class UserSettingsUpdate(BaseModel):
     )
 
 
+# bd:shotockviz-649.1 / bd:shotockviz-06z.1 — bounds for `users.gap_min_pct`.
+# THE ONE PLACE this range is defined; `workers/gap_list_digest.py` and
+# `api/routes/settings.py` both import it from here rather than restating
+# it. Workers already import from `models.schemas` in this codebase
+# (fundamentals_fetcher.py, on_demand_listener.py) — this is that same
+# existing direction, not a new layering rule.
+#
+# MIN is strictly > 0: a "minimum gap" of 0% filters nothing at all
+# (abs(change_pct) is always >= 0), so 0 is reserved to mean "not a real
+# threshold" and is refused as a chosen value — "unset" is spelled `NULL` /
+# `None`, never `0.0`. MAX=50 is a sanity bound on the INPUT, not a claim
+# that a 50% overnight gap is a normal thing to filter on — it exists so a
+# mistyped "500" doesn't silently become a threshold nothing will ever
+# cross, the same "not a limit" reasoning MAX_CONCENTRATION_LIMIT_PCT
+# documents in services/portfolio_service.py. Concentration's own bounds
+# are NOT restated here — they already live in exactly one place,
+# services/portfolio_service.py's MIN_/MAX_CONCENTRATION_LIMIT_PCT — and
+# api/routes/settings.py imports them from there instead.
+MIN_GAP_MIN_PCT = 0.1
+MAX_GAP_MIN_PCT = 50.0
+
+
+class TraderSettingsResponse(BaseModel):
+    """bd:shotockviz-649.1 / bd:shotockviz-06z.1 — the two per-user numeric
+    thresholds that used to live only client-side (concentration limit:
+    browser localStorage) or not at all (gap-list minimum: no such setting
+    existed). `None` on either field is a real, distinct value — "the
+    trader has not chosen one yet" — and is never silently replaced by a
+    baked-in default at this layer. Each field's actual fallback, if any,
+    is applied only at the point that reads it for a computation
+    (GET /portfolio/analytics for the first, workers/gap_list_digest.py for
+    the second), not here and not in the DB column (see models/user.py)."""
+
+    concentration_limit_pct: Optional[float] = None
+    gap_min_pct: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TraderSettingsUpdate(BaseModel):
+    """PATCH /settings/trader body. Only fields PRESENT in the request JSON
+    are touched — see `body.model_fields_set` in api/routes/settings.py.
+    An explicit `null` clears a previously-chosen value back to "unset";
+    omitting a field entirely leaves its stored value untouched. This
+    distinction is why the fields have no validators here: bounds are
+    re-checked at the route against the ONE canonical range for each
+    (MIN_/MAX_GAP_MIN_PCT above, MIN_/MAX_CONCENTRATION_LIMIT_PCT in
+    services/portfolio_service.py) so a bad value 422s before it ever
+    reaches the ORM, and a schema-level Field(ge=..., le=...) constraint
+    would both duplicate that range AND reject a legitimate explicit
+    `null`."""
+
+    concentration_limit_pct: Optional[float] = None
+    gap_min_pct: Optional[float] = None
+
+
 # ─── Stock ─────────────────────────────────────────────────────────────────
 
 class StockSearchResult(BaseModel):

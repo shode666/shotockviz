@@ -14,6 +14,9 @@ from core.redis import init_redis, close_redis
 from core.security import decode_access_token
 from api.routes import auth, stocks, watchlist, portfolio, alerts, drawings, system, screener
 from api.routes import dashboard, notes, portfolio_performance, admin, backtesting, sr_levels
+# bd:shotockviz-649.1 / bd:shotockviz-06z.1 — aliased: `core.config.settings`
+# (imported above) already owns the bare name `settings` in this module.
+from api.routes import settings as trader_settings_routes
 from api.middleware.rate_limit import RateLimitMiddleware
 from api.middleware.request_id import RequestIDMiddleware
 from schemas.envelope import install_error_envelope
@@ -345,6 +348,7 @@ api_v1.include_router(notes.router)                    # stock notes
 api_v1.include_router(admin.router)                     # admin settings
 api_v1.include_router(backtesting.router)               # strategy backtesting
 api_v1.include_router(system.router)                     # /system/ready, /system/celery-stats, /market/fgi
+api_v1.include_router(trader_settings_routes.router)      # bd:shotockviz-649.1/06z.1 — GET/PATCH /settings/trader
 app.include_router(api_v1)
 
 # 2 unversioned exceptions — old paths, frozen (AC-B9)

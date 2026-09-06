@@ -75,21 +75,43 @@ every other `quote:{symbol}` consumer already carries, it does not introduce
 a new one.
 
 ── What makes an entry worth listing ───────────────────────────────────────
-There is no existing "notable move %" number anywhere in this codebase to
-reuse. Checked: every threshold-shaped alert type (RSI_OVERBOUGHT/OVERSOLD,
-VOLUME_SPIKE, PRICE_ABOVE/BELOW — `workers/alert_checker.py:127-142`) uses
-`alert.value`, a USER-SUPPLIED number, explicitly documented as "NOT a
-hardcoded 70" / "NOT a hardcoded 30". Inventing a global gap-% cutoff here
-would break that same discipline for the same class of number. So this
-digest applies NO magnitude filter: every symbol in the book with a fresh,
-non-fund quote is included, ranked by `abs(change_pct)` descending (biggest
-movers first — same "closest/most-actionable first" ordering
-`sr_proximity_digest.compute_proximity_for_user` already uses), and capped
-at `GAP_LIST_MAX_SYMBOLS_PER_MESSAGE` purely for Telegram's message-length
-limit (same reasoning as that module's `MAX_SYMBOLS_PER_MESSAGE`), not as a
-notability judgement. A per-user configurable minimum-gap setting, mirroring
-`alert.value`, is the correct next step if noise turns out to be a real
-problem in practice — filed as an open question, not guessed at here.
+There is no invented "notable move %" anywhere in this codebase. Checked:
+every threshold-shaped alert type (RSI_OVERBOUGHT/OVERSOLD, VOLUME_SPIKE,
+PRICE_ABOVE/BELOW — `workers/alert_checker.py:127-142`) uses `alert.value`,
+a USER-SUPPLIED number, explicitly documented as "NOT a hardcoded 70" / "NOT
+a hardcoded 30". bd:shotockviz-06z (this module's first cut) applied NO
+magnitude filter at all for exactly that reason, flagging a per-user
+configurable minimum as an open question rather than guessing a number.
+
+bd:shotockviz-06z.1 answers that question the same way `alert.value` answers
+it: `users.gap_min_pct` (models/user.py, migration 20260906_0011) is a
+per-user float the trader sets himself via `PATCH /settings/trader`
+(api/routes/settings.py) — nullable, NO invented default. `NULL` means
+"the trader has not set one", and this module's behaviour for that case is
+UNCHANGED from bd:shotockviz-06z: every symbol with a fresh, non-fund quote
+is included, no matter how small the move. Only when `gap_min_pct` is a
+real, chosen number does `compute_gap_list` drop symbols below it.
+
+Ranking is always by `abs(change_pct)` descending (biggest movers first —
+same "closest/most-actionable first" ordering
+`sr_proximity_digest.compute_proximity_for_user` already uses), and the list
+is separately capped at `GAP_LIST_MAX_SYMBOLS_PER_MESSAGE` purely for
+Telegram's message-length limit (same reasoning as that module's
+`MAX_SYMBOLS_PER_MESSAGE`) — this is a LENGTH guard, applied after any
+`gap_min_pct` filtering, and must never be the thing doing the filtering
+without saying so. `build_gap_list_message` therefore always states which
+case it is in:
+  * `gap_min_pct` is set -> the message states the threshold explicitly
+    ("เกณฑ์ขั้นต่ำ ≥X%"); a list this short is short because of the trader's
+    own choice, and any further truncation past the 20-row cap is reported
+    as "…and N more that also passed the threshold" — a real filter is
+    already doing the narrowing, the cap is genuinely just a length guard.
+  * `gap_min_pct` is NOT set and the cap truncates anyway (more than 20
+    symbols have a fresh quote) -> the message says so explicitly: the
+    20 shown are not "the 20 notable movers", they are "the 20 biggest of
+    however many the trader's book happened to produce today", and it
+    names that total and points at Settings — otherwise the cap is a
+    de-facto, unstated filter, which is exactly what the parent bd forbids.
 """
 from __future__ import annotations
 
@@ -116,8 +138,13 @@ RUN_LOCK_TTL_SECONDS = 6 * 3600
 # Pure functions (unit-testable, deterministic, no I/O)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_gap_list(book_symbols: set[str], quotes_by_symbol: dict[str, dict | None]) -> list[dict]:
-    """Return the overnight-gap rows for one user's book (spec: bd:shotockviz-06z).
+def compute_gap_list(
+    book_symbols: set[str],
+    quotes_by_symbol: dict[str, dict | None],
+    min_gap_pct: float | None = None,
+) -> list[dict]:
+    """Return the overnight-gap rows for one user's book (spec: bd:shotockviz-06z,
+    bd:shotockviz-06z.1).
 
     `quotes_by_symbol[symbol]` is the ALREADY-RESOLVED quote dict (the
     task shell does one batch `quote:{symbol}` MGET across every user's
@@ -136,11 +163,21 @@ def compute_gap_list(book_symbols: set[str], quotes_by_symbol: dict[str, dict | 
         "not applicable" as "measured, unchanged", which is a fabrication
         of a different kind than a missing value);
       - `price` is a positive number and `change_pct` is present (same
-        "no usable quote" doctrine as `portfolio_service.usable_price`).
+        "no usable quote" doctrine as `portfolio_service.usable_price`);
+      - `min_gap_pct` is `None` (the trader has not set a threshold — see
+        module docstring), OR `abs(change_pct) >= min_gap_pct`.
 
-    Sorted by `abs(change_pct)` descending — biggest movers first, no
-    magnitude cutoff (see module docstring "What makes an entry worth
-    listing").
+    `min_gap_pct=None` is the default and reproduces bd:shotockviz-06z's
+    original no-filter behaviour exactly — a 0.0-point move survives when
+    no threshold is set, and is dropped the instant one is (a real,
+    trader-chosen `min_gap_pct`, never 0.0 itself — see models/schemas.py's
+    `MIN_GAP_MIN_PCT`).
+
+    Sorted by `abs(change_pct)` descending — biggest movers first (see
+    module docstring "What makes an entry worth listing"). The caller
+    applies the separate `GAP_LIST_MAX_SYMBOLS_PER_MESSAGE` length cap, not
+    this function — filtering and length-capping are two different
+    decisions and must stay distinguishable to the reader of the message.
     """
     results: list[dict] = []
     for symbol in book_symbols:
@@ -162,6 +199,8 @@ def compute_gap_list(book_symbols: set[str], quotes_by_symbol: dict[str, dict | 
             continue
         if price <= 0:
             continue
+        if min_gap_pct is not None and abs(change_pct) < min_gap_pct:
+            continue  # below the trader's own chosen threshold — not a fabricated cutoff
 
         results.append({"symbol": symbol, "price": price, "change_pct": change_pct})
 
@@ -169,7 +208,12 @@ def compute_gap_list(book_symbols: set[str], quotes_by_symbol: dict[str, dict | 
     return results
 
 
-def build_gap_list_message(results: list[dict], book_count: int, today_str: str) -> str:
+def build_gap_list_message(
+    results: list[dict],
+    book_count: int,
+    today_str: str,
+    min_gap_pct: float | None = None,
+) -> str:
     """Build the Thai digest message text.
 
     `book_count` is the size of the user's FULL book (watchlist ∪ open
@@ -180,19 +224,42 @@ def build_gap_list_message(results: list[dict], book_count: int, today_str: str)
     instead of substituting a number that looks right, or silently sending
     nothing (which would be indistinguishable from "the product ran and
     found no gaps", a false claim).
+
+    `results` is ALREADY filtered by `min_gap_pct` (`compute_gap_list`) —
+    this function only decides what to SAY about that, and about the
+    separate `GAP_LIST_MAX_SYMBOLS_PER_MESSAGE` length cap applied below:
+    bd:shotockviz-06z.1 requires the cap to read as a length guard, never
+    an unstated filter. Two cases when the cap actually truncates
+    (`remaining > 0`):
+      * `min_gap_pct` is set -> a real threshold already did the
+        narrowing; the cap is genuinely just protecting message length.
+      * `min_gap_pct` is `None` -> nothing filtered these symbols by
+        magnitude at all; the cap alone decided what's shown, so the
+        message says that explicitly rather than let the 20 shown read as
+        "the 20 notable movers".
     """
     header = f"📊 Gap ข้ามคืน ก่อน US pre-market ({today_str})"
+    threshold_line = (
+        f"เกณฑ์ขั้นต่ำที่ตั้งไว้: ≥{min_gap_pct:.1f}%" if min_gap_pct is not None else None
+    )
 
     if not results:
-        return (
-            f"{header}\n\n"
+        lines = [
+            header,
+            "",
             f"ยังไม่มีราคาสดสำหรับหุ้น/กองทุนใน watchlist หรือพอร์ตของคุณตอนนี้ "
             f"(ทั้งหมด {book_count} รายการ) — อาจเป็นเพราะยังไม่ถึงรอบดึงราคาพรีมาร์เก็ต "
-            f"ลองเปิดดูอีกครั้งในอีกไม่กี่นาที"
-        )
+            f"ลองเปิดดูอีกครั้งในอีกไม่กี่นาที",
+        ]
+        if threshold_line:
+            lines.append(threshold_line)
+        return "\n".join(lines)
 
     shown = results[:GAP_LIST_MAX_SYMBOLS_PER_MESSAGE]
-    lines = [header, ""]
+    lines = [header]
+    if threshold_line:
+        lines.append(threshold_line)
+    lines.append("")
     for r in shown:
         is_up = r["change_pct"] >= 0
         emoji = "🟢" if is_up else "🔴"
@@ -203,6 +270,15 @@ def build_gap_list_message(results: list[dict], book_count: int, today_str: str)
     if remaining > 0:
         lines.append("")
         lines.append(f"…และอีก {remaining} ตัว")
+        if min_gap_pct is None:
+            # The cap, not a threshold, decided what's shown — say so
+            # explicitly (bd:shotockviz-06z.1: the cap must never be a
+            # de-facto filter that goes unstated).
+            lines.append(
+                f"แสดงเฉพาะ {GAP_LIST_MAX_SYMBOLS_PER_MESSAGE} อันดับ Gap สูงสุด "
+                f"(จำกัดความยาวข้อความ ไม่ใช่เกณฑ์คัดกรอง — ยังไม่ได้ตั้งเกณฑ์ % ขั้นต่ำ "
+                f"ตั้งได้ที่หน้า Settings)"
+            )
 
     lines.append("")
     lines.append(f"มีราคาสด {len(results)} จาก {book_count} รายการใน watchlist/พอร์ตของคุณ")
@@ -284,16 +360,21 @@ def send_gap_list_digest(self, now_utc_iso: str | None = None):
 
         engine = create_engine(settings.sync_database_url)
         with Session(engine) as db:
+            # bd:shotockviz-06z.1 — `User.gap_min_pct` added to this SAME
+            # select (not a second query): TestBatchQueryNoNPlus1 pins this
+            # task at exactly 3 SELECTs total, and a per-user threshold that
+            # cost a 4th would be the same N+1 regression that test guards.
             eligible_rows = db.execute(
-                select(User.id, User.telegram_chat_id).where(
+                select(User.id, User.telegram_chat_id, User.gap_min_pct).where(
                     User.telegram_chat_id.is_not(None), User.is_active == True
                 )
             ).all()
             if not eligible_rows:
                 logger.info("gap list digest: no eligible users")
                 return
-            eligible_ids = {uid for uid, _chat_id in eligible_rows}
-            chat_id_by_user = dict(eligible_rows)
+            eligible_ids = {uid for uid, _chat_id, _gap_min in eligible_rows}
+            chat_id_by_user = {uid: chat_id for uid, chat_id, _gap_min in eligible_rows}
+            gap_min_pct_by_user = {uid: gap_min for uid, _chat_id, gap_min in eligible_rows}
 
             watchlist_rows = db.execute(
                 select(WatchlistItem.symbol, Watchlist.user_id)
@@ -369,8 +450,9 @@ def send_gap_list_digest(self, now_utc_iso: str | None = None):
 
         for user_id, book in book_by_user.items():
             try:
-                results = compute_gap_list(book, quotes_by_symbol)
-                message = build_gap_list_message(results, len(book), today_str)
+                min_gap_pct = gap_min_pct_by_user.get(user_id)
+                results = compute_gap_list(book, quotes_by_symbol, min_gap_pct=min_gap_pct)
+                message = build_gap_list_message(results, len(book), today_str, min_gap_pct=min_gap_pct)
                 # One user's failure must not block the rest —
                 # _send_telegram_message itself never raises; this
                 # try/except is the outer safety net for anything else.

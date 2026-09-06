@@ -24,7 +24,8 @@ interface ConcentrationLimitPanelProps {
 }
 
 /**
- * bd:shotockviz-649 — "concentration as a limit, not just a display".
+ * bd:shotockviz-649 / bd:shotockviz-649.1 — "concentration as a limit, not
+ * just a display" / "...no server-side per-user setting".
  *
  * bd:shotockviz-916's `AllocationPanel` (PortfolioPage.tsx) lets him SEE the
  * % breakdown; this TELLS him when a name crosses a threshold he set,
@@ -45,14 +46,25 @@ interface ConcentrationLimitPanelProps {
  * and `utils/concentrationLimit.ts` (this file's only local logic: bounds
  * validation, localStorage persistence, and the "not checked" sentence).
  *
- * WHERE THE LIMIT LIVES: localStorage, keyed by `userId` — see
- * `utils/concentrationLimit.ts`'s module docstring for why, and the open
- * question for Oliver about moving it server-side.
+ * WHERE THE LIMIT LIVES (bd:shotockviz-649.1): `GET/PATCH /settings/trader`
+ * (`users.concentration_limit_pct`, api/routes/settings.py) is now the
+ * source of truth, so the choice follows the trader across devices.
+ * `utils/concentrationLimit.ts`'s localStorage helpers are kept as a
+ * same-device CACHE only — they make the initial render feel instant
+ * before the settings GET below resolves, and they are what the number
+ * degrades to if that GET fails (never worse than bd:shotockviz-649's
+ * original behaviour, never claimed as "saved" when it wasn't). A PATCH
+ * failure is surfaced inline (`saveError` below) — bd:shotockviz-649.1's
+ * acceptance criteria is explicit that a limit the trader believes is
+ * saved and is not is worse than no limit at all, so this must never show
+ * "saved" on a rejected or failed request.
  */
 export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimitPanelProps) {
     const [limitPct, setLimitPct] = useState<number>(() => loadConcentrationLimitPct(userId));
     const [inputValue, setInputValue] = useState<string>(() => String(loadConcentrationLimitPct(userId)));
     const [inputError, setInputError] = useState<string | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
+    const [saving, setSaving] = useState(false);
     const [concentration, setConcentration] = useState<ConcentrationInput | null>(null);
     const [loading, setLoading] = useState(false);
 
@@ -65,6 +77,32 @@ export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimi
         const restored = loadConcentrationLimitPct(userId);
         setLimitPct(restored);
         setInputValue(String(restored));
+    }, [userId]);
+
+    // bd:shotockviz-649.1 — hydrate from the trader's SAVED server-side
+    // value once per user. Runs after the localStorage restore above so the
+    // input never flashes empty; if the trader has a saved value it wins
+    // (it is the cross-device truth), if the GET fails or the trader has
+    // genuinely never set one (`null`), the localStorage/default value from
+    // above is left standing — never worse than bd:shotockviz-649.
+    useEffect(() => {
+        if (userId == null) return;
+        let cancelled = false;
+        api.get('/settings/trader')
+            .then((res) => {
+                if (cancelled) return;
+                const saved = res.data?.concentration_limit_pct;
+                if (saved != null && isValidConcentrationLimitPct(saved)) {
+                    setLimitPct(saved);
+                    setInputValue(String(saved));
+                    saveConcentrationLimitPct(userId, saved); // keep the device cache aligned
+                }
+            })
+            .catch(() => {
+                // Degrade to the localStorage/default value already set —
+                // never block the panel on this fetch.
+            });
+        return () => { cancelled = true; };
     }, [userId]);
 
     const hasBook = hasAllocation(analytics?.allocation);
@@ -93,15 +131,29 @@ export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimi
 
     if (!hasBook) return null;
 
-    const handleSave = () => {
+    const handleSave = async () => {
         const parsed = Number(inputValue);
         if (!isValidConcentrationLimitPct(parsed)) {
             setInputError(`ระบุตัวเลข ${MIN_CONCENTRATION_LIMIT_PCT}-${MAX_CONCENTRATION_LIMIT_PCT}`);
             return;
         }
         setInputError(null);
-        saveConcentrationLimitPct(userId, parsed);
-        setLimitPct(parsed); // triggers the effect above -> re-check against the server
+        setSaveError(null);
+        setSaving(true);
+        try {
+            // bd:shotockviz-649.1 — the server write IS the save; localStorage
+            // is only updated AFTER it succeeds, so a failed PATCH never
+            // leaves the trader believing a value is saved when the server
+            // never accepted it (the interceptor also toasts the backend's
+            // own error detail, e.g. an out-of-range value).
+            await api.patch('/settings/trader', { concentration_limit_pct: parsed });
+            saveConcentrationLimitPct(userId, parsed);
+            setLimitPct(parsed); // triggers the effect above -> re-check against the server
+        } catch {
+            setSaveError('บันทึกไม่สำเร็จ — ค่าที่แสดงอยู่อาจไม่ตรงกับที่บันทึกไว้ ลองใหม่อีกครั้ง');
+        } finally {
+            setSaving(false);
+        }
     };
 
     const breached = hasConcentrationBreach(concentration);
@@ -134,17 +186,20 @@ export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimi
                     onChange={(e) => setInputValue(e.target.value)}
                     className="w-20 text-xs px-2 py-1 rounded-lg outline-none"
                     style={{ background: 'var(--color-input-bg)', border: '1px solid var(--color-border)' }}
-                    aria-describedby={inputError ? 'concentration-limit-error' : undefined}
+                    aria-describedby={inputError || saveError ? 'concentration-limit-error' : undefined}
+                    disabled={saving}
                 />
                 <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>%</span>
-                <button onClick={handleSave} className="btn-accent text-[11px] px-3 py-1">บันทึก</button>
+                <button onClick={handleSave} disabled={saving} className="btn-accent text-[11px] px-3 py-1 disabled:opacity-60">
+                    {saving ? 'กำลังบันทึก…' : 'บันทึก'}
+                </button>
                 {loading && (
                     <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>กำลังตรวจสอบ…</span>
                 )}
             </div>
-            {inputError && (
+            {(inputError || saveError) && (
                 <p id="concentration-limit-error" role="alert" className="text-[11px] mb-2" style={{ color: 'var(--color-red)' }}>
-                    {inputError}
+                    {inputError || saveError}
                 </p>
             )}
 

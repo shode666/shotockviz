@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import Enum as PyEnum
-from sqlalchemy import String, DateTime, Enum, ForeignKey, func
+from sqlalchemy import String, DateTime, Enum, Float, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
 
@@ -44,6 +44,27 @@ class User(Base):
     # the sole write path (`PATCH /api/v1/auth/settings`) already validates
     # before this column is ever set, so the invariant is not weakened.
     telegram_chat_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # bd:shotockviz-649.1 / bd:shotockviz-06z.1 — two per-user thresholds that
+    # used to live nowhere server-side (concentration limit: browser
+    # localStorage only, frontend/src/utils/concentrationLimit.ts; gap-list
+    # minimum: didn't exist at all, bd:shotockviz-06z shipped no magnitude
+    # filter on purpose). Both nullable with NO server default: `NULL` here
+    # means "the trader has not chosen one yet" and is a distinct, readable
+    # state from "chose a value" — the applicable fallback (DEFAULT_
+    # CONCENTRATION_LIMIT_PCT for the first, "no filter at all" for the
+    # second) is applied where each is READ (api/routes/portfolio.py,
+    # workers/gap_list_digest.py), never baked into the column itself, so an
+    # unset column can never be misread as "the trader picked the default".
+    # Bounds live once each — MIN_/MAX_CONCENTRATION_LIMIT_PCT in
+    # services/portfolio_service.py, MIN_/MAX_GAP_MIN_PCT in
+    # models/schemas.py — enforced at the one write path,
+    # api/routes/settings.py (PATCH /settings/trader), the same posture as
+    # telegram_chat_id's numeric-shape check being enforced at its own sole
+    # write path (models/schemas.py's UserSettingsUpdate, see the note
+    # above). Additive, migration 20260906_0011 — no existing row is
+    # touched, both columns are NULL for every current user.
+    concentration_limit_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gap_min_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

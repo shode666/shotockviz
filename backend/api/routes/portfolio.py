@@ -348,30 +348,43 @@ async def get_analytics(
     # a 0% slice.
     allocation = portfolio_service.build_allocation(valued, totals)
 
-    # bd:shotockviz-649 — the same allocation, checked against a LIMIT. The
-    # limit itself is not persisted server-side this iteration (see
-    # services/portfolio_service.py's "WHERE THE LIMIT LIVES" note): the client
-    # sends its own remembered choice, and this route is the one place that
-    # validates it and applies it to the one `allocation` object above — so a
-    # bad query value 422s here rather than silently becoming "no limit" or
-    # "everything breached" downstream.
-    if concentration_limit_pct is None:
-        limit_pct = portfolio_service.DEFAULT_CONCENTRATION_LIMIT_PCT
-    elif not (
-        portfolio_service.MIN_CONCENTRATION_LIMIT_PCT
-        <= concentration_limit_pct
-        <= portfolio_service.MAX_CONCENTRATION_LIMIT_PCT
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=(
-                f"concentration_limit_pct must be between "
-                f"{portfolio_service.MIN_CONCENTRATION_LIMIT_PCT} and "
-                f"{portfolio_service.MAX_CONCENTRATION_LIMIT_PCT}"
-            ),
-        )
-    else:
+    # bd:shotockviz-649 / bd:shotockviz-649.1 — the same allocation, checked
+    # against a LIMIT. Precedence, in order:
+    #   1. an explicit `?concentration_limit_pct=` query value — a one-off
+    #      preview/override for THIS request only, never persisted. Kept for
+    #      ConcentrationLimitPanel.tsx's existing "type a number, see the
+    #      check react immediately" flow, which must not round-trip through
+    #      a save before it can show a result.
+    #   2. `user.concentration_limit_pct` — the trader's saved choice
+    #      (bd:shotockviz-649.1, models/user.py, written via
+    #      PATCH /settings/trader), read back here so a caller that passes
+    #      NO query param at all (a future dashboard widget, or this panel
+    #      before its own settings fetch resolves) still sees the trader's
+    #      real choice instead of silently falling back to the default.
+    #   3. `DEFAULT_CONCENTRATION_LIMIT_PCT` — only once neither of the above
+    #      supplied a value, i.e. the trader has genuinely never set one.
+    # This route remains the one place that validates the value (a bad query
+    # value 422s here rather than silently becoming "no limit" or "everything
+    # breached" downstream) and the one place that applies it to `allocation`.
+    if concentration_limit_pct is not None:
+        if not (
+            portfolio_service.MIN_CONCENTRATION_LIMIT_PCT
+            <= concentration_limit_pct
+            <= portfolio_service.MAX_CONCENTRATION_LIMIT_PCT
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"concentration_limit_pct must be between "
+                    f"{portfolio_service.MIN_CONCENTRATION_LIMIT_PCT} and "
+                    f"{portfolio_service.MAX_CONCENTRATION_LIMIT_PCT}"
+                ),
+            )
         limit_pct = concentration_limit_pct
+    elif user.concentration_limit_pct is not None:
+        limit_pct = user.concentration_limit_pct
+    else:
+        limit_pct = portfolio_service.DEFAULT_CONCENTRATION_LIMIT_PCT
     concentration = portfolio_service.build_concentration_check(allocation, limit_pct)
 
     # bd:shotockviz-43y — exposure to loss. Same `valued`, same `totals`, so the

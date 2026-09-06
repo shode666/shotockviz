@@ -4,7 +4,18 @@ import toast from 'react-hot-toast';
 import { Settings as SettingsIcon, Palette, Bell, Moon, Sun, BellOff } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import authService from '@/services/authService';
+import api from '@/services/api';
 import { getCurrentSection } from '@/utils/scrollspy';
+
+// bd:shotockviz-06z.1 — restates `models.schemas.MIN_/MAX_GAP_MIN_PCT`
+// (backend/models/schemas.py), the ONE place these bounds are actually
+// enforced (api/routes/settings.py PATCH /settings/trader). Same
+// client/server duplication risk `utils/concentrationLimit.ts` already
+// documents for its own MIN/MAX constants — restated here rather than
+// invented, and validated client-side only so a bad value never round-trips
+// before the server would reject it anyway.
+const MIN_GAP_MIN_PCT = 0.1;
+const MAX_GAP_MIN_PCT = 50.0;
 
 const CATEGORIES = [
     { key: 'general', href: '#general', label: 'General', Icon: Palette },
@@ -34,6 +45,13 @@ export default function SettingsPage() {
     // using the backend's Thai error message, so the local catch below
     // only needs to reset the saving state, not duplicate the toast.
     const [telegramChatId, setTelegramChatId] = useState('');
+    // bd:shotockviz-06z.1 — `''` means "unset" (matches `users.gap_min_pct`
+    // NULL, i.e. no filter on the 20:00 ICT gap digest — see
+    // workers/gap_list_digest.py). Deliberately never defaulted to a number
+    // here: an empty input reads back as `null` on save, not `0` or any
+    // other invented starting value.
+    const [gapMinPct, setGapMinPct] = useState('');
+    const [gapMinPctError, setGapMinPctError] = useState<string | null>(null);
     const [isLoadingSettings, setIsLoadingSettings] = useState(true);
     const [isSaving, setIsSaving] = useState(false);
 
@@ -94,24 +112,63 @@ export default function SettingsPage() {
             })
             .catch(() => { /* silent — interceptor's 401/404 handling already applies */ })
             .finally(() => { if (!cancelled) setIsLoadingSettings(false); });
+        // bd:shotockviz-06z.1 — a separate GET, a separate endpoint
+        // (api/routes/settings.py, not auth.py — see that module's
+        // docstring for why), so a failure here degrades ONLY the gap
+        // threshold field, never blocks telegram settings from loading.
+        api.get('/settings/trader')
+            .then((res) => {
+                if (cancelled) return;
+                const value = res.data?.gap_min_pct;
+                setGapMinPct(value == null ? '' : String(value));
+            })
+            .catch(() => { /* leave as "" (unset) — never guess a number */ });
         return () => { cancelled = true; };
     }, []);
 
     const handleSave = async () => {
+        setGapMinPctError(null);
+        let gapMinPctPayload: number | null = null;
+        if (gapMinPct.trim() !== '') {
+            const parsed = Number(gapMinPct);
+            if (!Number.isFinite(parsed) || parsed < MIN_GAP_MIN_PCT || parsed > MAX_GAP_MIN_PCT) {
+                setGapMinPctError(`ระบุตัวเลข ${MIN_GAP_MIN_PCT}-${MAX_GAP_MIN_PCT} หรือเว้นว่างไว้เพื่อไม่ตั้งเกณฑ์`);
+                return;
+            }
+            gapMinPctPayload = parsed;
+        }
+
         setIsSaving(true);
-        try {
-            await authService.updateSettings({ telegram_chat_id: telegramChatId || null });
+        // bd:shotockviz-06z.1 — two independent settings, two independent
+        // endpoints (telegram_chat_id has a real side effect — a live test
+        // message — gap_min_pct never does), so a failure in one must not
+        // hide whether the other one succeeded. Promise.allSettled, not
+        // Promise.all: an unhandled rejection from the second call must
+        // never suppress the first call's own success/toast handling.
+        const [telegramResult, gapResult] = await Promise.allSettled([
+            authService.updateSettings({ telegram_chat_id: telegramChatId || null }),
+            api.patch('/settings/trader', { gap_min_pct: gapMinPctPayload }),
+        ]);
+
+        if (telegramResult.status === 'fulfilled') {
             toast.success(
                 telegramChatId
                     ? 'บันทึกแล้ว — ส่งข้อความทดสอบไปที่ Telegram สำเร็จ ✅'
                     : 'บันทึกการตั้งค่าแล้ว'
             );
-        } catch {
-            // Error toast already shown by the axios response interceptor
-            // (api.ts) using the backend's clear failure reason.
-        } finally {
-            setIsSaving(false);
         }
+        // A rejected telegramResult already toasted via the axios response
+        // interceptor (api.ts) using the backend's own failure reason —
+        // never duplicated here.
+        if (gapResult.status === 'rejected') {
+            // The interceptor also toasts this (e.g. a 422 out-of-range
+            // value), but the gap field gets its OWN inline error too:
+            // bd:shotockviz-06z.1 must never let this field read as saved
+            // when the request the trader just made was rejected.
+            setGapMinPctError('บันทึกเกณฑ์ Gap ไม่สำเร็จ ลองใหม่อีกครั้ง');
+        }
+
+        setIsSaving(false);
     };
 
     return (
@@ -196,10 +253,46 @@ export default function SettingsPage() {
                                     คุยกับ @ShotockVizBot แล้วพิมพ์ /start เพื่อรับ chat id — ใช้รับ alert ผ่าน Telegram
                                 </p>
                             </div>
+
+                            {/* bd:shotockviz-06z.1 — the 20:00 ICT overnight-gap digest
+                                (workers/gap_list_digest.py) has no invented magnitude
+                                cutoff; this is where the trader states his own, if he
+                                wants one at all. Empty = unset = every symbol with a
+                                fresh quote is listed, exactly as bd:shotockviz-06z
+                                originally shipped it — never a guessed starting number. */}
+                            <div className="max-w-[420px] mb-4">
+                                <label htmlFor="settings-gap-min-pct" className="text-[10px] uppercase tracking-wider mb-1.5 block font-bold" style={{ color: 'var(--color-text-sub)' }}>
+                                    เกณฑ์ขั้นต่ำ Gap พรีมาร์เก็ต (%)
+                                </label>
+                                <input
+                                    id="settings-gap-min-pct"
+                                    className="input-field mono"
+                                    type="number"
+                                    inputMode="decimal"
+                                    step="0.1"
+                                    min={MIN_GAP_MIN_PCT}
+                                    max={MAX_GAP_MIN_PCT}
+                                    placeholder="ไม่ตั้งเกณฑ์ (แสดงทุกตัว, สูงสุด 20)"
+                                    value={gapMinPct}
+                                    onChange={(e) => setGapMinPct(e.target.value)}
+                                    disabled={isLoadingSettings || isSaving}
+                                    aria-describedby="settings-gap-min-pct-hint"
+                                />
+                                <p id="settings-gap-min-pct-hint" className="mt-2 text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                                    สรุป Gap ข้ามคืนทาง Telegram ทุกวัน 20:00 น. จะแสดงเฉพาะหุ้น/กองทุนที่เปลี่ยนแปลงอย่างน้อยเท่านี้ —
+                                    เว้นว่างไว้เพื่อแสดงทุกตัวในพอร์ต/watchlist (สูงสุด 20 รายการต่อข้อความ)
+                                </p>
+                                {gapMinPctError && (
+                                    <p role="alert" className="mt-1 text-[11px]" style={{ color: 'var(--color-red)' }}>
+                                        {gapMinPctError}
+                                    </p>
+                                )}
+                            </div>
+
                             <div className="max-w-[420px] rounded-xl p-3 flex items-start gap-2" style={{ border: '1px dashed var(--color-border-strong)' }}>
                                 <BellOff size={12} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden="true" style={{ color: 'var(--color-text-sub)' }} />
                                 <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>
-                                    การแจ้งเตือนเพิ่มเติม — Quiet hours · สรุปรายวัน · ช่องทางอื่น (เร็วๆ นี้)
+                                    การแจ้งเตือนเพิ่มเติม — Quiet hours · ช่องทางอื่น (เร็วๆ นี้)
                                 </span>
                             </div>
                         </Section>
