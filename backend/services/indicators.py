@@ -13,10 +13,22 @@ Pure functions, no I/O: price/volume lists in, numbers out.
 from __future__ import annotations
 
 
-def compute_rsi(closes: list[float], period: int = 14) -> float:
-    """Wilder smoothed RSI (computed from list of close prices)."""
+def compute_rsi(closes: list[float], period: int = 14) -> float | None:
+    """Wilder smoothed RSI (computed from list of close prices).
+
+    Returns None if there are fewer than `period + 1` closes.
+
+    bd:shotockviz-kmi — sibling of bd:shotockviz-0x0 (compute_sma). This
+    used to return 50.0 (dead-centre "Neutral") on insufficient data,
+    which is indistinguishable from a genuinely neutral RSI — the
+    screener's rsi_filter=="neutral" (30 <= rsi <= 70) and MACD-driven
+    "Buy"/"Neutral" signal path (services/indicators._compute_signal, via
+    api/routes/screener.py) would both silently accept a symbol whose RSI
+    was never actually computed. Callers must treat None as "cannot
+    evaluate" and exclude, never compare it as if it were a real value.
+    """
     if len(closes) < period + 1:
-        return 50.0
+        return None
 
     deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
     gains = [d if d > 0 else 0 for d in deltas]
@@ -90,7 +102,7 @@ def compute_sma(closes: list[float], period: int) -> float | None:
     return sum(closes[-period:]) / period
 
 
-def compute_volume_ratio(volumes: list[float], lookback: int = 20) -> float:
+def compute_volume_ratio(volumes: list[float], lookback: int = 20) -> float | None:
     """Latest volume ÷ average volume over the preceding `lookback` bars.
 
     Same ratio the screener's Volume filter has always used (formerly
@@ -98,9 +110,19 @@ def compute_volume_ratio(volumes: list[float], lookback: int = 20) -> float:
     what `workers/alert_checker.py` compares a VOLUME_SPIKE alert's
     user-supplied multiplier against — one definition, one place it can
     drift from itself.
+
+    Returns None if there are fewer than `lookback` volumes to average.
+
+    bd:shotockviz-kmi — sibling of bd:shotockviz-0x0 (compute_sma). This
+    used to fall back to `vol_avg = 1` on insufficient data, which made
+    the "ratio" just the raw current volume — millions for any real
+    symbol — satisfying both the screener's "> 2x Average" and "> 1.5x
+    Average" filters every single time. Worse than the MA200 case (which
+    at least failed toward zero): a caller must treat None as "cannot
+    evaluate" and exclude, never compare it as if it were a real ratio.
     """
-    if not volumes:
-        return 0.0
+    if len(volumes) < lookback:
+        return None
     vol_now = volumes[-1]
-    vol_avg = sum(volumes[-lookback:]) / len(volumes[-lookback:]) if len(volumes) >= lookback else 1
+    vol_avg = sum(volumes[-lookback:]) / lookback
     return vol_now / vol_avg if vol_avg > 0 else 0.0

@@ -56,13 +56,17 @@ def _compute_signal(rsi: float, macd_val: float, sig_val: float) -> str:
 
 # ─── Filter param mappers ───────────────────────────────────────────────────
 
-def _matches_rsi(rsi: float, flt: str) -> bool:
+def _matches_rsi(rsi: float | None, flt: str) -> bool:
+    """rsi is None when insufficient history to compute it
+    (bd:shotockviz-kmi) — must never satisfy a specific filter; "any"
+    doesn't test RSI at all so it still passes, mirroring how
+    `_matches_price` already treats a None ma200/ma50."""
     if flt == "oversold":
-        return rsi < 30
+        return rsi is not None and rsi < 30
     if flt == "neutral":
-        return 30 <= rsi <= 70
+        return rsi is not None and 30 <= rsi <= 70
     if flt == "overbought":
-        return rsi > 70
+        return rsi is not None and rsi > 70
     return True  # "any"
 
 
@@ -170,6 +174,22 @@ def _evaluate_symbol(
     ma200 = _compute_sma(closes, 200)
 
     vol_ratio = _compute_volume_ratio(volumes)
+
+    # bd:shotockviz-kmi — RSI (needs 15 closes) and volume ratio (needs 20
+    # volumes) can also return None on insufficient data, same as
+    # ma200/ma50 below (bd:shotockviz-0x0). The `len(bars) < 26` guard at
+    # the top of this function makes this branch unreachable today, but
+    # do not rely on a different, unrelated length check elsewhere to
+    # keep it that way — that is exactly the arrangement that let the
+    # MA200 bug live. Exclude explicitly, the same way ma200/ma50 already
+    # are below, rather than letting a None reach `_matches_rsi`/
+    # `_compute_signal`/the result payload as if it were a real number.
+    if rsi is None or vol_ratio is None:
+        logger.debug(
+            "Screener: excluded — insufficient history for RSI/volume ratio",
+            symbol=bars[0].symbol, bars=len(bars),
+        )
+        return None
 
     # Apply all filters with early exit (guard clauses)
     if not _matches_rsi(rsi, rsi_filter):

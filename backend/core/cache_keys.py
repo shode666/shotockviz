@@ -34,7 +34,18 @@ from __future__ import annotations
 
 
 def quote(symbol: str) -> str:
-    """Current-price cache key."""
+    """Current-price cache key.
+
+    Contract every reader relies on: whatever is under this key is a LIVE
+    equity quote, at most ~2 minutes stale (price_fetcher/cache_publisher
+    write it with a 120s TTL). bd:shotockviz-3ir — do not setex a
+    different data shape or staleness contract (e.g. a once-daily Thai
+    fund NAV, 86400s TTL) under this key even if it is "quote-shaped";
+    use `fund()` below and give the consumer an explicit fund-cache read
+    path instead (see api/routes/stocks/quotes.py / portfolio.py for the
+    existing pattern). Two writers with different value shapes/staleness
+    in one key namespace is the same bug class as bd:shotockviz-983.
+    """
     return f"quote:{symbol}"
 
 

@@ -415,7 +415,48 @@ def fetch_thai_fund_navs(self):
                 nav_val = result["nav"]
                 nav_date = result.get("date") or datetime.now(timezone.utc).isoformat()
 
-                # 1) Cache as fund:{symbol} (fund-specific data with NAV date)
+                # Cache as fund:{symbol} ONLY (fund-specific data with NAV date).
+                #
+                # bd:shotockviz-3ir — this used to ALSO setex the same payload
+                # (reshaped) under cache_keys.quote(symbol) "so portfolio,
+                # sidebar, dashboard read it without special fund logic". That
+                # put two independent writers in the same key namespace with
+                # different value shapes AND different staleness contracts:
+                # this task's 86400s TTL (a NAV genuinely only changes once a
+                # day) vs. price_fetcher/cache_publisher's 120s TTL for a live
+                # equity quote (workers/helpers/cache_publisher.py:38). Every
+                # reader of quote:{symbol} assumes "at most ~2 minutes old,
+                # currently trading" — a day-old NAV parked there for up to
+                # 24h is a silent lie to that contract, which is exactly the
+                # shape of bug bd:shotockviz-983 already cost this project
+                # once (a reader trusting a key nothing-it-expected wrote).
+                #
+                # Verified 2026-09-06 on the dev stack (not prod): 25 active
+                # market='FUND' symbols in `stocks`, 0 with an active alert,
+                # 0 in any watchlist, 0 in any portfolio — so removing the
+                # dual write is inert here today, not a live regression.
+                #
+                # What this removal breaks going forward, and why it's out of
+                # scope for this file: three consumers read quote:{symbol}
+                # with NO fund: fallback and will simply stop seeing a price
+                # for a FUND symbol once it's added to their watchlist/alerts
+                # (a cache miss, not wrong data — a fail-closed regression,
+                # not the fail-silent-wrong one this fix removes):
+                #   - api/routes/dashboard.py `_fast_quote()` (watchlist
+                #     movers + the "alerts near target" widget)
+                #   - workers/alert_checker.py's PRICE_ABOVE/PRICE_BELOW branch
+                #     (line ~321, `cache_keys.quote(alert.symbol)` only)
+                #   - workers/sr_proximity_digest.py (mget over
+                #     `cache_keys.quote()` only, line ~375)
+                # api/routes/stocks/quotes.py and api/routes/portfolio.py
+                # already added an explicit `cache_keys.fund(symbol)` fallback
+                # for their own cache misses (portfolio.py:266-290,
+                # quotes.py:64-94, 140-154) — that is the fund read path the
+                # three consumers above need too; all three are outside this
+                # engagement's file scope (backend/services/indicators.py,
+                # backend/api/routes/screener.py, backend/workers/fund_fetcher.py,
+                # backend/core/cache_keys.py only), so flagged as follow-up
+                # work rather than edited here.
                 fund_payload = {
                     "symbol": symbol,
                     "fund_name": result.get("fund_name") or name or symbol,
@@ -424,20 +465,6 @@ def fetch_thai_fund_navs(self):
                     "ts": int(time.time()),
                 }
                 redis_client.setex(cache_keys.fund(symbol), 86400, json.dumps(fund_payload))
-
-                # 2) Also cache as quote:{symbol} — same format as price_fetcher
-                #    so portfolio, sidebar, dashboard read it without special fund logic
-                quote_payload = {
-                    "symbol": symbol,
-                    "price": nav_val,
-                    "change": result.get("change", 0.0),
-                    "change_pct": result.get("change_pct", 0.0),
-                    "volume": 0,
-                    "type": "fund_nav",
-                    "nav_date": str(nav_date)[:10],
-                    "ts": int(time.time()),
-                }
-                redis_client.setex(cache_keys.quote(symbol), 86400, json.dumps(quote_payload))
 
                 updated_count += 1
 

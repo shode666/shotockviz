@@ -148,16 +148,23 @@ def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
     volumes = [float(b["volume"]) for b in bars]
     t = alert.alert_type.value
 
-    if t == "RSI_OVERBOUGHT":
+    if t in ("RSI_OVERBOUGHT", "RSI_OVERSOLD"):
         if alert.value is None:
             return False, 0.0
         rsi = indicators.compute_rsi(closes)
-        return rsi > alert.value, rsi
-
-    if t == "RSI_OVERSOLD":
-        if alert.value is None:
+        # bd:shotockviz-032 — compute_rsi returns None (not 50.0) on
+        # insufficient data since bd:shotockviz-kmi. `_MIN_BARS_FOR_INDICATORS`
+        # (26) is comfortably above RSI's own minimum of period+1 = 15, so
+        # this should be unreachable today — but the two numbers live in
+        # different files and neither knows about the other, and comparing
+        # None with `>` raises TypeError rather than returning a wrong
+        # answer. Same guard shape as the GOLDEN_CROSS/DEATH_CROSS branch
+        # below, which already treats an uncomputable indicator as
+        # "cannot evaluate", not as a trigger.
+        if rsi is None:
             return False, 0.0
-        rsi = indicators.compute_rsi(closes)
+        if t == "RSI_OVERBOUGHT":
+            return rsi > alert.value, rsi
         return rsi < alert.value, rsi
 
     if t in ("GOLDEN_CROSS", "DEATH_CROSS"):
@@ -182,6 +189,13 @@ def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
         if alert.value is None:
             return False, 0.0
         ratio = indicators.compute_volume_ratio(volumes)
+        # bd:shotockviz-032 — same reasoning as the RSI branch above.
+        # compute_volume_ratio needs `lookback` (20) volumes and returns
+        # None below that; it used to fall back to `vol_avg = 1`, which made
+        # the "ratio" the raw share count and fired every VOLUME_SPIKE alert
+        # unconditionally. Never compare that None.
+        if ratio is None:
+            return False, 0.0
         return ratio >= alert.value, ratio
 
     return False, 0.0

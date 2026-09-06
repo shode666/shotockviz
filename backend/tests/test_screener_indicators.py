@@ -26,9 +26,15 @@ from api.routes.screener import (
 # ── RSI ───────────────────────────────────────────────────────────────────────
 
 class TestComputeRSI:
-    def test_insufficient_data_returns_50(self):
-        """< period+1 closes → neutral RSI 50."""
-        assert _compute_rsi([100, 101, 102], period=14) == 50.0
+    def test_insufficient_data_returns_none(self):
+        """bd:shotockviz-kmi — must be None, not 50.0. A 50.0 "neutral"
+        sentinel is indistinguishable from a genuinely neutral RSI and
+        silently satisfied the screener's rsi_filter=="neutral" (30-70)
+        for a symbol whose RSI was never actually computed — same class
+        of bug as bd:shotockviz-0x0's compute_sma 0.0 sentinel, fixed the
+        same way (see TestComputeSMA.test_insufficient_data_returns_none
+        below)."""
+        assert _compute_rsi([100, 101, 102], period=14) is None
 
     def test_all_gains_returns_near_100(self):
         """Monotonically increasing → RSI close to 100."""
