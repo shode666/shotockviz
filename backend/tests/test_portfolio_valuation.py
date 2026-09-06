@@ -33,6 +33,20 @@ from models.portfolio import Currency, Transaction, TransactionType
 from services import portfolio_service
 
 
+def _no_corporate_actions():
+    """Controls the corporate-actions read the same way a quote/FX rate is
+    already controlled in these tests, instead of inheriting whatever the real
+    `corporate_actions` table happens to hold (bd:shotockviz-eb1 made every
+    portfolio read query it — see services/corporate_actions.py). This is a
+    money-correctness test of the valuation fold, not of
+    `corporate_actions.load_actions` itself: `build_holdings(..., splits=...)`
+    still runs its real restatement branch, it is simply told — declaratively,
+    like every other fixture input here — that this book's symbols have no
+    splits to restate, so a split landing in tomorrow's `corporate_actions_fetcher`
+    run cannot change this test's answer."""
+    return patch("services.corporate_actions.load_actions", AsyncMock(return_value={}))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -150,7 +164,8 @@ async def test_fee_bearing_buy_and_sell_reaches_the_analytics_response(test_db, 
     store = _redis_store({"NVDA": {"symbol": "NVDA", "price": 110.00}})
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         result = await get_analytics(user=test_user, db=test_db)
 
     holding = result.holdings[0]

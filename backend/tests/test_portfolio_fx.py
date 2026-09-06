@@ -34,7 +34,7 @@ from models.portfolio import Currency, Transaction, TransactionType
 from models.schemas import TransactionCreate
 from services import portfolio_service
 
-from tests.test_portfolio_valuation import _FakeRedis, _redis_store
+from tests.test_portfolio_valuation import _FakeRedis, _no_corporate_actions, _redis_store
 
 
 # A live THBUSD=X price of 1/35 means 35 THB per USD.
@@ -347,10 +347,12 @@ async def test_mixed_currency_book_is_normalised_and_both_screens_agree(test_db,
         return MIXED_QUOTES.get(symbol)
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
-    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote):
+    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote), \
+         _no_corporate_actions():
         summary, misses = await _build_portfolio_summary(test_user, test_db)
 
     # 1. The total is a real THB total, not THB + USD added together.
@@ -399,10 +401,12 @@ async def test_legacy_usd_position_declines_the_fx_return_on_both_screens(test_d
         return MIXED_QUOTES.get(symbol)
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
-    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote):
+    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote), \
+         _no_corporate_actions():
         summary, _ = await _build_portfolio_summary(test_user, test_db)
 
     assert analytics.fx_pl is None
@@ -429,10 +433,12 @@ async def test_no_fx_quote_falls_back_and_says_so_on_both_screens(test_db, test_
         return quotes_without_fx.get(symbol)
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()) as fetch:
+         patch("services.stock_service.request_data_fetch", AsyncMock()) as fetch, \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
-    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote):
+    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote), \
+         _no_corporate_actions():
         summary, misses = await _build_portfolio_summary(test_user, test_db)
 
     assert analytics.fx_estimated is True
@@ -456,7 +462,8 @@ async def test_the_users_own_recorded_rate_beats_the_hardcoded_constant(test_db,
     store = _redis_store(quotes_without_fx)
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
     assert [(r.currency, r.source, r.rate) for r in analytics.fx_rates] == [("USD", "last_known", 31.5)]
