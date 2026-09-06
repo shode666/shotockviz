@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 from typing import Literal
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -100,6 +101,22 @@ def _matches_price(close: float, ma50: float | None, ma200: float | None, flt: s
     return True  # "any"
 
 
+def _bar_has_finite_prices(bar) -> bool:
+    """True when every price field on the bar is a real, finite number.
+
+    bd:shotockviz-cjb. `math.isfinite` rejects NaN and both infinities;
+    `float(None)` raises, so a NULL column is rejected too rather than
+    crashing the comprehension that calls this.
+    """
+    try:
+        return all(
+            math.isfinite(float(v))
+            for v in (bar.open, bar.high, bar.low, bar.close)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 async def _fetch_symbol_bars(db: AsyncSession, symbol: str) -> list[OHLCVBar] | None:
     """Fetch daily OHLCV bars for a symbol from PostgreSQL.
 
@@ -126,6 +143,44 @@ async def _fetch_symbol_bars(db: AsyncSession, symbol: str) -> list[OHLCVBar] | 
             .limit(300)
         )
         bars = list(reversed(result.scalars().all()))
+
+        # bd:shotockviz-cjb — drop bars whose OHLC is not a finite number.
+        #
+        # yfinance can return a daily row with a real `volume` but NaN
+        # open/high/low/close, and the writer persists it verbatim. On
+        # 2026-09-04 exactly two such rows existed on dev (GLD and GOOGL,
+        # both with volume > 0), and because they were the NEWEST bar,
+        # `closes[-1]` was NaN and the screener rendered `price: "nan"`,
+        # `chg: "nan%"` — a row that looks like a result and cannot be acted
+        # on. RSI still read as a plausible number because Wilder smoothing
+        # over the earlier window never touches the last close, which is
+        # precisely why this was invisible until someone looked at the price
+        # column.
+        #
+        # Dropping rather than zero-filling: a bar with no prices is not a
+        # bar, and substituting one would be the same fabrication this
+        # engagement has been removing (`compute_sma` returning 0.0,
+        # `compute_rsi` returning 50.0). Dropping also keeps the `ts` this
+        # function's caller reports honest — it becomes the newest bar that
+        # actually has prices, not one that does not.
+        #
+        # NOTE for anyone auditing this in SQL: `close != close` does NOT
+        # find these rows. Postgres treats NaN as equal to itself and
+        # greater than every other float, unlike IEEE 754 and unlike Python.
+        # Use `close = 'NaN'::float8`.
+        #
+        # This is the consumer-side guard. The writer should not persist
+        # such a row in the first place — tracked separately, since
+        # `workers/history_prefetcher.py` and `services/stock_service.py`
+        # are outside this change.
+        usable = [b for b in bars if _bar_has_finite_prices(b)]
+        if len(usable) != len(bars):
+            logger.warning(
+                "Screener: dropped bars with non-finite OHLC",
+                symbol=symbol, dropped=len(bars) - len(usable), kept=len(usable),
+            )
+        bars = usable
+
         if len(bars) < 30:
             return None
         return bars
