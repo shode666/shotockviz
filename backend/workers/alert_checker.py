@@ -27,6 +27,53 @@ with a timer (silent forever after the first fire unless price re-crosses),
 which is the exact outcome the user's decision was written to avoid, and it
 would need new persisted state (a "currently past threshold" flag) this
 schema does not have and nothing in the brief asked for.
+
+bd:shotockviz-rdu — the wall-clock cooldown above assumes the compared
+value keeps changing on its own timescale, same as the level it's compared
+against. That holds for an equity's live quote (re-fetched every ~1-6 min,
+bd:shotockviz-cm3) but NOT for a Thai fund's NAV (bd:shotockviz-ubw's
+`fund:{symbol}` fallback): `fund_fetcher` writes it once a day, 19:00 ICT,
+T+1. A standing PRICE_ABOVE/PRICE_BELOW alert on a fund whose condition
+becomes true stays true against that one unchanging number for the rest of
+the day, and the 60-min cooldown alone re-fires it ~24 times for a single
+crossing — the cooldown was never asked to also mean "the thing you're
+being told about is actually new".
+
+Fix, weighed against the AC's other option (refusing to arm price alerts
+on fund symbols at creation): rejected that — it treats "the data source
+happens to be daily" as a reason to withhold a feature the user asked for
+(standing PRICE_ABOVE/PRICE_BELOW on any symbol they can watch), and funds
+are a real, used part of this watchlist (25 active market=FUND symbols on
+dev today). Chosen instead: `claim_alert()` takes an optional `value_ts` —
+the compared value's own as-of (the `ts` already on every quote-shaped
+dict: `cache_and_publish_quotes()` stamps it for equities,
+`fund_payload_to_quote()` forwards fund_fetcher's stamp for funds) — and
+ALSO requires it to be newer than the alert's own `triggered_at` before a
+re-claim can win. This is additive to the wall-clock cooldown, not a
+replacement, and it is NOT a second cooldown constant: it has no duration
+of its own, just a strict "is this actually a new value" check against a
+column (`triggered_at`) this task already reads and writes for the
+existing cooldown. For equities, whose quote `ts` advances every fetch
+cycle — far faster than the 60-min cooldown — this changes nothing
+observable: by the time the cooldown elapses, the cached quote is always
+newer than the last fire anyway (test_rdu_fund_nav_cooldown.py's
+TestEquityAlertUnaffected proves this). For funds, it is the entire fix:
+the same NAV can now win a claim at most once, and the next fetched NAV
+(next day) is eligible again — see
+test_rdu_fund_nav_cooldown.py::TestFundAlertRefiresAtMostOncePerNav.
+
+Deliberately NOT extended to the 5 indicator alert types (RSI/Golden-
+Death-Cross/Volume-Spike) in this bead: those evaluate the daily OHLCV
+cache (`_load_daily_bars` below), whose bars carry a bar *date*, not a
+fetch timestamp — turning "has this bar's date advanced" into the same
+value_ts shape is a real, separate follow-up (they have an identical
+once-a-day staleness pattern to funds: a daily bar's derived indicator is
+just as constant intraday as a fund's NAV), not implemented here because
+it touches `_evaluate_indicator_alert`'s bar-consuming shape rather than
+the quote-cache path this bd's AC and reproduction are scoped to.
+`claim_alert()` is called with `value_ts=None` for these today, which
+falls back to cooldown-only eligibility — byte-for-byte the same
+behaviour every alert type had before this bead.
 """
 from datetime import datetime, timedelta, timezone
 from celery import shared_task
@@ -201,7 +248,33 @@ def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
     return False, 0.0
 
 
-def claim_alert(db, alert_id: int) -> bool:
+def _quote_value_ts(quote: dict) -> datetime | None:
+    """Extract the compared value's own as-of from a quote-shaped dict.
+
+    bd:shotockviz-rdu — `ts` is the epoch-second stamp already written by
+    both producers of `quote:{symbol}`-shaped data: `cache_and_publish_
+    quotes()` (equities — refreshed every fetch cycle) and
+    `fund_payload_to_quote()` (funds — forwarded from `fund_fetcher`'s own
+    stamp, refreshed once a day). Returns None when it's absent or
+    unparseable, which callers treat as "no freshness signal available"
+    and fall back to cooldown-only eligibility — the exact behaviour every
+    alert had before this bead, never a hard failure.
+    """
+    ts = quote.get("ts")
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def claim_alert(
+    db,
+    alert_id: int,
+    value_ts: datetime | None = None,
+    now: datetime | None = None,
+) -> bool:
     """Atomically claim one eligible alert for triggering — the DB row IS
     the dedupe key (bd:features-2026-09 slice 3, Sara ADR-T3).
 
@@ -224,6 +297,25 @@ def claim_alert(db, alert_id: int) -> bool:
     must not silently flip it, or a standing alert would go right back to
     behaving like one-shot.
 
+    `now` defaults to `datetime.now(timezone.utc)` when not given — the
+    only caller in production (`check_all_alerts` below) never passes it,
+    so this changes nothing there. It exists so tests can pin every
+    timestamp this function reads and writes without depending on the
+    real wall clock (bd:shotockviz-rdu) — see
+    tests/test_rdu_fund_nav_cooldown.py::TestClaimAlertValueTsGate.
+
+    `value_ts` (bd:shotockviz-rdu) — when given, ALSO requires it to be
+    strictly newer than the alert's own `triggered_at` for the claim to
+    win, on top of the wall-clock cooldown below. This is what stops a
+    standing PRICE_ABOVE/PRICE_BELOW alert on a Thai fund re-firing once
+    per cooldown against a NAV that has not actually changed (the fund's
+    `ts` only advances once a day) — see the module docstring. `None`
+    (the default, and every indicator-alert call today) disables this
+    check entirely and reproduces the exact pre-bd behaviour: cooldown
+    alone decides eligibility. Not a second cooldown constant — it has no
+    duration of its own, only a freshness comparison against the same
+    `triggered_at` column the cooldown already uses.
+
     The cutoff (`now - cooldown`) is computed ONCE by the caller and
     passed in rather than each call re-deriving `now()` independently:
     two overlapping claims computing their own `now()` a few ms apart
@@ -237,7 +329,18 @@ def claim_alert(db, alert_id: int) -> bool:
     from sqlalchemy import or_, update
     from models.alert import Alert, AlertStatus
 
-    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.alert_cooldown_minutes)
+    now = now or datetime.now(timezone.utc)
+    cutoff = now - timedelta(minutes=settings.alert_cooldown_minutes)
+
+    conditions = [
+        Alert.id == alert_id,
+        Alert.is_active == True,
+        or_(Alert.triggered_at.is_(None), Alert.triggered_at <= cutoff),
+    ]
+    if value_ts is not None:
+        conditions.append(
+            or_(Alert.triggered_at.is_(None), Alert.triggered_at < value_ts)
+        )
 
     # synchronize_session=False: this call only needs the row-level UPDATE's
     # rowcount, not an auto-refreshed in-memory `alert` object — the default
@@ -254,14 +357,10 @@ def claim_alert(db, alert_id: int) -> bool:
     # over it with tzinfo-stripping on one side.
     result = db.execute(
         update(Alert)
-        .where(
-            Alert.id == alert_id,
-            Alert.is_active == True,
-            or_(Alert.triggered_at.is_(None), Alert.triggered_at <= cutoff),
-        )
+        .where(*conditions)
         .values(
             status=AlertStatus.TRIGGERED,
-            triggered_at=datetime.now(timezone.utc),
+            triggered_at=now,
             trigger_count=Alert.trigger_count + 1,
         )
         .execution_options(synchronize_session=False)
@@ -304,6 +403,13 @@ def check_all_alerts(self):
             for alert in alerts:
                 try:
                     alert_type_value = alert.alert_type.value
+                    # bd:shotockviz-rdu — the compared value's own as-of,
+                    # when the alert's data source provides one. Stays
+                    # None for indicator types (see module docstring for
+                    # why) and for a value-less cache miss, which makes
+                    # claim_alert() below fall back to cooldown-only
+                    # eligibility exactly as before this bead.
+                    value_ts: datetime | None = None
 
                     if alert_type_value in _INDICATOR_ALERT_TYPES:
                         # bd:shotockviz-06e — RSI/Golden-Death-Cross/Volume-
@@ -365,6 +471,11 @@ def check_all_alerts(self):
                         quote = json.loads(cached)
                         price = quote.get("price", 0)
                         display_value = price
+                        # bd:shotockviz-rdu — set for BOTH the live-quote
+                        # and fund-fallback branches above: `quote` is the
+                        # same quote-shaped dict either way, and both
+                        # producers stamp `ts` (see _quote_value_ts).
+                        value_ts = _quote_value_ts(quote)
 
                         triggered = False
                         if alert_type_value == "PRICE_ABOVE" and alert.value and price > alert.value:
@@ -384,26 +495,29 @@ def check_all_alerts(self):
                     # before either commits, and both send Telegram. This
                     # UPDATE is the dedupe key: rowcount==1 means THIS run
                     # won the claim; done BEFORE any notification is sent.
-                    won_claim = claim_alert(db, alert.id)
+                    won_claim = claim_alert(db, alert.id, value_ts=value_ts)
 
                     if not won_claim:
-                        # bd:shotockviz-93h — the old message here
-                        # ("already claimed by ANOTHER run") stopped being
-                        # accurate the moment claim_alert's guard grew a
-                        # second reason to refuse a claim: it can lose
-                        # because a concurrent run genuinely won the race
-                        # (the original case this log existed for), OR
-                        # because THIS SAME alert already fired inside its
-                        # own cooldown window (the far more common case
-                        # now that alerts are standing) — cheap to tell
-                        # apart (an extra query) but not worth it just to
-                        # word a log line; naming both possibilities is
-                        # enough to not repeat this project's own
-                        # documented failure mode of a message asserting
-                        # something the code doesn't actually guarantee.
+                        # bd:shotockviz-93h / bd:shotockviz-rdu — the old
+                        # message here ("already claimed by ANOTHER run")
+                        # stopped being accurate the moment claim_alert's
+                        # guard grew a second, then a third, reason to
+                        # refuse a claim: a concurrent run genuinely won
+                        # the race (the original case this log existed
+                        # for), OR THIS SAME alert already fired inside
+                        # its own cooldown window, OR (rdu) the compared
+                        # value hasn't advanced past the last fire (a
+                        # fund's NAV, unchanged since it last notified) —
+                        # cheap to tell apart (an extra query) but not
+                        # worth it just to word a log line; naming all
+                        # three possibilities is enough to not repeat this
+                        # project's own documented failure mode of a
+                        # message asserting something the code doesn't
+                        # actually guarantee.
                         logger.info(
-                            "Alert not claimed — still cooling down or already "
-                            "claimed by a concurrent run this tick, skipping",
+                            "Alert not claimed — still cooling down, value "
+                            "unchanged since last fire, or already claimed "
+                            "by a concurrent run this tick, skipping",
                             alert_id=alert.id,
                             symbol=alert.symbol,
                         )

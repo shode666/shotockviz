@@ -118,6 +118,16 @@ class AlertStatus(str, PyEnum):
     #     `status`. A fresh TRIGGERED alert and one that fired 40 times
     #     this week look identical in `status` (both "TRIGGERED") —
     #     `trigger_count` (below) is what tells them apart for display.
+    #
+    #     bd:shotockviz-rdu (2026-09-06) — that cooldown-only rule is
+    #     necessary but, for PRICE_ABOVE/PRICE_BELOW, no longer
+    #     sufficient: `claim_alert()` also requires the compared value's
+    #     own as-of (a live quote's or a fund NAV's `ts`) to be newer than
+    #     `triggered_at`, so a Thai fund's once-a-day NAV can win a claim
+    #     at most once instead of once per elapsed cooldown. Still `status`
+    #     -independent and still keyed off `triggered_at` alone — see
+    #     workers/alert_checker.py's module docstring and `claim_alert()`
+    #     for the reasoning and the one place this is decided.
     ACTIVE = "ACTIVE"
     TRIGGERED = "TRIGGERED"
 
