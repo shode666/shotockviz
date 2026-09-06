@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import asyncio
-import math
 from typing import Literal
+from services.bar_hygiene import is_finite_bar
 from fastapi import APIRouter, Query, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -101,20 +101,10 @@ def _matches_price(close: float, ma50: float | None, ma200: float | None, flt: s
     return True  # "any"
 
 
-def _bar_has_finite_prices(bar) -> bool:
-    """True when every price field on the bar is a real, finite number.
-
-    bd:shotockviz-cjb. `math.isfinite` rejects NaN and both infinities;
-    `float(None)` raises, so a NULL column is rejected too rather than
-    crashing the comprehension that calls this.
-    """
-    try:
-        return all(
-            math.isfinite(float(v))
-            for v in (bar.open, bar.high, bar.low, bar.close)
-        )
-    except (TypeError, ValueError):
-        return False
+# bd:shotockviz-cjb — the predicate moved to services/bar_hygiene.py once the
+# writer side needed it too; re-exported under the original name so this
+# module's own tests and any reader following the bead keep working.
+_bar_has_finite_prices = is_finite_bar
 
 
 async def _fetch_symbol_bars(db: AsyncSession, symbol: str) -> list[OHLCVBar] | None:

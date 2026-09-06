@@ -55,6 +55,21 @@ def _upsert_bars_to_db(engine, symbol: str, timeframe: str, bars: list[dict]) ->
         Number of new rows inserted.
     """
     from sqlalchemy import text
+    from services.bar_hygiene import drop_non_finite_bars
+
+    # bd:shotockviz-cjb — yfinance can return a daily row with a real volume
+    # but NaN open/high/low/close, and this used to persist it verbatim. Two
+    # such rows reached the DB on 2026-09-04 and the screener rendered them as
+    # `price: "nan"` in the browser. Every reader inherits a bad row —
+    # alert_checker's 5 indicator types and sr_auto_pivot's level computation
+    # both read these bars — so it is refused here rather than guarded five
+    # times downstream.
+    bars, dropped = drop_non_finite_bars(bars)
+    if dropped:
+        logger.warning(
+            "Refused to persist bars with non-finite OHLC",
+            symbol=symbol, timeframe=timeframe, dropped=dropped, kept=len(bars),
+        )
 
     inserted = 0
     with engine.connect() as conn:

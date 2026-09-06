@@ -249,6 +249,22 @@ def _fetch_history(symbol: str, redis_client, timeframe: str = "1D") -> bool:
                     "volume": b["volume"],
                 })
 
+        # bd:shotockviz-cjb — refuse bars with non-finite OHLC before EITHER
+        # sink. This path writes both PostgreSQL and the Redis daily-bar cache,
+        # and that cache is what alert_checker's 5 indicator types read, so a
+        # NaN bar here becomes a wrong alert as well as a "nan" on screen.
+        # See services/bar_hygiene.py for why they are dropped, not repaired.
+        from services.bar_hygiene import drop_non_finite_bars
+
+        db_rows, dropped_rows = drop_non_finite_bars(db_rows)
+        bars, dropped_bars = drop_non_finite_bars(bars)
+        if dropped_rows or dropped_bars:
+            logger.warning(
+                "Refused bars with non-finite OHLC",
+                symbol=symbol, timeframe=timeframe,
+                dropped_db=dropped_rows, dropped_cache=dropped_bars,
+            )
+
         # Bulk upsert to PostgreSQL
         if db_rows:
             try:
