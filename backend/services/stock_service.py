@@ -170,6 +170,10 @@ async def read_history(symbol: str, tf: str) -> list[dict]:
         pass
 
     # L2: PostgreSQL ohlcv_bars table
+    # bd:shotockviz-p0y — order DESC + limit to take the newest 500 rows,
+    # then reverse back to ascending (oldest→newest). asc+limit used to take
+    # the OLDEST 500 rows once a symbol passed 500 total, freezing the chart
+    # window forever ~(N-500) trading days in the past.
     try:
         async with AsyncSessionLocal() as session:
             result = await session.execute(
@@ -178,10 +182,10 @@ async def read_history(symbol: str, tf: str) -> list[dict]:
                     OHLCVBarModel.symbol == symbol.upper(),
                     OHLCVBarModel.timeframe == tf
                 )
-                .order_by(OHLCVBarModel.time_unix.asc())
+                .order_by(OHLCVBarModel.time_unix.desc())
                 .limit(500)
             )
-            bars = result.scalars().all()
+            bars = list(reversed(result.scalars().all()))
             if bars:
                 return [b.to_api_dict() for b in bars]
     except Exception as e:

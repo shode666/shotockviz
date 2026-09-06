@@ -93,17 +93,98 @@ async def get_alerts(
     return result.scalars().all()
 
 
+async def _current_condition_state(
+    symbol: str, alert_type: AlertType, value: float | None
+) -> tuple[bool, float | None, str]:
+    """bd:shotockviz-60p — best-effort read of "is this alert's condition
+    already true right now". Returns (triggered, current_value, label).
+
+    `triggered` is False (not "unknown") whenever there isn't enough live
+    data to tell — same cache-miss philosophy the rest of this codebase
+    already uses (skip, don't guess, see workers/alert_checker.py's 983
+    note): a cache miss here means alert creation proceeds unconfirmed,
+    same as it always did before this bead. `label` names what
+    `current_value` measures, for the 409 message below.
+
+    Reuses workers/alert_checker.py's own trigger definitions
+    (`_evaluate_indicator_alert`) and forming-bar trim
+    (`_drop_forming_bar`, bd:shotockviz-1sf) rather than a second,
+    independently-drifting copy of either — a `SimpleNamespace` stands in
+    for the not-yet-created `Alert` row, mirroring this module's own test
+    suite's `_FakeAlert` pattern.
+    """
+    if value is None:
+        return False, None, ""
+
+    from types import SimpleNamespace
+    from services import stock_service
+    from workers.alert_checker import (
+        _INDICATOR_ALERT_TYPES,
+        _MIN_BARS_FOR_INDICATORS,
+        _drop_forming_bar,
+        _evaluate_indicator_alert,
+    )
+
+    if alert_type in (AlertType.PRICE_ABOVE, AlertType.PRICE_BELOW):
+        quote = await stock_service.read_quote(symbol)
+        if not quote or quote.get("price") is None:
+            return False, None, "price"
+        price = float(quote["price"])
+        if alert_type == AlertType.PRICE_ABOVE:
+            return price > value, price, "price"
+        return price < value, price, "price"
+
+    if alert_type.value in _INDICATOR_ALERT_TYPES:
+        bars = await stock_service.read_history(symbol, "1D")
+        if not bars:
+            return False, None, alert_type.value
+        bars = _drop_forming_bar(symbol, bars)
+        if len(bars) < _MIN_BARS_FOR_INDICATORS:
+            return False, None, alert_type.value
+        pending = SimpleNamespace(alert_type=alert_type, value=value)
+        triggered, display_value = _evaluate_indicator_alert(pending, bars)
+        return triggered, display_value, alert_type.value
+
+    return False, None, ""
+
+
 @router.post("", response_model=AlertResponse, status_code=status.HTTP_201_CREATED)
 async def create_alert(
     body: AlertCreate,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a new price/indicator alert."""
+    """Create a new price/indicator alert.
+
+    bd:shotockviz-60p — an alert whose condition is already true right now
+    (e.g. "AAPL above 17" while AAPL trades at 230) used to be created
+    silently and fire on the very next check_all_alerts tick, then again
+    every `alert_cooldown_minutes` forever (alerts are standing, not
+    one-shot — bd:shotockviz-93h). Refused with 409 + the current value
+    unless the client passes `confirm=true`.
+    """
+    symbol = body.symbol.upper()
+    resolved_type = _resolve_alert_type(body.alert_type)
+    resolved_channel = _resolve_channel(body.channel)
+
+    if not body.confirm:
+        already_true, current_value, label = await _current_condition_state(
+            symbol, resolved_type, body.value
+        )
+        if already_true:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"This alert's condition is already true right now "
+                    f"(current {label}: {current_value}). Resubmit with "
+                    f"confirm=true to create it anyway."
+                ),
+            )
+
     alert = Alert(
         user_id=user.id,
-        symbol=body.symbol.upper(),
-        alert_type=_resolve_alert_type(body.alert_type),
+        symbol=symbol,
+        alert_type=resolved_type,
         condition=body.condition,
         value=body.value,
         # bd:shotockviz-eb1 — the trading units `value` is stated in. Stamped on
@@ -111,7 +192,7 @@ async def create_alert(
         # split rebase know whether this level predates the split, and it is the
         # idempotency key that stops the daily fetcher rebasing it twice.
         value_as_of=date.today(),
-        channel=_resolve_channel(body.channel),
+        channel=resolved_channel,
     )
     db.add(alert)
     await db.flush()

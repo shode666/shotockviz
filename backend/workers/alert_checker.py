@@ -34,6 +34,11 @@ from core import cache_keys
 from core.config import settings
 from core.logger import get_logger
 from services import indicators
+# bd:shotockviz-1sf — reuse the exact per-symbol market-hours check
+# workers/alert_symbol_refresher.py already uses (itself reused from
+# workers/price_fetcher.py), so "is this market open right now" cannot
+# drift between the three callers.
+from workers.alert_symbol_refresher import _is_market_open_for
 
 logger = get_logger(__name__)
 
@@ -49,6 +54,35 @@ _INDICATOR_ALERT_TYPES = frozenset({
 _MIN_BARS_FOR_INDICATORS = 26
 
 
+def _drop_forming_bar(symbol: str, bars: list[dict]) -> list[dict]:
+    """Drop the last daily bar if `symbol`'s market is open right now.
+
+    bd:shotockviz-1sf — the daily OHLCV cache's last bar is whatever
+    session yfinance considers "today". While that market is open, that
+    bar is still forming (its close/high/low/volume keep changing tick to
+    tick), so a cross/RSI-threshold/volume-ratio computed against it can
+    be TRUE right now and FALSE once the session actually closes. Under
+    the standing+cooldown model (bd:shotockviz-93h) that is not a missed
+    event (which a 1-day lag would be) — it is a FABRICATED one: the
+    trader is told "RSI crossed above 70" for a cross that, at close,
+    never happened. A late-by-a-day confirmed signal is an acceptable
+    trade-off for a technical alert; a signal that describes an event
+    which did not occur is not (it can drive a real trade off a
+    non-event). So: exclude, don't flag-and-send — no UI disclaimer path
+    was chosen here, unlike bd:shotockviz-cm3's *missed*-crossing case,
+    because a false positive and a missed one are not symmetric harms.
+
+    Once the market closes, that same bar IS the final, confirmed close
+    for the day (yfinance stops revising it), so it is kept — this
+    function only trims while the session is still live.
+    """
+    if not bars:
+        return bars
+    if _is_market_open_for(symbol, datetime.now(timezone.utc)):
+        return bars[:-1]
+    return bars
+
+
 def _load_daily_bars(r, symbol: str) -> list[dict] | None:
     """Read the cached 1D OHLCV bars for `symbol`, or None on miss/short history.
 
@@ -56,6 +90,11 @@ def _load_daily_bars(r, symbol: str) -> list[dict] | None:
     indicator-based alert for this symbol silently never fires until
     history_prefetcher warms the cache again — visible via the warning
     log, no retry/backfill added (same scope decision as the 983 fix).
+
+    bd:shotockviz-1sf — the still-forming bar (see `_drop_forming_bar`) is
+    dropped BEFORE the minimum-bars guard, so a symbol left with too few
+    CLOSED bars is treated the same as "insufficient history" (skip, log,
+    don't guess) rather than falling back to the partial bar.
     """
     import json
 
@@ -67,7 +106,10 @@ def _load_daily_bars(r, symbol: str) -> list[dict] | None:
         bars = json.loads(cached)
     except (TypeError, ValueError):
         return None
-    if not isinstance(bars, list) or len(bars) < _MIN_BARS_FOR_INDICATORS:
+    if not isinstance(bars, list):
+        return None
+    bars = _drop_forming_bar(symbol, bars)
+    if len(bars) < _MIN_BARS_FOR_INDICATORS:
         return None
     return bars
 

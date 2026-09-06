@@ -23,6 +23,7 @@ from models.alert import Alert, AlertChannel, AlertStatus, AlertType
 from models.user import User
 from services import indicators
 from workers.alert_checker import (
+    _drop_forming_bar,
     _evaluate_indicator_alert,
     _load_daily_bars,
     check_all_alerts,
@@ -176,10 +177,14 @@ class TestVolumeSpike:
 
 class TestLoadDailyBars:
     def test_cache_hit_with_enough_bars_returns_list(self):
+        # bd:shotockviz-1sf — market forced CLOSED so the still-forming-bar
+        # trim (below) does not fire; this test is about the cache-hit path,
+        # not the trim, and must not flake depending on wall-clock time.
         bars = _bars_from_closes([float(i) for i in range(30)])
         fake_redis = MagicMock()
         fake_redis.get.return_value = json.dumps(bars).encode()
-        result = _load_daily_bars(fake_redis, "NVDA")
+        with patch("workers.alert_checker._is_market_open_for", return_value=False):
+            result = _load_daily_bars(fake_redis, "NVDA")
         assert result == bars
         fake_redis.get.assert_called_once_with(cache_keys.ohlcv("NVDA", "1D"))
 
@@ -193,6 +198,45 @@ class TestLoadDailyBars:
         fake_redis = MagicMock()
         fake_redis.get.return_value = json.dumps(bars).encode()
         assert _load_daily_bars(fake_redis, "NVDA") is None
+
+
+class TestDropFormingBar:
+    """bd:shotockviz-1sf — the still-forming (unclosed) daily bar must be
+    excluded from indicator evaluation while the market is open, and kept
+    once it closes."""
+
+    def test_drops_last_bar_when_market_open(self):
+        bars = _bars_from_closes([float(i) for i in range(30)])
+        with patch("workers.alert_checker._is_market_open_for", return_value=True):
+            result = _drop_forming_bar("NVDA", bars)
+        assert result == bars[:-1]
+        assert len(result) == 29
+
+    def test_keeps_last_bar_when_market_closed(self):
+        bars = _bars_from_closes([float(i) for i in range(30)])
+        with patch("workers.alert_checker._is_market_open_for", return_value=False):
+            result = _drop_forming_bar("NVDA", bars)
+        assert result == bars
+
+    def test_empty_bars_passthrough(self):
+        with patch("workers.alert_checker._is_market_open_for", return_value=True):
+            assert _drop_forming_bar("NVDA", []) == []
+
+    def test_load_daily_bars_drops_forming_bar_before_min_bars_guard(self):
+        # 26 bars is exactly the minimum; dropping the forming one leaves
+        # 25 — must be treated as "insufficient", not silently kept.
+        bars = _bars_from_closes([float(i) for i in range(26)])
+        fake_redis = MagicMock()
+        fake_redis.get.return_value = json.dumps(bars).encode()
+        with patch("workers.alert_checker._is_market_open_for", return_value=True):
+            assert _load_daily_bars(fake_redis, "NVDA") is None
+
+    def test_load_daily_bars_keeps_all_bars_when_market_closed(self):
+        bars = _bars_from_closes([float(i) for i in range(26)])
+        fake_redis = MagicMock()
+        fake_redis.get.return_value = json.dumps(bars).encode()
+        with patch("workers.alert_checker._is_market_open_for", return_value=False):
+            assert _load_daily_bars(fake_redis, "NVDA") == bars
 
 
 # ── Full check_all_alerts() integration (sqlite DB + mocked Redis/httpx) ────
@@ -249,6 +293,10 @@ class TestCheckAllAlertsEvaluatesIndicatorTypes:
         with (
             patch("core.config.settings.database_url", sqlite_db_url),
             patch("redis.from_url", return_value=fake_redis),
+            # bd:shotockviz-1sf — market forced CLOSED: this test is about
+            # the RSI trigger path, not the forming-bar trim, and must not
+            # flake depending on wall-clock time.
+            patch("workers.alert_checker._is_market_open_for", return_value=False),
         ):
             check_all_alerts()
 
@@ -304,6 +352,7 @@ class TestCheckAllAlertsEvaluatesIndicatorTypes:
         with (
             patch("core.config.settings.database_url", sqlite_db_url),
             patch("redis.from_url", return_value=fake_redis),
+            patch("workers.alert_checker._is_market_open_for", return_value=False),
         ):
             check_all_alerts()
 
@@ -312,4 +361,58 @@ class TestCheckAllAlertsEvaluatesIndicatorTypes:
             alert = db.query(Alert).one()
             assert alert.status == AlertStatus.ACTIVE
             assert alert.is_active is True
+        engine.dispose()
+
+    def test_intraday_cross_that_reverts_by_close_does_not_fire_while_market_open(
+        self, sqlite_db_url_factory
+    ):
+        """bd:shotockviz-1sf — the exact failure Tara found: a GOLDEN_CROSS
+        that is true against the still-forming last bar must NOT fire while
+        the market is open (fabricated event). The identical bars DO fire
+        once the market is closed — same data, only the market-hours gate
+        differs, proving the trim (not some other change) is what suppresses
+        the false positive."""
+        sqlite_db_url = sqlite_db_url_factory(AlertType.GOLDEN_CROSS, None)
+        # 50 flat bars (no cross), then a forming 51st bar that spikes SMA20
+        # above SMA50 — this is the *unclosed* bar an intraday tick would
+        # produce; it reverts by close in the real scenario this bead
+        # describes, but this fixture only needs to prove it is IGNORED
+        # while forming and CONSIDERED once "closed".
+        bars = _bars_from_closes([100.0] * 50 + [130.0])
+
+        fake_redis = MagicMock()
+        fake_redis.get.return_value = json.dumps(bars).encode()
+
+        with (
+            patch("core.config.settings.database_url", sqlite_db_url),
+            patch("redis.from_url", return_value=fake_redis),
+            patch("workers.alert_checker._is_market_open_for", return_value=True),
+        ):
+            check_all_alerts()
+
+        engine = create_engine(sqlite_db_url)
+        with Session(engine) as db:
+            alert = db.query(Alert).one()
+            # Market open -> forming bar dropped -> back to the flat 50
+            # bars -> no cross -> must NOT have fired.
+            assert alert.status == AlertStatus.ACTIVE
+            assert alert.trigger_count == 0
+        engine.dispose()
+
+        # Same bars, market now closed -> forming bar is the final close ->
+        # real cross -> must fire.
+        fake_redis2 = MagicMock()
+        fake_redis2.get.return_value = json.dumps(bars).encode()
+        fake_redis2.publish.return_value = 1
+        with (
+            patch("core.config.settings.database_url", sqlite_db_url),
+            patch("redis.from_url", return_value=fake_redis2),
+            patch("workers.alert_checker._is_market_open_for", return_value=False),
+        ):
+            check_all_alerts()
+
+        with Session(engine) as db:
+            alert = db.query(Alert).one()
+            assert alert.status == AlertStatus.TRIGGERED
+            assert alert.trigger_count == 1
         engine.dispose()

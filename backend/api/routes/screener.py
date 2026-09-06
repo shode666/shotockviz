@@ -107,16 +107,21 @@ async def _fetch_symbol_bars(db: AsyncSession, symbol: str) -> list[OHLCVBar] | 
         List of OHLCVBar objects or None if insufficient data
     """
     try:
+        # bd:shotockviz-p0y — order DESC + limit to take the newest 300 rows,
+        # then reverse back to ascending (oldest→newest) so downstream code
+        # (closes[-1] = "now") still sees chronological order. asc+limit
+        # used to take the OLDEST 300 rows once a symbol passed 300 total,
+        # freezing the screener window forever.
         result = await db.execute(
             select(OHLCVBar)
             .where(
                 OHLCVBar.symbol == symbol,
                 OHLCVBar.timeframe == "1D"
             )
-            .order_by(OHLCVBar.time_unix.asc())
+            .order_by(OHLCVBar.time_unix.desc())
             .limit(300)
         )
-        bars = result.scalars().all()
+        bars = list(reversed(result.scalars().all()))
         if len(bars) < 30:
             return None
         return bars

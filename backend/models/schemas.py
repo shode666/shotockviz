@@ -499,6 +499,13 @@ class AlertCreate(BaseModel):
     condition: str
     value: Optional[float] = None
     channel: str = "TELEGRAM"
+    # bd:shotockviz-60p — creating an alert whose condition is ALREADY true
+    # right now (e.g. "AAPL above 17" when AAPL is 230) used to be accepted
+    # silently and fire on the very next check_all_alerts tick. Default
+    # False = the API refuses with 409 + the current value; the client
+    # resubmits with confirm=True to create it anyway (AC: "refused, or
+    # confirmed explicitly with the current price shown").
+    confirm: bool = False
 
 
 class AlertUpdate(BaseModel):
