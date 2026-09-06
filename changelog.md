@@ -8,6 +8,35 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Deployed to production — 2026-09-06 14:30 ICT
+
+17 commits, GHCR run `34019069152`, 1m15s. Verified on the droplet after:
+
+- `https://stock.shode.dev/` → 200; `/api/health` → `{"database":"ok",
+  "redis":"ok","celery":"ok"}`; all 8 containers up, backend/db/redis/frontend
+  healthy; Alembic at `20260906_0010 (head)`.
+- **`bd:shotockviz-18r` proven on prod, not assumed.** The exact original
+  failure context was reproduced on the droplet — `sys.path[0] =
+  "/usr/local/bin"`, the console-script context Celery actually runs in — and
+  `models.user`, `workers.celery_app` and `workers.sr_proximity_digest` now
+  all import, where all three failed before. Then the real
+  `send_sr_proximity_digest` was run end-to-end with `TELEGRAM_DRY_RUN=true`
+  and a past-Monday clock: it completed with no exception and built a real
+  message for the real chat id — **the first time production has ever reached
+  the send step.** The verification run-lock was deleted afterwards (0
+  remaining) so tomorrow's real 09:30 digest is not suppressed.
+- Scheduled sends confirmed still REAL in prod (`telegram_is_dry_run: False`);
+  the dry run above came from a one-off env override on that single exec.
+- Prod beat next-fire times, all ICT wall-clock as intended:
+  `sr-digest-set-open` 09:30 · `sr-digest-us-premarket` 19:30 ·
+  `gap-list-digest` 20:00 · `db-housekeeping` 03:00 · `compute-auto-pivots`
+  18:00 · `check-pipeline-health` every 300s (interval, no wall clock).
+- `check_pipeline_health` run against live prod Redis: `age_seconds: 49`,
+  `is_stale: false`, 0 keys written — no false alarm on the freshly deployed
+  detector. 0 `api.telegram.org` calls and 0 tracebacks in prod
+  `celery-worker` since deploy.
+
+
 ### A dev stack can no longer message the user's real phone (2026-09-06)
 
 `bd:shotockviz-4d9`. The dev DB's user 1 carries the same live
