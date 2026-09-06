@@ -67,7 +67,7 @@ def compute_macd(closes: list[float]) -> tuple[float, float]:
     return float(macd_line[-1]), float(signal_line[-1] if signal_line else 0)
 
 
-def compute_sma(closes: list[float], period: int) -> float:
+def compute_sma(closes: list[float], period: int) -> float | None:
     """Simple moving average (SMA).
 
     Args:
@@ -75,10 +75,18 @@ def compute_sma(closes: list[float], period: int) -> float:
         period: Number of periods for SMA
 
     Returns:
-        SMA value, or 0.0 if insufficient data
+        SMA value, or None if there are fewer than `period` closes.
+
+        bd:shotockviz-0x0 — this used to return 0.0 on insufficient data,
+        which is indistinguishable from "the SMA genuinely computed to
+        0.0". api/routes/screener.py's price filter treated 0.0 as
+        "no MA configured, pass everything", so a symbol that could not
+        even compute MA200 silently passed the "close > MA200" filter for
+        every symbol, always. An unevaluable indicator must say so
+        (None), never a value a caller can mistake for a real one.
     """
     if len(closes) < period:
-        return 0.0
+        return None
     return sum(closes[-period:]) / period
 
 

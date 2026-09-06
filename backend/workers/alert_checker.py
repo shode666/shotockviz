@@ -95,6 +95,11 @@ def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
         slow_prev = indicators.compute_sma(closes[:-1], 50)
         fast_now = indicators.compute_sma(closes, 20)
         slow_now = indicators.compute_sma(closes, 50)
+        # bd:shotockviz-0x0 — compute_sma now returns None (not 0.0) on
+        # insufficient data. The len(closes) < 51 guard above should make
+        # this unreachable, but never compare against/return a None SMA.
+        if None in (fast_prev, slow_prev, fast_now, slow_now):
+            return False, 0.0
         if t == "GOLDEN_CROSS":
             triggered = fast_prev <= slow_prev and fast_now > slow_now
         else:

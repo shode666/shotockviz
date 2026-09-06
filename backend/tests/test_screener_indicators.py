@@ -119,8 +119,11 @@ class TestComputeMACD:
 # ── SMA ───────────────────────────────────────────────────────────────────────
 
 class TestComputeSMA:
-    def test_insufficient_data(self):
-        assert _compute_sma([100, 101], period=50) == 0.0
+    def test_insufficient_data_returns_none(self):
+        """bd:shotockviz-0x0 — must be None, not 0.0. A 0.0 sentinel is
+        indistinguishable from a genuinely-computed 0.0 and was silently
+        treated by the screener's price filter as 'no MA, pass anyway'."""
+        assert _compute_sma([100, 101], period=50) is None
 
     def test_exact_period(self):
         closes = [10.0, 20.0, 30.0]
@@ -218,3 +221,22 @@ class TestMatchesPrice:
 
     def test_any(self):
         assert _matches_price(100, 200, 300, "any") is True
+
+    # bd:shotockviz-0x0 — a symbol whose MA200/MA50 could not be computed
+    # (None, insufficient history) must be EXCLUDED from an MA filter, never
+    # silently pass it. This is the exact regression: with the 0.0 sentinel,
+    # every symbol with < 200 daily bars satisfied "above_ma200" no matter
+    # what its price was.
+    def test_above_ma200_excludes_symbol_with_insufficient_history(self):
+        assert _matches_price(close=150.0, ma50=140.0, ma200=None, flt="above_ma200") is False
+
+    def test_below_ma200_excludes_symbol_with_insufficient_history(self):
+        assert _matches_price(close=50.0, ma50=60.0, ma200=None, flt="below_ma200") is False
+
+    def test_above_ma50_excludes_symbol_with_insufficient_history(self):
+        assert _matches_price(close=150.0, ma50=None, ma200=140.0, flt="above_ma50") is False
+
+    def test_any_filter_does_not_require_ma_and_still_passes_with_none(self):
+        """'any' never needed the MA — a symbol with too little history for
+        MA200 must still be screenable on RSI/MACD/volume alone."""
+        assert _matches_price(close=100.0, ma50=None, ma200=None, flt="any") is True

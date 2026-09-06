@@ -82,13 +82,17 @@ def _matches_macd(macd_val: float, sig_val: float, flt: str) -> bool:
     return True  # "any"
 
 
-def _matches_price(close: float, ma50: float, ma200: float, flt: str) -> bool:
+def _matches_price(close: float, ma50: float | None, ma200: float | None, flt: str) -> bool:
+    """A symbol whose MA cannot be computed (None — insufficient history)
+    must never satisfy an MA filter (bd:shotockviz-0x0). It is excluded,
+    not silently passed, when that specific filter is requested; a
+    caller asking for "any" never needed the MA in the first place."""
     if flt == "above_ma200":
-        return close > ma200 if ma200 > 0 else True
+        return ma200 is not None and close > ma200
     if flt == "above_ma50":
-        return close > ma50 if ma50 > 0 else True
+        return ma50 is not None and close > ma50
     if flt == "below_ma200":
-        return close < ma200 if ma200 > 0 else True
+        return ma200 is not None and close < ma200
     return True  # "any"
 
 
@@ -168,6 +172,18 @@ def _evaluate_symbol(
     if not _matches_volume(vol_ratio, volume_filter):
         return None
     if not _matches_macd(macd_val, sig_val, macd_filter):
+        return None
+    if price_filter in ("above_ma200", "below_ma200") and ma200 is None:
+        logger.debug(
+            "Screener: excluded — insufficient history for MA200",
+            symbol=bars[0].symbol, bars=len(bars), filter=price_filter,
+        )
+        return None
+    if price_filter == "above_ma50" and ma50 is None:
+        logger.debug(
+            "Screener: excluded — insufficient history for MA50",
+            symbol=bars[0].symbol, bars=len(bars), filter=price_filter,
+        )
         return None
     if not _matches_price(close_now, ma50, ma200, price_filter):
         return None
