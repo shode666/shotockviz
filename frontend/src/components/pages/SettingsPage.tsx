@@ -6,6 +6,7 @@ import useAppStore from '@/store/appStore';
 import authService from '@/services/authService';
 import api from '@/services/api';
 import { getCurrentSection } from '@/utils/scrollspy';
+import { didClearAuthSession } from '@/services/apiErrorHandler';
 
 // bd:shotockviz-06z.1 — restates `models.schemas.MIN_/MAX_GAP_MIN_PCT`
 // (backend/models/schemas.py), the ONE place these bounds are actually
@@ -173,7 +174,15 @@ export default function SettingsPage() {
             // value), but the gap field gets its OWN inline error too:
             // bd:shotockviz-06z.1 must never let this field read as saved
             // when the request the trader just made was rejected.
-            setGapMinPctError('บันทึกเกณฑ์ Gap ไม่สำเร็จ ลองใหม่อีกครั้ง');
+            //
+            // bd:shotockviz-2qw — except when the rejection WAS the logout.
+            // PATCH is deliberately not flagged `skipAuthClearOn401`
+            // (bd:shotockviz-tjh), so a 401 here has already cleared the
+            // session; "try again" on top of that points the trader at a form
+            // they no longer have a session for.
+            if (!didClearAuthSession(gapResult.reason)) {
+                setGapMinPctError('บันทึกเกณฑ์ Gap ไม่สำเร็จ ลองใหม่อีกครั้ง');
+            }
         }
 
         setIsSaving(false);

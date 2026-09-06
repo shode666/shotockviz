@@ -131,6 +131,14 @@ export function handleApiError(error: ApiErrorLike, deps: ApiErrorHandlerDeps): 
         if (error.config?.skipAuthClearOn401) {
             return;
         }
+        // bd:shotockviz-2qw — mark the rejection HERE, in the branch that
+        // actually clears the session, so `didClearAuthSession()` below can
+        // never drift from the condition that caused it. A component's own
+        // `.catch` still runs after this and would otherwise render "save
+        // failed, try again" on top of a logout — inviting the trader to
+        // retry a form they no longer have a session for. Set before the
+        // store call, so the mark survives even if that throws.
+        markAuthSessionCleared(error);
         deps.authStore.getState().handleUnauthorizedResponse();
         return;
     }
@@ -139,4 +147,48 @@ export function handleApiError(error: ApiErrorLike, deps: ApiErrorHandlerDeps): 
     }
 
     deps.showToast(extractErrorMessage(error), { id: `api-err-${status}` });
+}
+
+
+// ─── bd:shotockviz-2qw — "was this rejection a logout?" ─────────────────────
+//
+// Two signals fire on a 401 mid-save: this handler clears the session
+// (deliberate — bd:shotockviz-tjh left both PATCH save actions unflagged
+// precisely so a genuinely expired session still logs you out), and the
+// calling component's own `.catch` renders its inline save error. Each is
+// correct alone; together they log the trader out while telling them to try
+// saving again.
+//
+// The fix is NOT to stop clearing the session on 401 — that is the tjh
+// decision and it stands. It is to let a component tell the two failures
+// apart, so it can stay quiet about a save that failed because the session
+// ended rather than because the save was rejected.
+//
+// A flag stamped by the branch itself, rather than a component re-deriving
+// `status === 401 && !config.skipAuthClearOn401`: re-deriving it puts the
+// same condition in three places, and this codebase has repeatedly paid for
+// exactly that (five hand-rolled Telegram senders, five fund-NAV dicts, two
+// market-hours models). A request that opted out with `skipAuthClearOn401`
+// is NOT marked, so its 401 is a plain failure the component should still
+// report — which is the right answer, since no session was cleared.
+
+interface AuthClearedMarker {
+    __authSessionCleared?: boolean;
+}
+
+function markAuthSessionCleared(error: unknown): void {
+    if (error && typeof error === 'object') {
+        (error as AuthClearedMarker).__authSessionCleared = true;
+    }
+}
+
+/**
+ * True when THIS rejection is the one that cleared the auth session, i.e. the
+ * user has just been logged out and any "save failed" message the caller is
+ * about to show would be both redundant and misleading.
+ */
+export function didClearAuthSession(error: unknown): boolean {
+    return Boolean(
+        error && typeof error === 'object' && (error as AuthClearedMarker).__authSessionCleared,
+    );
 }

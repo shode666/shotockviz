@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, ShieldAlert } from 'lucide-react';
 import api from '@/services/api';
+import { didClearAuthSession } from '@/services/apiErrorHandler';
 import { displaySymbol, formatPriceTH } from '@/utils/formatters';
 import { hasAllocation } from '@/utils/allocation';
 import {
@@ -158,8 +159,15 @@ export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimi
             await api.patch('/settings/trader', { concentration_limit_pct: parsed });
             saveConcentrationLimitPct(userId, parsed);
             setLimitPct(parsed); // triggers the effect above -> re-check against the server
-        } catch {
-            setSaveError('บันทึกไม่สำเร็จ — ค่าที่แสดงอยู่อาจไม่ตรงกับที่บันทึกไว้ ลองใหม่อีกครั้ง');
+        } catch (err) {
+            // bd:shotockviz-2qw — a 401 here is a LOGOUT, not a rejected
+            // save: PATCH is deliberately not flagged `skipAuthClearOn401`
+            // (bd:shotockviz-tjh), so the interceptor has already cleared the
+            // session. Showing "try again" on top of that invites the trader
+            // to retry a form they no longer have a session for.
+            if (!didClearAuthSession(err)) {
+                setSaveError('บันทึกไม่สำเร็จ — ค่าที่แสดงอยู่อาจไม่ตรงกับที่บันทึกไว้ ลองใหม่อีกครั้ง');
+            }
         } finally {
             setSaving(false);
         }

@@ -27,7 +27,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleApiError, isSilentPath, extractErrorMessage, type ApiErrorLike, type AuthStoreLike } from './apiErrorHandler.ts';
+import { handleApiError, isSilentPath, extractErrorMessage, didClearAuthSession, type ApiErrorLike, type AuthStoreLike } from './apiErrorHandler.ts';
 
 const SILENT_PATHS = ['/quote', '/history', '/fundamentals', '/news', '/search', '/auth/me', '/system/ready', '/sr-levels'];
 
@@ -241,4 +241,75 @@ test('extractErrorMessage: prefers envelope meta.error.message, falls back to de
         extractErrorMessage({ message: 'network down' }),
         'network down',
     );
+});
+
+
+// ─── bd:shotockviz-2qw ──────────────────────────────────────────────────────
+// A 401 mid-save fires two individually-correct signals at once: this handler
+// clears the session (deliberate — bd:shotockviz-tjh left both PATCH save
+// actions unflagged so a genuinely expired session still logs you out), and
+// the calling component's own `.catch` renders "save failed, try again".
+// Together they log the trader out while pointing them back at a form they no
+// longer have a session for. The mark below is what lets a component tell the
+// two apart WITHOUT re-deriving `status === 401 && !skipAuthClearOn401` in a
+// third place.
+
+test('2qw: a 401 that clears the session marks its own rejection', () => {
+    const { authStore, getCallCount } = makeSpyAuthStore();
+    const { showToast } = makeToastSpy();
+
+    const error: ApiErrorLike = { config: { url: '/settings/trader' }, response: { status: 401, data: {} } };
+    handleApiError(error, { silentPaths: SILENT_PATHS, authStore, showToast });
+
+    assert.equal(getCallCount(), 1);
+    assert.equal(
+        didClearAuthSession(error), true,
+        'the branch that cleared the session must mark the rejection, so a component can tell a logout from a rejected save',
+    );
+});
+
+test('2qw: a 500 is NOT marked — a real save failure must still be reported inline', () => {
+    const { authStore } = makeSpyAuthStore();
+    const { showToast } = makeToastSpy();
+
+    const error: ApiErrorLike = { config: { url: '/settings/trader' }, response: { status: 500, data: {} } };
+    handleApiError(error, { silentPaths: SILENT_PATHS, authStore, showToast });
+
+    assert.equal(didClearAuthSession(error), false);
+});
+
+test('2qw: a 401 on a request that opted out is NOT marked, because no session was cleared', () => {
+    const { authStore, getCallCount } = makeSpyAuthStore();
+    const { showToast } = makeToastSpy();
+
+    const error: ApiErrorLike = {
+        config: { url: '/settings/trader', skipAuthClearOn401: true },
+        response: { status: 401, data: {} },
+    };
+    handleApiError(error, { silentPaths: SILENT_PATHS, authStore, showToast });
+
+    assert.equal(getCallCount(), 0);
+    assert.equal(
+        didClearAuthSession(error), false,
+        'nothing was cleared, so the caller SHOULD still surface this failure',
+    );
+});
+
+test('2qw: didClearAuthSession never throws on a non-object rejection', () => {
+    for (const v of [null, undefined, 'boom', 42]) {
+        assert.equal(didClearAuthSession(v), false);
+    }
+});
+
+test('2qw: the mark is per-rejection, not sticky across errors', () => {
+    const { authStore } = makeSpyAuthStore();
+    const { showToast } = makeToastSpy();
+
+    const first: ApiErrorLike = { config: { url: '/settings/trader' }, response: { status: 401, data: {} } };
+    const second: ApiErrorLike = { config: { url: '/settings/trader' }, response: { status: 500, data: {} } };
+    handleApiError(first, { silentPaths: SILENT_PATHS, authStore, showToast });
+    handleApiError(second, { silentPaths: SILENT_PATHS, authStore, showToast });
+
+    assert.equal(didClearAuthSession(first), true);
+    assert.equal(didClearAuthSession(second), false);
 });
