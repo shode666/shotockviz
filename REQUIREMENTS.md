@@ -141,20 +141,41 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
 
 #### FR-CHART-003: Drawing Tools (Logged-in Users only)
 
-> **Status: Deferred** — the drawing toolbar was removed from the shipped UI (`bd:ui-honesty-2026-09`, feature F1) because none of it persisted anything; it drew shapes that vanished on reload. Backend today exposes only `GET /api/v1/sr-levels/{symbol}` (`backend/api/routes/sr_levels.py`) for read-only support/resistance lines — there is no `POST`/`DELETE` and no drawing-CRUD engine (trend line, Fibonacci, rectangle, arrow, pitchfork below are not built). Tracked as `bd:shotockviz-474` (chart: user-drawn S/R lines (H-Line) — backend has GET /sr-levels only).
+> **Status: Horizontal line only — shipped (`bd:shotockviz-474`).** The full 6-tool
+> drawing toolbar was removed (`bd:ui-honesty-2026-09` F1) because none of it
+> persisted anything; it drew shapes that vanished on reload. Only the
+> **Horizontal Line** tool below has been rebuilt, backed by real persistence:
+> `GET/POST/DELETE /api/v1/sr-levels` (`backend/api/routes/sr_levels.py`),
+> rows stored in the existing `sr_levels` table with `source='user_created'`
+> and a `user_id` owner (`backend/models/sr_level.py`). A user can mark a
+> price as support or resistance, an optional label, have it survive a
+> reload, and delete it — via the "+ Level" control and delete chips in
+> `ChartToolbar.tsx`. Trend Line, Fibonacci, Rectangle, Arrow and Pitchfork
+> remain **not built** — there is still no generic drawing-CRUD engine for
+> arbitrary shapes, and none is planned by this bead (the `drawings.py`
+> route + `Drawing` model exist in the backend but have zero frontend
+> consumers; they are a dead parallel path from an earlier design, not the
+> home this feature uses).
+>
+> User-created levels do **not** participate in the proximity digest
+> (`workers/sr_proximity_digest.py`, still `manual_import`/`auto_pivot`
+> only) — a personal entry/stop/target scratch mark is a different thing
+> from a curated/computed level worth a 2x/day heads-up, and price
+> notifications are already Alerts' job.
 
-- **Trend Line**: เส้นตรง 2 จุด
-- **Horizontal Line**: เส้นแนวนอนที่ราคาที่กำหนด
-- **Fibonacci Retracement**: 0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%
-- **Rectangle**: กล่องสี่เหลี่ยม highlight zone
-- **Arrow**: ลูกศรชี้ขึ้น/ลง
-- **Pitchfork (Andrew's Fork)**: 3 จุด
+- ~~**Trend Line**: เส้นตรง 2 จุด~~ — not built
+- **Horizontal Line**: เส้นแนวนอนที่ราคาที่กำหนด — **built**: create (price +
+  support/resistance + optional label), persists across reload, delete
+- ~~**Fibonacci Retracement**: 0%, 23.6%, 38.2%, 50%, 61.8%, 78.6%, 100%~~ — not built
+- ~~**Rectangle**: กล่องสี่เหลี่ยม highlight zone~~ — not built
+- ~~**Arrow**: ลูกศรชี้ขึ้น/ลง~~ — not built
+- ~~**Pitchfork (Andrew's Fork)**: 3 จุด~~ — not built
 
-Drawing features:
-- เปลี่ยนสี, ความหนาเส้น, line style (solid/dash/dot)
-- ลบทีละเส้น หรือ ลบทั้งหมด
-- บันทึก drawings per user per symbol per timeframe
-- Undo/Redo (Ctrl+Z / Ctrl+Y)
+Drawing features (horizontal line only):
+- เลือก support หรือ resistance ต่อเส้น (สีตาม `srLevelColor.ts`, ไม่มี custom color picker)
+- ลบทีละเส้น (ไม่มี "ลบทั้งหมด" แยกต่างหาก — ลบทีละเส้นครอบคลุมกรณีนี้)
+- บันทึก per user per symbol (ไม่ผูกกับ timeframe — a price level is the same level on every timeframe)
+- ~~Undo/Redo (Ctrl+Z / Ctrl+Y)~~ — not built
 
 #### FR-CHART-004: Crosshair & Tooltip
 - Crosshair แสดง O, H, L, C, Volume ที่ position ของ mouse
@@ -222,11 +243,19 @@ Drawing features:
 - กำไร/ขาดทุน (Unrealized P&L) per stock + รวม
 - % allocation pie chart
 - Fundamental overlay: P/E, P/BV, Dividend Yield, Market Cap
+  > **bd:shotockviz-916 (allocation implemented 2026-09-06)** — the allocation breakdown is a share of **current market value in the base currency**, and its denominator is stated on the panel: it is `PortfolioAnalytics.total_value`, the same number the "มูลค่ารวม" card prints, i.e. the value of exactly the positions the totals could state. It is **not** a share of cost and **not** a share of "the whole book". A position the totals excluded — no usable quote (`bd:shotockviz-2w8`), no FX rate for its currency (`bd:shotockviz-fnn`/`-sbe`), or its own rows disagreeing on a currency (`bd:shotockviz-7ju`) — gets **no slice at all** and is named underneath the chart with its reason (`allocation.excluded`, one of `unpriced` / `fx_unavailable` / `currency_conflict`). Drawing it at 0% was rejected: a zero-area wedge reads as "this name is worth nothing", which is precisely the fabricated-loss claim `2w8` removed; drawing it at its *cost basis* was rejected too, because a cost-shaped area inside a market-value ring makes every percentage a percentage of nothing. The slice areas come from `value_base` (not from the rounded `weight_pct`), so `sum(slices) == total_value` exactly and the ring always closes. Computed by `build_allocation()` in `backend/services/portfolio_service.py` from the output of `summarize()` — inclusion is decided in one place and read here, so the chart cannot become a fourth surface that disagrees with the header, the holdings table and the equity curve about one book. Holdings are split-restated at read time first (`bd:shotockviz-eb1`), so a 2:1 does not halve a name's weight. No charting dependency was added: `lightweight-charts` draws time series, and the donut is inline SVG (`frontend/src/utils/allocation.ts` + `PortfolioPage.tsx`) per the no-new-deps NFR (ADR-UH-003). On a 40-60 name book the top 8 names get their own slice and the tail is folded into one "อื่นๆ (N รายการ)" slice that states its count and its combined weight.
 
 #### FR-PORT-003: Risk Metrics
-- **Sharpe Ratio**: ผลตอบแทนต่อความเสี่ยง
-- **Max Drawdown**: ขาดทุนสูงสุดจาก peak
-- **Beta**: ความสัมพันธ์กับตลาด
+> **bd:shotockviz-916 (all three struck 2026-09-06)** — Sharpe Ratio, Beta **and** Max Drawdown are removed from scope rather than built.
+>
+> **The one input all three are missing is a portfolio RETURN series.** What this system has is `GET /api/v1/portfolio/performance`, a **market-value** curve, and three properties of it disqualify it as a return series: (1) it moves with external cash flows — a scale-out halves the line without a satang being lost, and a top-up raises it without a gain, so peak-to-trough on it measures portfolio *size*, not performance; (2) a day on which any held symbol is unpriced or unconvertible is omitted entirely (`portfolio_performance.py` — the day is skipped, deliberately, so a dropped position cannot make the line fall), so the series has holes and any peak found in it is a peak among the days that happened to be observable; (3) its declared basis is `fx_basis: "constant_current_rate"` (`bd:shotockviz-la4`) — every day is converted at today's rate, so its historical levels are explicitly *not* what the book was worth in THB on those dates. Turning it into a return series means a flow-adjusted computation (time-weighted / Modified Dietz over the daily buy and sell amounts, which the transaction rows do support) — real work and a decision of its own, not a read-time derivation from what is already there.
+>
+> Per metric, on top of that:
+> - **Sharpe Ratio** — also needs a risk-free rate, and nothing in this system observes one. (The only `sharpe` in the codebase is `services/backtesting_engine.py:409-416`, which divides mean return by its standard deviation — an *implicit* risk-free of 0, not stated in the payload — for a single-symbol strategy backtest. That is a different surface and is not evidence that the portfolio can produce the number.)
+> - **Beta** — the benchmark is **not** the blocker, contrary to the first reading of this: `^SET.BK` and `^GSPC` are kept warm by `workers/price_fetcher.py:47`, are readable through `stock_service.read_history`, and are already used this way by `GET /api/v1/stocks/{symbol}/rs` (`api/routes/stocks/history.py:63`). What is missing is the portfolio return series above, plus a decision nobody has made: this is a **mixed SET + US book**, and a single-benchmark beta for it would have to pick one index or blend two by a weighting scheme that would itself be an invention.
+> - **Max Drawdown** — nothing further; it fails on the return series alone.
+>
+> The intent is kept for future work; what would have to be built first is named above so it can be re-opened deliberately rather than re-guessed. What was built from this bead is the allocation breakdown (FR-PORT-002).
 
 ---
 

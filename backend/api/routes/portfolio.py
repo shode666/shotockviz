@@ -15,6 +15,7 @@ from models.portfolio import Transaction
 from models.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics,
     HoldingResponse, FxRateInfo, ClosedPositionResponse, RealizedBookResponse,
+    PortfolioAllocation, AllocationSliceResponse, AllocationExclusionResponse,
 )
 from api.middleware.auth import get_current_user
 from services import corporate_actions, portfolio_service, stock_service
@@ -294,6 +295,14 @@ async def get_analytics(
     # GET /portfolio/realized so this hot path does not grow with trade history.
     realized = portfolio_service.build_realized(holdings)
 
+    # bd:shotockviz-916 / FR-PORT-002 — the same `valued` rows and the same
+    # `totals`, split by weight. Built from the SUMMARY so the pie's denominator
+    # is literally `total_value` above and its included set is literally the set
+    # `summarize` counted; nothing re-decides inclusion here. Every position the
+    # totals excluded arrives in `allocation.excluded` with its reason instead of
+    # a 0% slice.
+    allocation = portfolio_service.build_allocation(valued, totals)
+
     holding_responses = [
         HoldingResponse(
             symbol=v.symbol,
@@ -356,6 +365,30 @@ async def get_analytics(
         split_adjusted_symbols=totals.split_adjusted_symbols,
         rights_unstatable_symbols=totals.rights_unstatable_symbols,
         holdings=holding_responses,
+        # bd:shotockviz-916 — the pie. `total_value` here is the same float as
+        # `total_value` above (not a re-sum), and `sum(slice.value_base)` equals
+        # it exactly, so the chart and the header cannot state different books.
+        allocation=PortfolioAllocation(
+            basis=allocation.basis,
+            base_currency=allocation.base_currency,
+            total_value=round(allocation.total_value, 2),
+            slices=[
+                AllocationSliceResponse(
+                    symbol=s.symbol,
+                    currency=s.currency,
+                    value_base=round(s.value_base, 2),
+                    weight_pct=round(s.weight_pct, 2),
+                    split_adjusted=s.split_adjusted,
+                    rights_unstatable=s.rights_unstatable,
+                )
+                for s in allocation.slices
+            ],
+            excluded=[
+                AllocationExclusionResponse(symbol=e.symbol, reason=e.reason)
+                for e in allocation.excluded
+            ],
+            fx_estimated=allocation.fx_estimated,
+        ),
         # Derived from the positions actually left unpriced (a cache "miss" that
         # the fund stage then resolved is not pending; a cached but unusable
         # price is).

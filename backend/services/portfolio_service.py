@@ -1057,6 +1057,149 @@ def summarize(valued: Sequence[ValuedHolding]) -> PortfolioTotals:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Allocation — bd:shotockviz-916 (FR-PORT-002, "% allocation")
+#
+# The question this answers is position sizing on a 40-60 name book: "how much
+# of what I can state is sitting in one name?". Everything about it follows from
+# one decision:
+#
+#   THE DENOMINATOR IS `PortfolioTotals.total_value` — the base-currency market
+#   value of exactly the positions `summarize` included, and the same number the
+#   header prints. Not cost, not "the whole book".
+#
+# Two consequences, both deliberate:
+#
+# A) Weights are shares of *current market value* (`basis`), not of cost. A
+#    concentration question is about exposure now, so the basis is stated in the
+#    payload rather than left to be inferred from the label.
+#
+# B) An EXCLUDED position gets NO SLICE, and is named instead. This is the only
+#    reading that survives rules 2/4/5. A slice needs an area, an area needs a
+#    number, and for these three the number is exactly what is unknown:
+#      * unpriced (rule 2)            — no market value exists to divide;
+#      * no FX rate (rule 4)          — the value is not expressible in the base;
+#      * currency conflict (rule 5)   — the position has no statable cost either.
+#    The tempting fix — draw the slice at its COST basis — would mix a
+#    cost-shaped area into a market-value pie, so the percentages would no longer
+#    be percentages of anything. Drawing it at zero is the fabricated-loss bug of
+#    rule 2 in pie form: a 0% slice reads as "this name is nothing", when the
+#    truth is "we cannot say". So `excluded` carries the symbol AND the reason,
+#    and a caller that renders the chart without rendering that list is showing a
+#    chart of a book it silently shrank.
+#
+# The invariant that makes the picture trustworthy: `sum(s.value_base) ==
+# total_value` exactly (both are summed from the same `current_value_base`
+# values), so a renderer that draws arcs from `value_base` cannot produce a ring
+# that does not close. `weight_pct` is derived from those same values and is a
+# convenience for labels — geometry should use `value_base`.
+# ─────────────────────────────────────────────────────────────────────────────
+
+ALLOCATION_BASIS_CURRENT_VALUE = "current_value_base"
+
+# Why a position is not in the pie. Same three exclusions `summarize` makes —
+# read off its output, never re-decided here.
+EXCLUDED_UNPRICED = "unpriced"
+EXCLUDED_FX_UNAVAILABLE = "fx_unavailable"
+EXCLUDED_CURRENCY_CONFLICT = "currency_conflict"
+# Included by `summarize` yet carrying no base value. Unreachable given
+# `summarize`'s own test (priced => value, convertible => rate => value_base);
+# it exists so that if the two ever drift, the position is NAMED rather than
+# quietly missing from a ring that claims to close.
+EXCLUDED_UNSTATABLE = "unstatable"
+
+
+@dataclass
+class AllocationSlice:
+    """One name's share of the stated total."""
+
+    symbol: str
+    currency: str
+    value_base: float   # the slice's area — use THIS for geometry
+    weight_pct: float   # value_base / total_value * 100, for labels
+    split_adjusted: bool = False
+    rights_unstatable: bool = False
+
+
+@dataclass
+class AllocationExclusion:
+    """A position that has no slice, and why. Never a 0% slice."""
+
+    symbol: str
+    reason: str
+
+
+@dataclass
+class Allocation:
+    basis: str = ALLOCATION_BASIS_CURRENT_VALUE
+    base_currency: str = BASE_CURRENCY
+    # The denominator. Identical to `PortfolioTotals.total_value`, so the pie and
+    # the header total are the same book.
+    total_value: float = 0.0
+    slices: list[AllocationSlice] = field(default_factory=list)
+    excluded: list[AllocationExclusion] = field(default_factory=list)
+    # Some rate in the denominator is not a live quote — the weights inherit that.
+    fx_estimated: bool = False
+
+    @property
+    def top_weight_pct(self) -> float | None:
+        """Largest single-name weight. None when nothing is statable — 0 would
+        claim the book is perfectly diversified, which is not what "we cannot
+        price anything" means."""
+        return self.slices[0].weight_pct if self.slices else None
+
+
+def build_allocation(
+    valued: Sequence[ValuedHolding],
+    totals: PortfolioTotals,
+) -> Allocation:
+    """Split `totals.total_value` across the positions that produced it.
+
+    Takes the SUMMARY, not the raw book, on purpose: inclusion is decided in
+    exactly one place (`summarize`) and read here. A second inclusion test would
+    be a fourth surface able to disagree with the other three about one book —
+    the failure this module exists to prevent (bd:shotockviz-msg / -la4).
+    """
+    by_symbol = {v.symbol: v for v in valued}
+
+    alloc = Allocation(
+        base_currency=totals.base_currency,
+        total_value=totals.total_value,
+        fx_estimated=totals.fx_estimated,
+    )
+
+    for symbol in totals.currency_conflict_symbols:
+        alloc.excluded.append(AllocationExclusion(symbol, EXCLUDED_CURRENCY_CONFLICT))
+    for symbol in totals.unpriced_symbols:
+        alloc.excluded.append(AllocationExclusion(symbol, EXCLUDED_UNPRICED))
+    for symbol in totals.fx_unavailable_symbols:
+        alloc.excluded.append(AllocationExclusion(symbol, EXCLUDED_FX_UNAVAILABLE))
+
+    # A percentage of nothing is undefined, not zero (same doctrine as
+    # `ClosedTrade.realized_pl_pct`). An all-unpriced book therefore reports the
+    # exclusions and NO slices, rather than a ring of 0% wedges.
+    if totals.total_value > 0:
+        for symbol in totals.priced_symbols:
+            v = by_symbol.get(symbol)
+            value = v.current_value_base if v is not None else None
+            if value is None:
+                alloc.excluded.append(AllocationExclusion(symbol, EXCLUDED_UNSTATABLE))
+                continue
+            alloc.slices.append(AllocationSlice(
+                symbol=symbol,
+                currency=v.currency,
+                value_base=value,
+                weight_pct=value / totals.total_value * 100,
+                split_adjusted=v.split_adjusted,
+                rights_unstatable=v.rights_unstatable,
+            ))
+
+    # Heaviest first — the concentration question is read from the top.
+    alloc.slices.sort(key=lambda s: (-s.value_base, s.symbol))
+    alloc.excluded.sort(key=lambda e: e.symbol)
+    return alloc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Realized P&L — bd:shotockviz-tmz. Cost flow: moving weighted average (rule 6).
 # ─────────────────────────────────────────────────────────────────────────────
 

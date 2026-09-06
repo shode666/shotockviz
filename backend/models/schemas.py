@@ -1,7 +1,7 @@
 """Pydantic schemas for request/response validation."""
 from datetime import datetime, date
 from datetime import date as _date_type  # noqa: F401 — see TransactionUpdate.date
-from typing import Optional, List
+from typing import Optional, List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -297,6 +297,43 @@ class HoldingResponse(BaseModel):
     fx_pl_base: Optional[float] = None       # None = unavailable, NOT zero
 
 
+class AllocationSliceResponse(BaseModel):
+    """One name's share of the stated total (bd:shotockviz-916, FR-PORT-002)."""
+    symbol: str
+    currency: str = "THB"
+    # The slice's AREA. `sum(value_base)` equals `PortfolioAllocation.total_value`
+    # exactly, so a renderer that draws arcs from this cannot close short.
+    value_base: float
+    weight_pct: float  # for labels; geometry should use value_base
+    split_adjusted: bool = False
+    rights_unstatable: bool = False
+
+
+class AllocationExclusionResponse(BaseModel):
+    """A position with NO slice, and why — never a 0% wedge."""
+    symbol: str
+    # unpriced | fx_unavailable | currency_conflict | unstatable
+    reason: str
+
+
+class PortfolioAllocation(BaseModel):
+    """% allocation — FR-PORT-002 (bd:shotockviz-916).
+
+    `total_value` IS the denominator and is the same number as
+    `PortfolioAnalytics.total_value`: the base-currency market value of the
+    positions that entered the totals. Everything the totals excluded (rules
+    2/4/5 in services/portfolio_service.py) is in `excluded` with its reason and
+    has no slice — a position whose value is unknown has no honest area, and a
+    0% wedge would read as "this name is worth nothing".
+    """
+    basis: str = "current_value_base"  # shares of market value, not of cost
+    base_currency: str = "THB"
+    total_value: float = 0.0
+    slices: List[AllocationSliceResponse] = []
+    excluded: List[AllocationExclusionResponse] = []
+    fx_estimated: bool = False
+
+
 class PortfolioAnalytics(BaseModel):
     # bd:shotockviz-sbe — these four are now unambiguously in `base_currency`.
     # They used to be a raw sum of THB and USD amounts.
@@ -322,6 +359,9 @@ class PortfolioAnalytics(BaseModel):
     day_change: Optional[float] = None
     holdings: List[HoldingResponse]
     has_pending_prices: bool = False
+    # bd:shotockviz-916 / FR-PORT-002 — the same book, split by weight. Its
+    # denominator is `total_value` above; see PortfolioAllocation.
+    allocation: Optional[PortfolioAllocation] = None
     # ── realized side (bd:shotockviz-tmz) ─────────────────────────────────────
     # Summary only, in `base_currency`. The per-trade log lives on
     # GET /portfolio/realized so this hot path does not grow with the user's
@@ -461,6 +501,19 @@ class SRLevelResponse(BaseModel):
     source: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# bd:shotockviz-474 — request body for POST /sr-levels/{symbol}. `source` and
+# `user_id` are deliberately NOT accepted from the client — the route sets
+# `source="user_created"` and `user_id=<caller>` itself (see sr_levels.py),
+# so a caller can never mint a `manual_import`/`auto_pivot` row or attribute
+# a level to someone else. `color` is also not accepted here: user-created
+# rows get color=None and fall through to srLevelColor.ts's by-type fallback,
+# same as every other un-colored row — no per-row color picker in scope.
+class SRLevelCreate(BaseModel):
+    price: float = Field(gt=0)
+    level_type: Literal["support", "resistance"]
+    tag: Optional[str] = Field(default=None, max_length=50)
 
 
 # ─── News ──────────────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { AddTransactionModal, type EditableTransaction } from '@/components/port
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable';
 import { usePortfolioData } from '@/hooks/usePortfolioData';
 import { buildQualifications, hasQualifications, realFxRates, type QualificationTone } from '@/utils/portfolioQualifications';
+import { groupAllocation, donutSegments, exclusionSentence, hasAllocation } from '@/utils/allocation';
 
 const CURR_SIGN: Record<string, string> = { THB: '฿', USD: '$' };
 
@@ -108,6 +109,145 @@ function BookQualifications({ analytics }: { analytics: any }) {
                         {fxPl >= 0 ? '+' : '-'}฿{formatPriceTH(Math.abs(fxPl))}
                     </span>
                 </div>
+            )}
+        </div>
+    );
+}
+
+/**
+ * bd:shotockviz-916 / FR-PORT-002 — % allocation.
+ *
+ * The picture answers one question: how much of the book is in one name. So the
+ * heaviest position is stated in words above the ring, not left to be judged by
+ * eye from an arc.
+ *
+ * What it is a percentage OF is on the panel, not implied: the denominator is
+ * the base-currency market value of the positions that could be stated — the
+ * same number the "มูลค่ารวม" card prints — and every position left out of it is
+ * named underneath with its reason. An excluded position gets no wedge at all,
+ * because a 0% wedge says "worth nothing" and the truth is "not known"
+ * (bd:shotockviz-2w8 / -7ju / -fnn; see build_allocation in
+ * backend/services/portfolio_service.py).
+ *
+ * No charting dependency: `lightweight-charts` (package.json:25) draws time
+ * series, and ADR-UH-003's no-new-deps NFR rules out adding one for a donut.
+ * The arcs are `stroke-dasharray` on one circle per slice with `pathLength=100`,
+ * and the fractions come from `utils/allocation.ts` (unit-tested), so the ring
+ * closes on the values it is drawn from rather than on rounded percentages.
+ */
+function AllocationPanel({ analytics }: { analytics: any }) {
+    const allocation = analytics?.allocation;
+    if (!hasAllocation(allocation)) return null;
+
+    const slices = groupAllocation(allocation);
+    const segments = donutSegments(slices);
+    const excluded = exclusionSentence(allocation);
+    const approx = allocation?.fx_estimated ? '≈' : '';
+    const top = slices.length > 0 && !slices[0].isOthers ? slices[0] : null;
+    const qualified = slices.some((s) => s.qualified);
+
+    return (
+        <div
+            data-testid="portfolio-allocation"
+            className="panel border rounded-2xl p-4 mb-4"
+            style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
+        >
+            <div className="flex items-center gap-2 mb-1">
+                <BarChart2 size={13} aria-hidden="true" />
+                <h3 className="text-xs font-bold">สัดส่วนพอร์ต</h3>
+            </div>
+            {/* What the percentages are OF — stated, never implied. */}
+            <p className="text-[11px] mb-3" style={{ color: 'var(--color-text-sub)' }}>
+                คิดจากมูลค่าตลาดที่ระบุได้ {approx}฿{formatPriceTH(allocation?.total_value)} ({allocation?.base_currency ?? 'THB'})
+            </p>
+
+            {slices.length === 0 ? (
+                <p className="text-[11px]" style={{ color: 'var(--color-yellow)' }}>
+                    ยังไม่มีรายการที่ระบุมูลค่าได้ จึงยังแสดงสัดส่วนไม่ได้
+                </p>
+            ) : (
+                <div className="flex flex-wrap items-center gap-5">
+                    <svg
+                        viewBox="0 0 42 42"
+                        width={120}
+                        height={120}
+                        role="img"
+                        aria-label={`สัดส่วนพอร์ตตามมูลค่า: ${slices
+                            .map((s) => `${s.label} ${s.weight_pct.toFixed(1)}%`)
+                            .join(', ')}`}
+                        className="shrink-0"
+                    >
+                        <g transform="rotate(-90 21 21)">
+                            {segments.map((seg, i) => (
+                                <circle
+                                    key={seg.key}
+                                    cx="21"
+                                    cy="21"
+                                    r="15.9155"
+                                    fill="none"
+                                    stroke={slices[i].color}
+                                    strokeWidth="6"
+                                    pathLength={100}
+                                    strokeDasharray={`${seg.dash} ${seg.gap}`}
+                                    strokeDashoffset={seg.offset}
+                                />
+                            ))}
+                        </g>
+                    </svg>
+
+                    <div className="flex-1 min-w-[200px]">
+                        {top && (
+                            <p className="text-[11px] mb-2">
+                                หนักสุด{' '}
+                                <span className="font-semibold" style={{ color: 'var(--color-accent-text)' }}>
+                                    {displaySymbol(top.label)}
+                                </span>{' '}
+                                <span className="font-semibold tabular-nums">{top.weight_pct.toFixed(1)}%</span>
+                            </p>
+                        )}
+                        <ul className="flex flex-col gap-1">
+                            {slices.map((s) => (
+                                <li key={s.key} className="flex items-center gap-2 text-[11px]">
+                                    <span
+                                        aria-hidden="true"
+                                        className="w-2.5 h-2.5 rounded-sm shrink-0"
+                                        style={{ background: s.color }}
+                                    />
+                                    <span className="truncate">
+                                        {s.isOthers ? s.label : displaySymbol(s.label)}
+                                        {/* Not aria-hidden: the footnote below it is
+                                            real text, so the marker has to be
+                                            reachable by the same reader. */}
+                                        {s.qualified && <span> *</span>}
+                                    </span>
+                                    <span className="ml-auto tabular-nums font-semibold">
+                                        {s.weight_pct.toFixed(1)}%
+                                    </span>
+                                    <span className="tabular-nums w-24 text-right" style={{ color: 'var(--color-text-sub)' }}>
+                                        ฿{formatPriceTH(s.value_base)}
+                                    </span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            )}
+
+            {qualified && (
+                <p className="text-[10px] mt-3" style={{ color: 'var(--color-text-sub)' }}>
+                    * จำนวนหุ้นถูกปรับตามการแตกพาร์ หรืออาจไม่ครบเพราะไม่ได้บันทึกการใช้สิทธิเพิ่มทุน
+                </p>
+            )}
+
+            {/* The chart must never be readable without this line: a book whose
+                excluded positions are invisible is a book that looks smaller and
+                more concentrated than it is. */}
+            {excluded && (
+                <p className="text-[11px] mt-3 flex items-start gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
+                    <Hourglass size={12} strokeWidth={2} aria-hidden="true" className="mt-[2px] shrink-0"
+                        style={{ color: 'var(--color-yellow)' }} />
+                    <span>{excluded}</span>
+                </p>
             )}
         </div>
     );
@@ -299,7 +439,13 @@ export default function PortfolioPage() {
                             above the stat cards. Nothing is rendered after the
                             figures it explains. */}
                         {activeTab === 'holdings' && (
-                            <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
+                            <>
+                                {/* bd:shotockviz-916 — the same book as the table
+                                    below and the totals above; one computation
+                                    (services/portfolio_service.py), three views. */}
+                                <AllocationPanel analytics={analytics} />
+                                <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
+                            </>
                         )}
 
                         {/* Tab: Transaction History */}
