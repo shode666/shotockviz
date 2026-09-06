@@ -180,6 +180,46 @@ Accounting rules pinned here (state them once, apply everywhere):
    honest report is "this number may be short of shares you paid for", not "we
    cannot state this position".
 
+8. bd:shotockviz-43y — OPEN RISK. "How much am I risking right now, in total,
+   if every stop hits." Three decisions, all of them consequences of rules 2-5:
+
+   R-1 WHERE A STOP LIVES. On `sr_levels`, as a `user_created` row with
+   `level_type='stop'` (models/sr_level.py). There is NO position entity in this
+   product — a holding is a fold over `transactions` — so "put it on the
+   position" would mean inventing a positions table, i.e. a THIRD place a
+   price-per-symbol lives beside `alerts.value` and `sr_levels.price`. One stop
+   per (user, symbol), enforced by a partial unique index, so the model cannot
+   express "which of these two is my stop".
+
+   R-2 NO STOP IS NOT ZERO RISK. A position with no stop is EXCLUDED from the
+   total and named (`EXCLUDED_NO_STOP`), never counted as 0. Zero would say
+   "this name risks nothing", when an un-stopped position is the one whose loss
+   is bounded only by the whole position — the fabricated-loss bug of rule 2
+   with its sign flipped. `stop_coverage_pct` states how much of the book the
+   total actually covers, so a small risk number over a mostly-unstopped book
+   cannot read as a safe one.
+
+   R-3 WHICH RATE CONVERTS A STOP. The CURRENT rate, applied to the whole
+   native distance, declared as a constant-rate basis (`RISK_BASIS_MARK_TO_STOP`).
+   A stop is a FUTURE price and the rate at which that future loss would convert
+   is unobserved; rule 4 / FX-1 forbids inventing it. Marking both ends of the
+   distance at today's rate means
+
+       open_risk_base = (price − stop)·qty·Rc = current_value_base − stop·qty·Rc
+
+   i.e. the number contains NO currency component at all, by construction. That
+   is deliberate: FX return is already reported once as `fx_pl_base`, and a risk
+   figure that quietly carried it a second time could change sign on a currency
+   move that has nothing to do with the trade. Historical lot rates are the right
+   basis for COST (a past event that really happened at those rates) and the
+   wrong basis for a distance to a future one. Same doctrine, same words, as the
+   equity curve's `CURVE_BASIS_CONSTANT_RATE`.
+
+   GRAIN: per position, in the base currency, plus a book total and a fraction
+   of the book whose denominator is `PortfolioTotals.total_value` — the same
+   denominator bd:shotockviz-916 settled for allocation, read off `summarize`
+   rather than re-decided.
+
 Money is `float` here only because `models/portfolio.py:47-49` stores qty/price/fee
 as `Float`. The Decimal/Numeric migration is a separate bead (Tara N8) and is NOT
 started here. The arithmetic below adds exactly one new term per BUY (`+ fee`),
@@ -1197,6 +1237,219 @@ def build_allocation(
     alloc.slices.sort(key=lambda s: (-s.value_base, s.symbol))
     alloc.excluded.sort(key=lambda e: e.symbol)
     return alloc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Open risk — bd:shotockviz-43y (rule 8)
+#
+# The product reports value and P&L and says nothing about exposure to loss. A
+# position trader sizing off risk cannot ask it the one question he asks himself.
+# This answers exactly that question and nothing adjacent:
+#
+#   OPEN RISK = (current_price − stop_price) × qty, converted at ONE rate.
+#
+# Mark-to-stop, not entry-to-stop. "Right now" is what the question says, and it
+# is the number that moves as the market moves — a position 40% above entry with
+# an untouched stop is risking far more today than the R it was opened with.
+# Entry-to-stop (initial R) is deliberately NOT reported: it is a second number
+# with a second sign convention (a stop above cost makes it negative, which is
+# good news that must not net off somebody else's real risk in a total), and one
+# number that is right beats two that have to be explained. `stop_above_cost` is
+# reported per position instead — it answers "is this trade already free?"
+# without introducing a second total.
+#
+# WHAT IS NOT REPORTED, AND WHY:
+#   * No portfolio heat limit, no "you are over 6% risk" verdict. That is a
+#     policy the user has not stated, and this module states facts.
+#   * No R-multiple on closed trades: that needs the stop AS IT WAS AT ENTRY,
+#     and `sr_levels` records a stop's current price with no history and no
+#     as-of date. Inventing the entry stop from today's row is exactly the class
+#     of guess rule 4 / FX-1 forbids.
+#
+# Every exclusion below is "we cannot state this", never "it is zero" — the same
+# doctrine as rules 2/4/5, and the three inherited ones are READ OFF `summarize`
+# rather than re-decided, so this cannot become a fifth surface that disagrees
+# with the other four about one book.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# One rate, today's, on both ends of the distance — see rule 8 / R-3.
+RISK_BASIS_MARK_TO_STOP = "mark_to_stop_constant_rate"
+
+# Included in the totals, but no risk can be stated for it.
+EXCLUDED_NO_STOP = "no_stop"
+# More than one stop row for the symbol. The write path prevents this (partial
+# unique index + replace-in-place POST); this is the read path refusing to guess
+# if a legacy/raced row ever gets past it — same shape as rule 5.
+EXCLUDED_AMBIGUOUS_STOP = "ambiguous_stop"
+# The stop is at or above the mark: it should already have fired. The honest
+# statement is "this stop is stale", not a NEGATIVE risk that would silently
+# offset real risk elsewhere in the sum.
+EXCLUDED_STOP_NOT_BELOW_MARK = "stop_at_or_above_mark"
+# rule 7 / bd:shotockviz-eb1 — the position was restated by a split, and
+# `sr_levels` has no as-of date (unlike `alerts.value_as_of`), so nobody can say
+# whether the stop was typed in pre- or post-split units. A 2:1 would state the
+# risk at 2x or 0.5x reality. Declines rather than guesses.
+EXCLUDED_STOP_UNITS_UNKNOWN = "stop_units_unknown"
+
+
+@dataclass
+class PositionRisk:
+    """What one position gives back if its stop hits, marked at today's rate."""
+
+    symbol: str
+    currency: str
+    qty: float
+    stop_price: float          # NATIVE, as the user recorded it
+    current_price: float       # NATIVE
+    stop_distance: float       # NATIVE, per share: current_price − stop_price
+    stop_distance_pct: float | None   # of the current price
+    open_risk: float           # NATIVE:  stop_distance * qty
+    open_risk_base: float      # BASE, at the current rate (rule 8 / R-3)
+    value_base: float          # this position's share of the denominator
+    risk_pct_of_book: float | None = None
+    # The stop sits above the weighted-average cost (which includes the
+    # capitalised buy commission, rule 1) — the trade is at worst a scratch.
+    stop_above_cost: bool = False
+    fx_rate: float | None = None
+    fx_estimated: bool = False
+
+
+@dataclass
+class RiskExclusion:
+    """A position with no risk number, and why. Never a 0.00 risk."""
+
+    symbol: str
+    reason: str
+
+
+@dataclass
+class OpenRisk:
+    basis: str = RISK_BASIS_MARK_TO_STOP
+    base_currency: str = BASE_CURRENCY
+    # The denominator: `PortfolioTotals.total_value`, unchanged (bd:shotockviz-916).
+    total_value: float = 0.0
+    open_risk: float = 0.0             # sum over `positions`, in the base currency
+    risk_pct_of_book: float | None = None
+    # Market value of the positions that actually produced a risk number. The
+    # total above is a statement about THIS much of the book, not all of it.
+    covered_value: float = 0.0
+    stop_coverage_pct: float | None = None
+    positions: list[PositionRisk] = field(default_factory=list)
+    excluded: list[RiskExclusion] = field(default_factory=list)
+    fx_estimated: bool = False
+
+    @property
+    def uncovered_value(self) -> float:
+        """Value sitting in positions this total says nothing about. NOT a risk
+        figure — an un-stopped position's loss is not bounded by anything this
+        module knows, which is precisely why it has no number."""
+        return self.total_value - self.covered_value
+
+
+def build_open_risk(
+    valued: Sequence[ValuedHolding],
+    totals: PortfolioTotals,
+    stops: Mapping[str, Sequence[float]] | None = None,
+) -> OpenRisk:
+    """Total open risk over the positions `summarize` included (rule 8).
+
+    `stops` — `{SYMBOL: [stop_price, ...]}`, the caller's own `level_type='stop'`
+    rows. Passed IN rather than loaded here for the same reason `splits` is
+    (rule 7): this module imports nothing from the app, and every caller
+    demonstrably reads the same table. A symbol with more than one entry is
+    ambiguous and is refused, not averaged.
+
+    Takes the SUMMARY, like `build_allocation`, so inclusion is decided in
+    exactly one place. A position the totals excluded gets no risk row and
+    carries that same reason forward.
+    """
+    stops = stops or {}
+    by_symbol = {v.symbol: v for v in valued}
+
+    risk = OpenRisk(
+        base_currency=totals.base_currency,
+        total_value=totals.total_value,
+    )
+
+    # Inherited exclusions — read off `summarize`, never re-tested here.
+    for symbol in totals.currency_conflict_symbols:
+        risk.excluded.append(RiskExclusion(symbol, EXCLUDED_CURRENCY_CONFLICT))
+    for symbol in totals.unpriced_symbols:
+        risk.excluded.append(RiskExclusion(symbol, EXCLUDED_UNPRICED))
+    for symbol in totals.fx_unavailable_symbols:
+        risk.excluded.append(RiskExclusion(symbol, EXCLUDED_FX_UNAVAILABLE))
+
+    for symbol in totals.priced_symbols:
+        v = by_symbol.get(symbol)
+        if (
+            v is None
+            or v.current_price is None
+            or v.current_value_base is None
+            or v.fx_rate is None
+        ):
+            # Unreachable given `summarize`'s own test (priced => price,
+            # convertible => rate => value_base). NAMED rather than quietly
+            # missing if the two ever drift — same guard as allocation's
+            # EXCLUDED_UNSTATABLE. The `fx_rate is None` arm is what keeps the
+            # conversion below from falling back to a silent 1.0, which would
+            # state a foreign risk as if it were THB.
+            risk.excluded.append(RiskExclusion(symbol, EXCLUDED_UNSTATABLE))
+            continue
+
+        levels = [float(p) for p in (stops.get(symbol) or []) if p is not None]
+        if not levels:
+            risk.excluded.append(RiskExclusion(symbol, EXCLUDED_NO_STOP))
+            continue
+        if len(levels) > 1:
+            risk.excluded.append(RiskExclusion(symbol, EXCLUDED_AMBIGUOUS_STOP))
+            continue
+        if v.split_adjusted:
+            risk.excluded.append(RiskExclusion(symbol, EXCLUDED_STOP_UNITS_UNKNOWN))
+            continue
+
+        stop = levels[0]
+        distance = v.current_price - stop
+        if distance <= 0:
+            risk.excluded.append(RiskExclusion(symbol, EXCLUDED_STOP_NOT_BELOW_MARK))
+            continue
+
+        rate = v.fx_rate  # not None — the guard above declined without one
+        open_risk_native = distance * v.qty
+        open_risk_base = open_risk_native * rate
+
+        risk.positions.append(PositionRisk(
+            symbol=symbol,
+            currency=v.currency,
+            qty=v.qty,
+            stop_price=stop,
+            current_price=v.current_price,
+            stop_distance=distance,
+            stop_distance_pct=distance / v.current_price * 100,
+            open_risk=open_risk_native,
+            open_risk_base=open_risk_base,
+            value_base=v.current_value_base,
+            stop_above_cost=v.avg_cost is not None and stop > v.avg_cost,
+            fx_rate=v.fx_rate,
+            fx_estimated=v.fx_estimated,
+        ))
+        risk.open_risk += open_risk_base
+        risk.covered_value += v.current_value_base
+        if v.fx_estimated:
+            risk.fx_estimated = True
+
+    # A percentage of nothing is undefined, not zero — same doctrine as
+    # `Allocation.top_weight_pct` and `ClosedTrade.realized_pl_pct`. An
+    # all-unpriced book reports its exclusions and no ratios.
+    if totals.total_value > 0:
+        risk.risk_pct_of_book = risk.open_risk / totals.total_value * 100
+        risk.stop_coverage_pct = risk.covered_value / totals.total_value * 100
+        for p in risk.positions:
+            p.risk_pct_of_book = p.open_risk_base / totals.total_value * 100
+
+    # Biggest risk first — that is the one the trader acts on.
+    risk.positions.sort(key=lambda p: (-p.open_risk_base, p.symbol))
+    risk.excluded.sort(key=lambda e: e.symbol)
+    return risk
 
 
 # ─────────────────────────────────────────────────────────────────────────────

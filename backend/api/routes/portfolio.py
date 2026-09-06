@@ -12,10 +12,12 @@ from core import cache_keys
 from core.symbol_utils import ambiguous_bare_symbol_detail, is_ambiguous_bare_thai_symbol
 from models.user import User
 from models.portfolio import Transaction
+from models.sr_level import STOP_LEVEL_TYPE, SRLevel
 from models.schemas import (
     TransactionCreate, TransactionUpdate, TransactionResponse, PortfolioAnalytics,
     HoldingResponse, FxRateInfo, ClosedPositionResponse, RealizedBookResponse,
     PortfolioAllocation, AllocationSliceResponse, AllocationExclusionResponse,
+    PortfolioOpenRisk, PositionRiskResponse, RiskExclusionResponse,
 )
 from api.middleware.auth import get_current_user
 from services import corporate_actions, portfolio_service, stock_service
@@ -96,6 +98,39 @@ async def _record_fx_rate(currency: str, txn_date, explicit: float | None) -> fl
         return None  # back-dated: no observed rate exists, and none is invented
 
     return portfolio_service.live_rate_from_thbusd(await fx_quote_cached())
+
+
+async def _load_stops(
+    db: AsyncSession, user_id: int, symbols: list[str]
+) -> dict[str, list[float]]:
+    """The caller's stop levels for `symbols` — bd:shotockviz-43y.
+
+    Returns `{SYMBOL: [price, ...]}` and deliberately does NOT collapse a
+    duplicate to one: `portfolio_service.build_open_risk` refuses to state a
+    risk for an ambiguous stop rather than picking one, and it can only do that
+    if this query hands it what it actually found. The write path
+    (api/routes/sr_levels.py) is what keeps the list at length 1.
+
+    `source == 'user_created'` is in the WHERE alongside `user_id`, matching the
+    DELETE guard in sr_levels.py — a curated `manual_import` row can never be
+    read as this user's stop even if one somehow carried the type. The DB check
+    `ck_sr_levels_stop_is_user_owned` makes that unreachable; the filter is here
+    so the guarantee does not depend on the constraint alone.
+    """
+    if not symbols:
+        return {}
+    result = await db.execute(
+        select(SRLevel.symbol, SRLevel.price).where(
+            SRLevel.user_id == user_id,
+            SRLevel.source == "user_created",
+            SRLevel.level_type == STOP_LEVEL_TYPE,
+            SRLevel.symbol.in_(symbols),
+        )
+    )
+    stops: dict[str, list[float]] = {}
+    for symbol, price in result.all():
+        stops.setdefault(symbol, []).append(float(price))
+    return stops
 
 
 async def _assert_currency_consistent(
@@ -303,6 +338,24 @@ async def get_analytics(
     # a 0% slice.
     allocation = portfolio_service.build_allocation(valued, totals)
 
+    # bd:shotockviz-43y — exposure to loss. Same `valued`, same `totals`, so the
+    # risk report's denominator IS the header's total and its included set IS the
+    # set `summarize` counted; nothing re-decides inclusion here (rule 8).
+    #
+    # Stops are read from the caller's own `sr_levels` rows and passed IN, for
+    # the same reason `splits` is: portfolio_service imports nothing from the
+    # app, and every caller demonstrably reads the same table. A DB error here
+    # must not take down a screen that already works, so a failed read degrades
+    # to "no stops recorded" — which reports every position as `no_stop` and a
+    # 0% coverage, i.e. visibly nothing rather than a quietly small risk number.
+    try:
+        stops = await _load_stops(db, user.id, list(active.keys()))
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("open-risk: stop level read failed")
+        stops = {}
+    open_risk = portfolio_service.build_open_risk(valued, totals, stops)
+
     holding_responses = [
         HoldingResponse(
             symbol=v.symbol,
@@ -388,6 +441,56 @@ async def get_analytics(
                 for e in allocation.excluded
             ],
             fx_estimated=allocation.fx_estimated,
+        ),
+        # bd:shotockviz-43y — open risk. `total_value` here is the same float as
+        # `total_value` above. Read `stop_coverage_pct` with `open_risk`: the
+        # total speaks only for the positions in `positions`, and every other
+        # one is in `excluded` with a reason — never a 0.00 risk.
+        open_risk=PortfolioOpenRisk(
+            basis=open_risk.basis,
+            base_currency=open_risk.base_currency,
+            total_value=round(open_risk.total_value, 2),
+            open_risk=round(open_risk.open_risk, 2),
+            risk_pct_of_book=(
+                round(open_risk.risk_pct_of_book, 2)
+                if open_risk.risk_pct_of_book is not None else None
+            ),
+            covered_value=round(open_risk.covered_value, 2),
+            uncovered_value=round(open_risk.uncovered_value, 2),
+            stop_coverage_pct=(
+                round(open_risk.stop_coverage_pct, 2)
+                if open_risk.stop_coverage_pct is not None else None
+            ),
+            positions=[
+                PositionRiskResponse(
+                    symbol=p.symbol,
+                    currency=p.currency,
+                    qty=p.qty,
+                    stop_price=p.stop_price,
+                    current_price=p.current_price,
+                    stop_distance=round(p.stop_distance, 4),
+                    stop_distance_pct=(
+                        round(p.stop_distance_pct, 2)
+                        if p.stop_distance_pct is not None else None
+                    ),
+                    open_risk=round(p.open_risk, 2),
+                    open_risk_base=round(p.open_risk_base, 2),
+                    value_base=round(p.value_base, 2),
+                    risk_pct_of_book=(
+                        round(p.risk_pct_of_book, 2)
+                        if p.risk_pct_of_book is not None else None
+                    ),
+                    stop_above_cost=p.stop_above_cost,
+                    fx_rate=round(p.fx_rate, 6) if p.fx_rate is not None else None,
+                    fx_estimated=p.fx_estimated,
+                )
+                for p in open_risk.positions
+            ],
+            excluded=[
+                RiskExclusionResponse(symbol=e.symbol, reason=e.reason)
+                for e in open_risk.excluded
+            ],
+            fx_estimated=open_risk.fx_estimated,
         ),
         # Derived from the positions actually left unpriced (a cache "miss" that
         # the fund stage then resolved is not pending; a cached but unusable

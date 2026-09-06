@@ -334,6 +334,70 @@ class PortfolioAllocation(BaseModel):
     fx_estimated: bool = False
 
 
+# ─── Open risk (bd:shotockviz-43y, rule 8) ─────────────────────────────────
+# "How much am I risking right now, in total, if every stop hits."
+# A stop lives on `sr_levels` as a user_created row with level_type='stop'
+# (models/sr_level.py explains why not on the position and why not a new table).
+
+class PositionRiskResponse(BaseModel):
+    """What one position gives back if its stop hits."""
+    symbol: str
+    currency: str = "THB"
+    qty: float
+    stop_price: float          # native, as the user recorded it
+    current_price: float       # native
+    stop_distance: float       # native, per share
+    stop_distance_pct: Optional[float] = None
+    open_risk: float           # native
+    # Converted at the CURRENT rate on BOTH ends of the distance, so this number
+    # contains no currency component at all — see portfolio_service rule 8 / R-3.
+    open_risk_base: float
+    value_base: float
+    risk_pct_of_book: Optional[float] = None
+    # The stop is above weighted-average cost (buy commission included): the
+    # trade is at worst a scratch. A fact about the position, not a second
+    # risk number.
+    stop_above_cost: bool = False
+    fx_rate: Optional[float] = None
+    fx_estimated: bool = False
+
+
+class RiskExclusionResponse(BaseModel):
+    """A position with NO risk number, and why — never a 0.00 risk."""
+    symbol: str
+    # Inherited from the totals: unpriced | fx_unavailable | currency_conflict |
+    # unstatable. Stop-specific: no_stop | ambiguous_stop |
+    # stop_at_or_above_mark | stop_units_unknown.
+    reason: str
+
+
+class PortfolioOpenRisk(BaseModel):
+    """Open risk — FR-PORT (bd:shotockviz-43y).
+
+    `open_risk` is the sum over `positions` ONLY. A position with no stop is in
+    `excluded` with reason "no_stop", never counted as zero: zero would claim
+    the name risks nothing, when an un-stopped position is precisely the one
+    whose loss this module cannot bound. Read `stop_coverage_pct` before
+    reading `open_risk` — a small total over a mostly un-stopped book is not a
+    safe book, and a client that renders the number without the coverage is
+    showing a risk figure for a book it silently shrank.
+    """
+    basis: str = "mark_to_stop_constant_rate"
+    base_currency: str = "THB"
+    # The denominator: the same number as PortfolioAnalytics.total_value.
+    total_value: float = 0.0
+    open_risk: float = 0.0
+    risk_pct_of_book: Optional[float] = None
+    # Market value of the positions that actually produced a risk number, and
+    # what is left over. `uncovered_value` is NOT a risk figure.
+    covered_value: float = 0.0
+    uncovered_value: float = 0.0
+    stop_coverage_pct: Optional[float] = None
+    positions: List[PositionRiskResponse] = []
+    excluded: List[RiskExclusionResponse] = []
+    fx_estimated: bool = False
+
+
 class PortfolioAnalytics(BaseModel):
     # bd:shotockviz-sbe — these four are now unambiguously in `base_currency`.
     # They used to be a raw sum of THB and USD amounts.
@@ -362,6 +426,10 @@ class PortfolioAnalytics(BaseModel):
     # bd:shotockviz-916 / FR-PORT-002 — the same book, split by weight. Its
     # denominator is `total_value` above; see PortfolioAllocation.
     allocation: Optional[PortfolioAllocation] = None
+    # bd:shotockviz-43y — exposure to loss, same book, same denominator.
+    # None only if the computation could not run at all; an empty risk set is
+    # reported as a PortfolioOpenRisk with exclusions, not as a missing field.
+    open_risk: Optional[PortfolioOpenRisk] = None
     # ── realized side (bd:shotockviz-tmz) ─────────────────────────────────────
     # Summary only, in `base_currency`. The per-trade log lives on
     # GET /portfolio/realized so this hot path does not grow with the user's
@@ -514,9 +582,14 @@ class SRLevelResponse(BaseModel):
 # a level to someone else. `color` is also not accepted here: user-created
 # rows get color=None and fall through to srLevelColor.ts's by-type fallback,
 # same as every other un-colored row — no per-row color picker in scope.
+#
+# bd:shotockviz-43y — `stop` joins the Literal. A stop is a user_created row
+# like any other, so it needs no new endpoint; POST /sr-levels/{symbol} with
+# level_type="stop" REPLACES the caller's existing stop for that symbol (one
+# position, one stop — see api/routes/sr_levels.py).
 class SRLevelCreate(BaseModel):
     price: float = Field(gt=0)
-    level_type: Literal["support", "resistance"]
+    level_type: Literal["support", "resistance", "stop"]
     tag: Optional[str] = Field(default=None, max_length=50)
 
 
