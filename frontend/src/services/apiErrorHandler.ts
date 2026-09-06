@@ -30,7 +30,16 @@ export interface ApiErrorBody {
 export interface ApiErrorLike {
     code?: string;
     message?: string;
-    config?: { url?: string };
+    config?: {
+        url?: string;
+        /**
+         * bd:shotockviz-tjh — per-request opt-out from the global
+         * clear-session-on-401 behaviour below. See the DECISION comment
+         * on `handleApiError`'s 401 branch for the rule and why this is a
+         * flag on the request, not a URL/path table like `silentPaths`.
+         */
+        skipAuthClearOn401?: boolean;
+    };
     response?: { status?: number; data?: ApiErrorBody };
 }
 
@@ -98,7 +107,30 @@ export function handleApiError(error: ApiErrorLike, deps: ApiErrorHandlerDeps): 
     // (reusing authStore's existing 401-cleanup, no duplicated logic, no
     // token refresh — ADR-007) so Google One Tap re-authenticates
     // immediately instead of waiting for a reload. 404 for data is silent.
+    //
+    // bd:shotockviz-tjh — DECISION: any 401 clearing the session on ANY
+    // request (including ones the current page doesn't depend on, e.g. a
+    // background hydrate GET that already degrades to a cached/default
+    // value and swallows its own error) was a side effect of this handler
+    // sitting above every request, not a choice anyone made. Chosen rule:
+    // opt IN requests that are genuinely decorative via
+    // `config.skipAuthClearOn401 = true`, rather than requiring every
+    // background read to pre-check auth state before firing. Rejected
+    // alternative ("every background read auth-gated before it fires")
+    // would mean re-plumbing isAuthenticated into every one of the ~10
+    // background reads across the app (quotes, history, fundamentals,
+    // news, search, sr-levels, settings/trader, ...) instead of the one or
+    // two call sites that are actually decorative — more surface area for
+    // the exact "side effect nobody chose" failure mode this bd is about.
+    // Fail-safe: a request that never mentions the flag (undefined) OR
+    // sets it to `false` gets today's behaviour unchanged — it clears the
+    // session on a real 401. Only an explicit `true` narrows this ONE
+    // branch; a flagged request still toasts normally on any other status
+    // (e.g. 500) — see apiErrorHandler.test.ts's dedicated test for that.
     if (status === 401) {
+        if (error.config?.skipAuthClearOn401) {
+            return;
+        }
         deps.authStore.getState().handleUnauthorizedResponse();
         return;
     }

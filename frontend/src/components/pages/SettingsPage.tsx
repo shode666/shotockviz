@@ -116,7 +116,15 @@ export default function SettingsPage() {
         // (api/routes/settings.py, not auth.py — see that module's
         // docstring for why), so a failure here degrades ONLY the gap
         // threshold field, never blocks telegram settings from loading.
-        api.get('/settings/trader')
+        //
+        // bd:shotockviz-tjh — decorative hydrate, same as
+        // ConcentrationLimitPanel's identical GET: the field already
+        // degrades to "" (unset) below on any failure, so
+        // `skipAuthClearOn401` keeps a 401 here from logging the trader out
+        // of the Settings page it's decorating. The PATCH in handleSave
+        // below (Save button — a real user action) is left unflagged: a
+        // genuinely expired session must still log them out on submit.
+        api.get('/settings/trader', { skipAuthClearOn401: true })
             .then((res) => {
                 if (cancelled) return;
                 const value = res.data?.gap_min_pct;

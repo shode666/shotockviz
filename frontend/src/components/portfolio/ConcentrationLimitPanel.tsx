@@ -88,7 +88,16 @@ export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimi
     useEffect(() => {
         if (userId == null) return;
         let cancelled = false;
-        api.get('/settings/trader')
+        // bd:shotockviz-tjh — this GET is decoration (see the doc comment
+        // above): the panel already renders from the localStorage/default
+        // value and this only upgrades it if a saved server value shows up.
+        // `skipAuthClearOn401` opts it out of the global 401 handler
+        // (services/apiErrorHandler.ts) so a 401 here — which this .catch
+        // already swallows — cannot log the trader out of a page this
+        // request isn't load-bearing for. The explicit PATCH below (Save
+        // button) is a real user action and is NOT flagged: a genuinely
+        // expired session must still log them out when they submit it.
+        api.get('/settings/trader', { skipAuthClearOn401: true })
             .then((res) => {
                 if (cancelled) return;
                 const saved = res.data?.concentration_limit_pct;

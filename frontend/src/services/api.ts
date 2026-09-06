@@ -3,6 +3,20 @@ import toast from 'react-hot-toast';
 import { useAuthStore } from '@/store/authStore';
 import { handleApiError, type ApiErrorBody } from './apiErrorHandler';
 
+// bd:shotockviz-tjh — module augmentation so a call site can pass
+// `{ skipAuthClearOn401: true }` as part of an AxiosRequestConfig without
+// tripping the excess-property check. See apiErrorHandler.ts's
+// `ApiErrorLike.config` doc comment and the DECISION comment on
+// `handleApiError`'s 401 branch for the rule this flag implements: only a
+// request explicitly marked this way is exempt from the global
+// clear-session-on-401 behaviour; every other request (unmarked or `false`)
+// keeps today's behaviour unchanged (fail-safe, not fail-open).
+declare module 'axios' {
+    interface AxiosRequestConfig {
+        skipAuthClearOn401?: boolean;
+    }
+}
+
 // Always use relative path — Vite proxy forwards /api → http://backend:8000
 // (VITE_API_URL=http://backend:8000 is not resolvable from the browser)
 //
