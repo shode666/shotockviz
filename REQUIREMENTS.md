@@ -179,6 +179,17 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
 > only) — a personal entry/stop/target scratch mark is a different thing
 > from a curated/computed level worth a 2x/day heads-up, and price
 > notifications are already Alerts' job.
+>
+> **Digest schedule (corrected 2026-09-06, `bd:shotockviz-rwq`/`3fx`):**
+> 09:30 ICT (30 minutes before SET opens at 10:00) and 19:30 ICT (30 minutes
+> before US pre-market at 20:00), **weekdays only**. Both times had been
+> written into `beat_schedule` as if `crontab()` were UTC, so the digest
+> actually arrived at 02:30 and 12:30 ICT until this was fixed; and there
+> was no weekday check at all, so it also arrived on Saturdays and Sundays.
+> Exchange **holidays are not covered** — this codebase has no holiday
+> calendar, so on a public holiday the digest still sends and lists the
+> previous session's levels. That gap is asserted by a test
+> (`backend/tests/test_sr_digest_trading_day.py`) rather than left implied.
 
 - ~~**Trend Line**: เส้นตรง 2 จุด~~ — not built
 - **Horizontal Line**: เส้นแนวนอนที่ราคาที่กำหนด — **built**: create (price +
@@ -338,8 +349,39 @@ Drawing features (horizontal line only):
 - สร้าง/แก้ไข/ลบ alert
 - เปิด/ปิด alert ได้ (toggle active/inactive)
 - สถานะที่ backend เคยกำหนดจริง: **Active**, **Triggered**
+  > **bd:shotockviz-93h (rewritten 2026-09-06) — alerts are STANDING with a
+  > cooldown, not one-shot.** The paragraph below (`o0b`) described
+  > `alert_checker` setting `is_active=False` alongside `status=TRIGGERED`
+  > "so it won't refire". That is no longer what the code does, and the old
+  > behaviour was a bug, not a design: nothing anywhere ever wrote `status`
+  > back to `ACTIVE`, so an alert was permanently spent by its first fire and
+  > the user had to recreate it by hand.
+  > **Current model:** selection is `is_active == True` only — `status` is no
+  > longer part of the WHERE clause. An alert is eligible to fire when it is
+  > `is_active` AND (it has never fired, OR its `triggered_at` is older than
+  > `settings.alert_cooldown_minutes`, default **60**). `claim_alert()` sets
+  > `status=TRIGGERED`, `triggered_at=now`, `trigger_count += 1`, and does
+  > NOT touch `is_active`.
+  > **It will therefore re-notify while the condition still holds, once per
+  > cooldown window — deliberately.** A level that is crossed and held
+  > through a full hour is a fact the trader wants repeated, not a duplicate;
+  > the cooldown is what stops it becoming a stream. `trigger_count` records
+  > how many times it has fired.
+  > `is_active` remains exactly what it always was: the user's arm/pause
+  > control, flipped only by `PATCH /alerts/{id}/toggle`.
+  > **Creation-time guard (`bd:shotockviz-60p`):** because alerts now stand
+  > indefinitely, an alert whose condition is ALREADY TRUE when created would
+  > send a wrong notification every hour forever. `POST /api/v1/alerts`
+  > evaluates the condition against live data at creation and refuses with
+  > **409** plus the current value, unless the caller passes `confirm=true`.
+  > **Closed-bar evaluation (`bd:shotockviz-1sf`):** the 5 indicator alert
+  > types (RSI Overbought/Oversold, Golden/Death Cross, Volume Spike) are
+  > evaluated on CLOSED bars only. A cross that existed intraday and was gone
+  > by the close is a fabricated event, and standing+cooldown would have
+  > repeated it hourly; a confirmed signal seen one session late is only a
+  > lag.
   > **bd:shotockviz-43x (struck 2026-09-05)** — `AlertStatus.EXPIRED` was declared in the backend (`backend/models/alert.py`) and the frontend mapped it to "หมดอายุ" (`bd:ui-honesty-2026-09` F11), but no backend code path ever assigned it (`grep -rn EXPIRED backend/` returned only the enum declaration). Removed from the enum and from the frontend mapping rather than building an expiry rule nobody asked for.
-  > **bd:shotockviz-o0b (struck 2026-09-05)** — `AlertStatus.INACTIVE` had the identical defect (declared, never assigned) and is now removed too. **`status` and `is_active` are two different concepts, kept as two fields, not merged**: `status` is the lifecycle stage (`ACTIVE` = armed, never fired → `TRIGGERED` = fired once, set by `alert_checker.py` alongside `is_active=False` so it won't refire); `is_active` is the user's arm/pause control, flipped only by `PATCH /alerts/{id}/toggle`. A user can pause an alert that already fired (`status=TRIGGERED, is_active=False`) or one that hasn't (`status=ACTIVE, is_active=False`) — the UI's "หยุดชั่วคราว" (paused) state is, and always was, `is_active=False` regardless of `status`; `getAlertStatusKey()` (`frontend/src/utils/alertStatus.ts`) checks `status === 'TRIGGERED'` first, else falls back to `is_active`. Merging the two fields was considered and rejected: it would make "paused-but-already-triggered" — a real, reachable state today — inexpressible without inventing a replacement status value, which is the same defect shape this bead exists to remove. DB enum note: Postgres's `alertstatus` type keeps the `INACTIVE` (and `EXPIRED`) labels forever since Postgres has no `DROP VALUE`, but 0 rows use either and nothing can write them now (same finding as `43x`, no migration needed).
+  > **bd:shotockviz-o0b (struck 2026-09-05)** — `AlertStatus.INACTIVE` had the identical defect (declared, never assigned) and is now removed too. **`status` and `is_active` are two different concepts, kept as two fields, not merged**: `status` is the lifecycle stage (`ACTIVE` = armed, never fired → `TRIGGERED` = has fired at least once, set by `alert_checker.py`; **superseded 2026-09-06 — it no longer also sets `is_active=False`, and `status` is no longer part of the selection query at all: see the bd:shotockviz-93h note above**); `is_active` is the user's arm/pause control, flipped only by `PATCH /alerts/{id}/toggle`. A user can pause an alert that already fired (`status=TRIGGERED, is_active=False`) or one that hasn't (`status=ACTIVE, is_active=False`) — the UI's "หยุดชั่วคราว" (paused) state is, and always was, `is_active=False` regardless of `status`; `getAlertStatusKey()` (`frontend/src/utils/alertStatus.ts`) checks `status === 'TRIGGERED'` first, else falls back to `is_active`. Merging the two fields was considered and rejected: it would make "paused-but-already-triggered" — a real, reachable state today — inexpressible without inventing a replacement status value, which is the same defect shape this bead exists to remove. DB enum note: Postgres's `alertstatus` type keeps the `INACTIVE` (and `EXPIRED`) labels forever since Postgres has no `DROP VALUE`, but 0 rows use either and nothing can write them now (same finding as `43x`, no migration needed).
   > **Sampling honesty (`bd:shotockviz-cm3`)**: Price Above/Below alerts compare against a cached quote refreshed roughly every 1 minute for symbols that have an active alert (`workers/alert_symbol_refresher.py`, on top of the existing ~4-6 min slot rotation for everything else); a level crossed and retraced faster than that is not observed. The Alerts page states this.
 
 ---
