@@ -183,13 +183,37 @@ export async function mockStockAPIs(page: Page): Promise<void> {
   );
 
   // News
+  // bd:shotockviz-f14.1 — `data` is no longer a bare array. The route now
+  // returns {articles, ts}: `ts` is when the LIST was fetched, which is a
+  // different fact from each article's own `published_at`, and the frontend
+  // reads `data.articles`. A bare array here silently renders an empty list
+  // rather than failing loudly, so this mock had to be updated with the
+  // contract, not around it.
   await page.route('**/api/v1/stocks/*/news', (route) =>
     route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify([
-        { title: 'Test news item', url: 'https://example.com/1', source: 'Test', published_at: '2024-01-01', summary: 'Test summary' },
-      ]),
+      body: JSON.stringify({
+        articles: [
+          { title: 'Test news item', url: 'https://example.com/1', source: 'Test', published_at: '2024-01-01', summary: 'Test summary' },
+        ],
+        ts: 1788600000,
+      }),
+    }),
+  );
+
+  // bd:shotockviz-649.1 — ConcentrationLimitPanel (Portfolio) and the
+  // Settings page both read the trader's saved thresholds on mount. Left
+  // unmocked this reaches the real backend, returns 401, and
+  // services/apiErrorHandler.ts clears the auth session on ANY 401 — so an
+  // authenticated test would silently fall back to "กรุณาเข้าสู่ระบบ" and
+  // every assertion after it fails for a reason that has nothing to do with
+  // what the test is checking. That is exactly what it did.
+  await page.route('**/api/v1/settings/trader', (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ concentration_limit_pct: null, gap_min_pct: null }),
     }),
   );
 

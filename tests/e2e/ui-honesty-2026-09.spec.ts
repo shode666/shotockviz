@@ -330,7 +330,7 @@ test('F10: NewsPage — item with no url is a non-interactive element with sr-on
   });
   await mockStockAPIs(page);
   await page.route('**/api/v1/stocks/*/news', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(NEWS_NO_URL) }),
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ articles: NEWS_NO_URL, ts: 1788600000 }) }),
   );
 
   await page.goto('/news');
@@ -354,7 +354,7 @@ test('F10: NewsPage — item with no url is a non-interactive element with sr-on
 test('F10: RightPanel News tab — item with no url is a non-interactive element with sr-only "no article link" text', async ({ page }) => {
   await mockStockAPIs(page);
   await page.route('**/api/v1/stocks/*/news', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(NEWS_NO_URL) }),
+    route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ articles: NEWS_NO_URL, ts: 1788600000 }) }),
   );
 
   await page.goto('/');
