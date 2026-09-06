@@ -29,7 +29,7 @@ from models.schemas import TransactionCreate, TransactionUpdate
 from services import portfolio_service
 
 from tests.test_portfolio_fx import _Txn
-from tests.test_portfolio_valuation import _FakeRedis, _redis_store
+from tests.test_portfolio_valuation import _FakeRedis, _no_corporate_actions, _redis_store
 
 # 1 THB in USD -> 35 THB per USD, the same fixture the FX suite uses.
 FX_QUOTE = {"symbol": "THBUSD=X", "price": 1.0 / 35.0}
@@ -69,7 +69,8 @@ async def _curve(db, user, histories, fx_quote=FX_QUOTE, period="1M"):
     with patch("services.stock_service.read_history", _read_history), \
          patch("services.stock_service.request_data_fetch", AsyncMock()), \
          patch("api.routes.portfolio_performance.fx_quote_cached",
-               AsyncMock(return_value=fx_quote)):
+               AsyncMock(return_value=fx_quote)), \
+         _no_corporate_actions():
         return await get_portfolio_performance(period=period, user=user, db=db)
 
 
@@ -150,7 +151,8 @@ async def test_the_curve_and_the_header_total_agree_on_the_same_book(test_db, te
     }
     with patch("services.stock_service.get_redis",
                AsyncMock(return_value=_FakeRedis(_redis_store(quotes)))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
     curve = await _curve(test_db, test_user, {
@@ -272,7 +274,8 @@ async def test_the_api_reports_the_conflict_rather_than_a_number(test_db, test_u
 
     with patch("services.stock_service.get_redis",
                AsyncMock(return_value=_FakeRedis(_redis_store({"NVDA": {"price": 110.0}})))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
     assert analytics.currency_conflict_symbols == ["NVDA"]

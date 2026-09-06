@@ -69,6 +69,11 @@ test.describe('Sidebar navigation', () => {
     });
     await mockStockAPIs(page);
     await page.goto('/');
+    // bd:shotockviz-6h3 — clicks before React attaches handlers are
+    // silently dropped; mitigated the same way as every other spec per
+    // that bead's own note (not fixed here, this file may not touch
+    // frontend/).
+    await page.waitForLoadState('networkidle');
   });
 
   test('clicking NVDA in sidebar updates selected stock', async ({ page }) => {
@@ -81,8 +86,11 @@ test.describe('Sidebar navigation', () => {
     await expect(page).toHaveURL('/');
   });
 
-  test('sidebar "+ เพิ่มหุ้น" button redirects to login when not authenticated', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: '+ เพิ่มหุ้น' });
+  test('sidebar "เพิ่มหุ้น" button redirects to login when not authenticated', async ({ page }) => {
+    // Sidebar.tsx:487-496 — the footer add-stock button's accessible name
+    // has never included a literal "+" (lucide `<Plus>` icon, no text
+    // glyph). See sidebar.spec.ts's matching fix for the full note.
+    const addBtn = page.getByRole('button', { name: 'เพิ่มหุ้น' });
     await addBtn.click();
     await expect(page).toHaveURL('/login');
   });
@@ -109,7 +117,9 @@ test.describe('Direct URL access', () => {
 
   test('can load / directly', async ({ page }) => {
     await page.goto('/');
-    await expect(page.getByText('PTT.BK').first()).toBeVisible();
+    // Sidebar.tsx renders parseSymbol().display, which strips the
+    // exchange suffix — "PTT", never "PTT.BK".
+    await expect(page.getByText('PTT', { exact: true }).first()).toBeVisible();
   });
 
   test('can load /portfolio directly', async ({ page }) => {

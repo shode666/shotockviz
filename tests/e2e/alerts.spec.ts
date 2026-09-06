@@ -5,21 +5,34 @@
 import { test, expect } from '@playwright/test';
 import { mockStockAPIs, mockAuthSession, MOCK_AUTH_ME } from './helpers/mocks';
 
+// Shape matches backend/models/schemas.py AlertResponse — `value`, not
+// `price`; `alert_type` + `is_active`/`status` (getAlertStatusKey), not a
+// bare `active` flag. AlertsPage.tsx:310 renders `a.value` gated by
+// `a.alert_type` containing "Price" — a fixture without those fields never
+// rendered a price at all, regardless of what the test asserted.
 const MOCK_ALERTS = [
   {
     id: 1,
     symbol: 'PTT.BK',
+    alert_type: 'Price Above',
     condition: 'above',
-    price: 40.0,
-    active: true,
+    value: 40.0,
+    is_active: true,
+    status: 'ACTIVE',
+    channel: 'telegram',
+    triggered_at: null,
     created_at: '2024-01-15T10:30:00Z',
   },
   {
     id: 2,
     symbol: 'AAPL',
+    alert_type: 'Price Below',
     condition: 'below',
-    price: 170.0,
-    active: true,
+    value: 170.0,
+    is_active: true,
+    status: 'ACTIVE',
+    channel: 'telegram',
+    triggered_at: null,
     created_at: '2024-01-14T09:00:00Z',
   },
 ];
@@ -58,12 +71,6 @@ test.describe('Alerts Page — layout', () => {
 
   test('shows "Alerts" heading', async ({ page }) => {
     await expect(page.getByText('Alerts', { exact: false }).first()).toBeVisible();
-  });
-
-  test('shows "+ สร้าง Alert" or Create Alert button', async ({ page }) => {
-    await expect(
-      page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first()
-    ).toBeVisible();
   });
 });
 
@@ -110,45 +117,68 @@ test.describe('Alerts Page — authenticated with alerts', () => {
     const deleteBtn = page.getByRole('button', { name: /delete|ลบ/i }).first();
     await expect(deleteBtn).toBeVisible();
   });
+
+  test('shows "+ สร้าง Alert" or Create Alert button', async ({ page }) => {
+    // AlertsPage.tsx:258 — the create button only renders when
+    // authenticated (moved here from "Alerts Page — layout", a guest
+    // session, where it could never legitimately be found).
+    //
+    // Regex previously had a bare `เพิ่ม` alternative — matches
+    // Sidebar.tsx's unrelated "เพิ่มหุ้น" add-stock button too (renders
+    // regardless of auth), so `.first()` was silently asserting on the
+    // WRONG element this whole time and passing for the wrong reason.
+    await expect(
+      page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first()
+    ).toBeVisible();
+  });
 });
 
 test.describe('Alerts Page — Create Alert Modal', () => {
   test.beforeEach(async ({ page }) => {
-    await page.addInitScript(() => {
-      localStorage.removeItem('access_token');
-      localStorage.removeItem('refresh_token');
-    });
+    // AlertsPage.tsx:258 — the "สร้าง Alert" button (and the whole create
+    // flow this describe exercises) only renders when authenticated; an
+    // unauthenticated page shows the "กรุณาเข้าสู่ระบบ" login prompt
+    // instead. Without this, `createBtn` below (broadened by the now-
+    // removed bare `เพิ่ม` regex alternative) matched Sidebar.tsx's
+    // unrelated "เพิ่มหุ้น" button and every test in this block was
+    // exercising the wrong control end-to-end.
     await mockStockAPIs(page);
+    await mockAuthSession(page, MOCK_AUTH_ME);
+    await mockAlertsAPI(page);
     await page.goto('/alerts');
   });
 
   test('clicking "+ สร้าง Alert" opens modal', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
     await expect(page.locator('.glass-panel').first()).toBeVisible();
   });
 
   test('modal has Symbol input field', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
-    await expect(page.getByPlaceholder(/symbol|หุ้น/i).first()).toBeVisible({ timeout: 5000 });
+    // AlertsPage.tsx:374 — placeholder is "ค้นหา เช่น PTT, AAPL, 7203.T...";
+    // neither "symbol" nor "หุ้น" (a different Thai word) ever appears in it.
+    await expect(page.getByPlaceholder(/ค้นหา/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('modal has Price/Target input field', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
-    await expect(page.getByPlaceholder(/ราคา|price|target/i).first()).toBeVisible({ timeout: 5000 });
+    // AlertsPage.tsx:486/497 — placeholder is "เช่น 40.00" (default alert
+    // type "Price Above"); "ราคา"/"price"/"target" never appear in it.
+    await expect(page.getByPlaceholder(/40\.00/).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('modal has Above/Below condition selector', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
     const conditionSelect = page.locator('select').first();
     await expect(conditionSelect).toBeVisible({ timeout: 5000 });
   });
 
   test('modal closes when cancel button is clicked', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
     await expect(page.locator('.glass-panel').first()).toBeVisible();
 
@@ -158,7 +188,7 @@ test.describe('Alerts Page — Create Alert Modal', () => {
   });
 
   test('modal closes on backdrop click', async ({ page }) => {
-    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert|เพิ่ม/i }).first();
+    const createBtn = page.getByRole('button', { name: /สร้าง Alert|Create Alert/i }).first();
     await createBtn.click();
     await expect(page.locator('.glass-overlay').first()).toBeVisible();
 

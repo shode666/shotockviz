@@ -3,7 +3,7 @@
  *
  * Covers:
  *  - All 8 timeframe buttons are clickable
- *  - Switching TF sends a new /history request with correct ?tf= param
+ *  - Switching TF sends a new /history request with correct ?timeframe= param
  *  - Active button highlights
  *  - Chart canvas renders after data loads
  *  - Chart type switching (candlestick → line → area)
@@ -48,20 +48,26 @@ test.describe('Chart — timeframe buttons', () => {
     for (const tf of tfsToTest) {
       const [request] = await Promise.all([
         page.waitForRequest((req) =>
-          req.url().includes('/history') && req.url().includes(`tf=${tf}`),
+          // stockService.getHistory sends `?timeframe=`, matching the real
+          // backend param name (backend/api/routes/stocks/history.py:22 —
+          // `timeframe: str = Query("1D", ...)`). This suite previously
+          // waited on `tf=`, a param name the app never sends, so the
+          // request was fired but never observed and the test just
+          // timed out.
+          req.url().includes('/history') && req.url().includes(`timeframe=${tf}`),
         ),
         page.getByRole('button', { name: tf, exact: true }).click(),
       ]);
-      expect(request.url()).toContain(`tf=${tf}`);
+      expect(request.url()).toContain(`timeframe=${tf}`);
     }
   });
 
   test('clicking 5m triggers history request for 5m', async ({ page }) => {
     const [request] = await Promise.all([
-      page.waitForRequest((req) => req.url().includes('/history') && req.url().includes('tf=5m')),
+      page.waitForRequest((req) => req.url().includes('/history') && req.url().includes('timeframe=5m')),
       page.getByRole('button', { name: '5m', exact: true }).click(),
     ]);
-    expect(request.url()).toContain('tf=5m');
+    expect(request.url()).toContain('timeframe=5m');
     expect(request.url()).toContain('/history');
   });
 
@@ -132,23 +138,45 @@ test.describe('Chart — indicator toggles', () => {
     await page.waitForLoadState('networkidle');
   });
 
+  // ChartPage.tsx:36 — "RSI 14 + MACD default-on: replaces the old
+  // BottomPanel tabs" is a deliberate product decision, so those two start
+  // aria-pressed="true" and the FIRST click turns them OFF, not on. MA 20 /
+  // EMA 50 / BB have no such default and start inactive.
+  const defaultOnIndicators = ['RSI 14', 'MACD'];
   const indicators = ['MA 20', 'EMA 50', 'RSI 14', 'MACD', 'BB'];
 
   for (const ind of indicators) {
-    test(`${ind} button toggles to active state`, async ({ page }) => {
+    const startsOn = defaultOnIndicators.includes(ind);
+    test(`${ind} button toggles ${startsOn ? 'off, its non-default state' : 'to active state'}`, async ({ page }) => {
       const btn = page.getByRole('button', { name: ind, exact: true });
       await expect(btn).toBeVisible();
+      await expect(btn).toHaveAttribute('aria-pressed', startsOn ? 'true' : 'false');
       await btn.click();
-      await expect(btn).toHaveClass(/bg-violet-500/);
+      // ChartToolbar.tsx colors the active indicator with
+      // `bg-[var(--color-accent-strong)]`, never `bg-violet-500` (that
+      // class only ever appears on the INACTIVE outline state). Assert the
+      // aria-pressed state the component already sets instead of a CSS
+      // class string.
+      await expect(btn).toHaveAttribute('aria-pressed', startsOn ? 'false' : 'true');
     });
   }
 
-  test('toggling indicator twice deactivates it', async ({ page }) => {
-    const btn = page.getByRole('button', { name: 'RSI 14', exact: true });
+  test('toggling a default-off indicator twice deactivates it', async ({ page }) => {
+    const btn = page.getByRole('button', { name: 'BB', exact: true });
+    await expect(btn).toHaveAttribute('aria-pressed', 'false');
     await btn.click(); // activate
-    await expect(btn).toHaveClass(/bg-violet-500/);
+    await expect(btn).toHaveAttribute('aria-pressed', 'true');
     await btn.click(); // deactivate
-    await expect(btn).not.toHaveClass(/bg-violet-500/);
+    await expect(btn).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('toggling a default-on indicator twice restores its default-on state', async ({ page }) => {
+    const btn = page.getByRole('button', { name: 'RSI 14', exact: true });
+    await expect(btn).toHaveAttribute('aria-pressed', 'true');
+    await btn.click(); // deactivate
+    await expect(btn).toHaveAttribute('aria-pressed', 'false');
+    await btn.click(); // reactivate
+    await expect(btn).toHaveAttribute('aria-pressed', 'true');
   });
 });
 

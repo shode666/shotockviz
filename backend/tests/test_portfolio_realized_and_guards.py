@@ -38,7 +38,7 @@ from models.schemas import TransactionCreate, TransactionUpdate
 from services import portfolio_service
 
 from tests.test_portfolio_fx import _Txn
-from tests.test_portfolio_valuation import _FakeRedis, _redis_store
+from tests.test_portfolio_valuation import _FakeRedis, _no_corporate_actions, _redis_store
 
 D0 = date(2024, 1, 1)
 FX_QUOTE = {"symbol": "THBUSD=X", "price": 1.0 / 35.0}   # 35 THB per USD
@@ -65,7 +65,8 @@ async def _analytics(db, user, quotes):
     store = _redis_store({**quotes, portfolio_service.FX_QUOTE_SYMBOL: FX_QUOTE})
     with patch("services.stock_service.get_redis",
                AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         return await get_analytics(user=user, db=db)
 
 
@@ -317,7 +318,8 @@ async def test_the_realized_endpoint_is_the_closed_trade_record(test_db, test_us
         ("PTT.BK", "BUY", 100.0, 35.0, 100.0, "THB", 1.0, D0),
         ("PTT.BK", "SELL", 100.0, 40.0, 100.0, "THB", 1.0, D0 + timedelta(days=4)),
     ])
-    book = await get_realized(user=test_user, db=test_db)
+    with _no_corporate_actions():
+        book = await get_realized(user=test_user, db=test_db)
 
     assert book.base_currency == "THB"
     assert book.cost_flow == "moving_average"      # declared, not implied
@@ -334,7 +336,8 @@ async def test_the_realized_endpoint_is_the_closed_trade_record(test_db, test_us
 
 async def test_the_realized_endpoint_is_empty_but_shaped_for_a_new_user(
         test_db, test_user):
-    book = await get_realized(user=test_user, db=test_db)
+    with _no_corporate_actions():
+        book = await get_realized(user=test_user, db=test_db)
     assert book.closed_positions == []
     assert book.realized_pl is None
     assert book.total_trades == 0
@@ -363,7 +366,8 @@ async def test_a_fractional_position_is_open_on_every_screen_or_none(test_db, te
     with patch("services.stock_service.read_history", _read_history), \
          patch("services.stock_service.request_data_fetch", AsyncMock()), \
          patch("api.routes.portfolio_performance.fx_quote_cached",
-               AsyncMock(return_value=FX_QUOTE)):
+               AsyncMock(return_value=FX_QUOTE)), \
+         _no_corporate_actions():
         curve = await get_portfolio_performance(period="ALL", user=test_user, db=test_db)
 
     # The curve must still hold the position on the day it was bought.

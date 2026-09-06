@@ -12,6 +12,13 @@ test.describe('Chart Page — toolbar', () => {
     });
     await mockStockAPIs(page);
     await page.goto('/');
+    // bd:shotockviz-6h3 — clicks that land before React attaches handlers
+    // are silently dropped (confirmed not limited to the two controls the
+    // bead names; the timeframe buttons below show the same symptom
+    // without this wait). Mitigated the same way as every other spec
+    // (search.spec.ts, sr-levels.spec.ts) per that bead's own note — not
+    // fixed here, this file may not touch frontend/.
+    await page.waitForLoadState('networkidle');
   });
 
   test('default selected stock is NVDA', async ({ page }) => {
@@ -50,10 +57,12 @@ test.describe('Chart Page — toolbar', () => {
   });
 
   test('chart type buttons are visible (candlestick, line, area)', async ({ page }) => {
-    // Emoji icon buttons for chart type
-    await expect(page.getByRole('button', { name: '🕯️' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '📉' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '▬' })).toBeVisible();
+    // ChartToolbar.tsx renders lucide icons with a `title` attribute
+    // (Candlestick/Line/Area) — never emoji. See chart-timeframes.spec.ts
+    // which already asserts these same buttons this way.
+    await expect(page.getByRole('button', { name: 'Candlestick' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Line' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Area' })).toBeVisible();
   });
 
   test('indicator buttons are visible', async ({ page }) => {
@@ -64,11 +73,21 @@ test.describe('Chart Page — toolbar', () => {
   });
 
   test('clicking an indicator toggles it active', async ({ page }) => {
-    const rsiBtn = page.getByRole('button', { name: 'RSI 14', exact: true });
-    await expect(rsiBtn).toBeVisible();
-    await rsiBtn.click();
-    // After click it should have the active violet style (bg-violet-500)
-    await expect(rsiBtn).toHaveClass(/bg-violet-500/);
+    // MA 20, not RSI 14 — ChartPage.tsx:36 makes RSI 14 + MACD default-on
+    // ("replaces the old BottomPanel tabs"), so a first click on either of
+    // those turns it OFF, not on. See chart-timeframes.spec.ts's dedicated
+    // default-on-vs-default-off coverage.
+    const maBtn = page.getByRole('button', { name: 'MA 20', exact: true });
+    await expect(maBtn).toBeVisible();
+    await expect(maBtn).toHaveAttribute('aria-pressed', 'false');
+    await maBtn.click();
+    // ChartToolbar.tsx applies the active indicator color via a Tailwind
+    // arbitrary-value class (`bg-[var(--color-accent-strong)]`), never
+    // `bg-violet-500` (that class only ever appears on the INACTIVE
+    // outline state: `border-violet-500/30 text-violet-400`). The stable
+    // signal of "toggled on" is the aria-pressed state the component
+    // already sets, not a CSS class string.
+    await expect(maBtn).toHaveAttribute('aria-pressed', 'true');
   });
 });
 

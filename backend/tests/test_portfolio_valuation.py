@@ -220,7 +220,8 @@ async def test_partially_cached_portfolio_reports_no_phantom_loss(test_db, test_
     store = _redis_store(PARTIAL_QUOTES)
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         result = await get_analytics(user=test_user, db=test_db)
 
     assert result.total_value == pytest.approx(EXPECTED_VALUE)
@@ -253,10 +254,12 @@ async def test_dashboard_and_portfolio_agree_on_a_partially_cached_book(test_db,
         return PARTIAL_QUOTES.get(symbol)  # None for CPALL.BK and THBUSD=X
 
     with patch("services.stock_service.get_redis", AsyncMock(return_value=_FakeRedis(store))), \
-         patch("services.stock_service.request_data_fetch", AsyncMock()):
+         patch("services.stock_service.request_data_fetch", AsyncMock()), \
+         _no_corporate_actions():
         analytics = await get_analytics(user=test_user, db=test_db)
 
-    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote):
+    with patch("api.routes.dashboard._fast_quote", _fake_fast_quote), \
+         _no_corporate_actions():
         summary, misses = await _build_portfolio_summary(test_user, test_db)
 
     assert summary is not None

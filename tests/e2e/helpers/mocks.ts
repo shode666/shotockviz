@@ -127,10 +127,36 @@ export async function mockStockAPIs(page: Page): Promise<void> {
     }),
   );
 
+  // Batch quotes — Sidebar.tsx's usePriceUpdates() hook (indices AND, for
+  // guests, GUEST_SYMBOLS merged into the same call — bd:features-2026-09
+  // F6) hits `/stocks/quotes?symbols=...`, never the singular `/quote`
+  // route above. This was previously unmocked, so indices/watchlist price
+  // cells either showed real dev-stack data (flaky) or nothing at all.
+  // Route registered BEFORE the singular one below matters not — Playwright
+  // matches by the MOST SPECIFIC pattern here since `**/api/v1/stocks/*/quote`
+  // cannot match a path with no trailing symbol segment (`/stocks/quotes`),
+  // so the two never collide.
+  await page.route('**/api/v1/stocks/quotes**', (route) => {
+    const url = new URL(route.request().url());
+    const symbols = (url.searchParams.get('symbols') ?? '').split(',').filter(Boolean);
+    const quoteMap: Record<string, typeof MOCK_QUOTE & { symbol: string }> = {};
+    for (const sym of symbols) {
+      quoteMap[sym] = { ...MOCK_QUOTE, symbol: sym };
+    }
+    return route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(quoteMap),
+    });
+  });
+
   // History — wraps bars in {symbol, timeframe, bars:[...]} to match StockHistory schema
   await page.route('**/api/v1/stocks/*/history**', (route) => {
     const url = new URL(route.request().url());
-    const tf = url.searchParams.get('tf') ?? '1D';
+    // stockService.getHistory sends `?timeframe=`, matching the real backend
+    // param name (backend/api/routes/stocks/history.py:22). Reading `tf`
+    // here always fell back to '1D' regardless of what was requested.
+    const tf = url.searchParams.get('timeframe') ?? '1D';
     const symMatch = route.request().url().match(/\/stocks\/([^/]+)\/history/);
     const sym = symMatch ? decodeURIComponent(symMatch[1]).toUpperCase() : 'PTT.BK';
     return route.fulfill({

@@ -60,9 +60,14 @@ test.describe('Watchlist autocomplete — authenticated', () => {
     await input.waitFor({ state: 'visible' });
     await input.fill('PTT');
 
-    // Wait for dropdown
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.getByText('ปตท.').first()).toBeVisible();
+    // WatchlistSearch.tsx:135 renders `parsed.display` (formatters.ts
+    // parseSymbol) which strips the exchange suffix — "PTT", never
+    // "PTT.BK". MOCK_WATCHLIST already has a PTT.BK row in the sidebar
+    // itself (also displayed as "PTT"), so scope to the dropdown to avoid
+    // matching that instead of the search result.
+    const dropdown = page.locator('.glass-dropdown');
+    await expect(dropdown.getByText('PTT', { exact: true }).first()).toBeVisible({ timeout: 5_000 });
+    await expect(dropdown.getByText('ปตท.').first()).toBeVisible();
   });
 
   test('dropdown shows market badge (SET, US)', async ({ page }) => {
@@ -71,9 +76,12 @@ test.describe('Watchlist autocomplete — authenticated', () => {
     await input.waitFor({ state: 'visible' });
     await input.fill('PTT');
 
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 5_000 });
+    // See "search results dropdown shows after typing" — display strips
+    // the .BK suffix; scope to the dropdown, not the sidebar's own PTT row.
+    const dropdown = page.locator('.glass-dropdown');
+    await expect(dropdown.getByText('PTT', { exact: true }).first()).toBeVisible({ timeout: 5_000 });
     // SET badge should appear
-    await expect(page.locator('aside').getByText('SET').first()).toBeVisible();
+    await expect(dropdown.getByText('SET').first()).toBeVisible();
   });
 
   test('clicking a search result calls add-stock API', async ({ page }) => {
@@ -81,7 +89,9 @@ test.describe('Watchlist autocomplete — authenticated', () => {
     const input = page.locator('input[placeholder="PTT.BK, AAPL..."]');
     await input.waitFor({ state: 'visible' });
     await input.fill('PTT');
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 5_000 });
+    // See "search results dropdown shows after typing" re: display strip.
+    await expect(page.locator('.glass-dropdown').getByText('PTT', { exact: true }).first())
+      .toBeVisible({ timeout: 5_000 });
 
     const [request] = await Promise.all([
       page.waitForRequest((req) => req.url().includes('/watchlists') && req.method() === 'POST'),
@@ -95,7 +105,9 @@ test.describe('Watchlist autocomplete — authenticated', () => {
     const input = page.locator('input[placeholder="PTT.BK, AAPL..."]');
     await input.waitFor({ state: 'visible' });
     await input.fill('PTT');
-    await expect(page.getByText('PTT.BK').first()).toBeVisible({ timeout: 5_000 });
+    // See "search results dropdown shows after typing" re: display strip.
+    await expect(page.locator('.glass-dropdown').getByText('PTT', { exact: true }).first())
+      .toBeVisible({ timeout: 5_000 });
     await page.locator('.glass-dropdown button').first().click();
 
     // Input should disappear (adding=false resets)
@@ -156,10 +168,11 @@ test.describe('Watchlist autocomplete — guest user', () => {
   });
 
   test('guest sees static stock list (NVDA, AAPL, etc.)', async ({ page }) => {
-    // GUEST_SYMBOLS includes these
+    // GUEST_SYMBOLS includes these. Sidebar.tsx renders parseSymbol().display,
+    // which strips the exchange suffix — "PTT", never "PTT.BK".
     await expect(page.getByText('NVDA').first()).toBeVisible();
     await expect(page.getByText('AAPL').first()).toBeVisible();
-    await expect(page.getByText('PTT.BK').first()).toBeVisible();
+    await expect(page.getByText('PTT', { exact: true }).first()).toBeVisible();
   });
 
   test('clicking a guest stock still navigates to chart', async ({ page }) => {

@@ -24,6 +24,11 @@ test.describe('Sidebar — guest / default watchlist', () => {
     });
     await mockStockAPIs(page);
     await page.goto('/');
+    // bd:shotockviz-6h3 — clicks before React attaches handlers are
+    // silently dropped; mitigated the same way as every other spec per
+    // that bead's own note (not fixed here, this file may not touch
+    // frontend/).
+    await page.waitForLoadState('networkidle');
   });
 
   test('sidebar shows "Watchlist" heading', async ({ page }) => {
@@ -87,8 +92,13 @@ test.describe('Sidebar — guest / default watchlist', () => {
     await expect(page).toHaveURL('/');
   });
 
-  test('"+ เพิ่มหุ้น" button redirects unauthenticated user to /login', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: '+ เพิ่มหุ้น' });
+  test('"เพิ่มหุ้น" button redirects unauthenticated user to /login', async ({ page }) => {
+    // Sidebar.tsx:487-496 — the footer "add stock" button renders a lucide
+    // `<Plus>` icon (no text glyph) followed by the label "เพิ่มหุ้น"; its
+    // accessible name has never included a literal "+" character. The
+    // header add-button (Sidebar.tsx:316-325, aria-label="เพิ่มหุ้น") only
+    // renders `{isAuthenticated && ...}`, so there is no ambiguity here.
+    const addBtn = page.getByRole('button', { name: 'เพิ่มหุ้น' });
     await expect(addBtn).toBeVisible({ timeout: 8000 });
     await addBtn.click();
     await expect(page).toHaveURL('/login');

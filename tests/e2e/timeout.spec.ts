@@ -83,6 +83,12 @@ test.describe('Request Timeout UI — overlay appearance', () => {
   });
 
   test('shows "Request timed out" text when isTimeout state is set', async ({ page }) => {
+    // `test(title, fn, { timeout })` below was not a real Playwright
+    // overload and was silently discarded (harmless here since the
+    // ~20s runtime fit inside the 30s config default anyway) — fixed for
+    // consistency with the other tests in this file that DO need the
+    // override to be real. See timeout.spec.ts:188's note.
+    test.setTimeout(25_000);
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -124,7 +130,7 @@ test.describe('Request Timeout UI — overlay appearance', () => {
     // The chart container should be present
     const chartArea = page.locator('canvas, [class*="chart"]').first();
     await expect(chartArea).toBeVisible({ timeout: 5000 });
-  }, { timeout: 25000 });
+  });
 
   test('shows "Request timed out" overlay and Retry button via state injection', async ({ page }) => {
     await page.addInitScript(() => {
@@ -186,6 +192,12 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
    * Total test timeout is overridden to 65s to accommodate the wait.
    */
   test('ECONNABORTED triggers "Request timed out" overlay with Retry button', async ({ page }) => {
+    // `test(title, fn, { timeout })` is not a real Playwright overload —
+    // the third argument was silently discarded, so this ran under
+    // playwright.config.ts's global 30s `timeout` and always lost the
+    // race against its own 33s wait below. `test.setTimeout()` inside the
+    // test body is the documented way to override it per-test.
+    test.setTimeout(65_000);
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -209,14 +221,17 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
     // Axios timeout is 30s on getHistory; allow 33s for the UI to update
     await expect(page.getByText('Request timed out')).toBeVisible({ timeout: 33_000 });
     await expect(page.getByText(/ข้อมูลใช้เวลานานเกินไป/)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Retry' })).toBeVisible();
-  }, { timeout: 65_000 });
+    await expect(page.getByRole('button', { name: 'Retry', exact: true })).toBeVisible();
+  });
 
   /**
    * After clicking Retry the component resets isTimeout=false and re-issues
    * the history request. When the second request succeeds, the canvas renders.
    */
   test('clicking Retry after timeout clears overlay and loads chart', async ({ page }) => {
+    // See the previous test's note — `test(title, fn, { timeout })` is not
+    // a real Playwright overload and was silently discarded.
+    test.setTimeout(65_000);
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -248,7 +263,7 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
     await page.goto('/');
 
     // Wait for timeout overlay (up to 33s)
-    const retryBtn = page.getByRole('button', { name: 'Retry' });
+    const retryBtn = page.getByRole('button', { name: 'Retry', exact: true });
     await expect(retryBtn).toBeVisible({ timeout: 33_000 });
 
     // Click Retry — the second request succeeds immediately
@@ -259,13 +274,16 @@ test.describe('Request Timeout UI — element assertions (integration path)', ()
 
     // Chart canvas should render with data
     await expect(page.locator('canvas').first()).toBeVisible({ timeout: 10_000 });
-  }, { timeout: 65_000 });
+  });
 });
 
 // ── Timeout UI component structure ────────────────────────────────────────────
 
 test.describe('Request Timeout UI — component structure verification', () => {
   test('timeout overlay contains clock emoji and subtitle', async ({ page }) => {
+    // See timeout.spec.ts:188's note — `test(title, fn, { timeout })` is
+    // not a real Playwright overload and was silently discarded.
+    test.setTimeout(65_000);
     await page.addInitScript(() => {
       localStorage.removeItem('access_token');
       localStorage.removeItem('refresh_token');
@@ -284,8 +302,8 @@ test.describe('Request Timeout UI — component structure verification', () => {
     // Subtitle text rendered below the heading
     await expect(page.getByText(/กรุณาลองใหม่/)).toBeVisible();
     // The Retry button has btn-accent class
-    const retryBtn = page.getByRole('button', { name: 'Retry' });
+    const retryBtn = page.getByRole('button', { name: 'Retry', exact: true });
     await expect(retryBtn).toBeVisible();
     await expect(retryBtn).toHaveClass(/btn-accent/);
-  }, { timeout: 65_000 });
+  });
 });

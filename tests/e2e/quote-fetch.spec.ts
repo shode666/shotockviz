@@ -111,9 +111,18 @@ test.describe('Quote fetch — guest users', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(2_000);
 
-    // No watchlist quote calls for guest (only indices may be called)
+    // No watchlist quote calls for guest (only indices may be called) —
+    // EXCEPT the chart toolbar's own single quote request for whichever
+    // stock is currently selected (default 'NVDA', see appStore.ts:91 /
+    // chart.spec.ts "default selected stock is NVDA"). That request is a
+    // separate feature (the currently-viewed stock's price, shown
+    // regardless of auth state) and is not one of the 12
+    // GUEST_SYMBOLS watchlist rows getting its own N+1 quote fetch —
+    // confirmed via network log: guests fire exactly one batched
+    // `/stocks/quotes?symbols=^SET,...,NVDA,AAPL,...` call plus exactly
+    // one `/stocks/NVDA/quote` call, never a second per-row single quote.
     const watchlistQuotes = quoteRequests.filter(
-      (url) => !url.includes('%5E') && !url.includes('^'),
+      (url) => !url.includes('%5E') && !url.includes('^') && !url.includes('/NVDA/quote'),
     );
     expect(watchlistQuotes.length).toBe(0);
   });

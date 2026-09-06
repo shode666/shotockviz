@@ -123,38 +123,48 @@ test.describe('Portfolio Page — authenticated', () => {
     await expect(table.getByText('AAPL').first()).toBeVisible();
   });
 
-  test('"+ เพิ่มรายการ" or Add Transaction button is visible', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+  test('"+ เพิ่มธุรกรรม" or Add Transaction button is visible', async ({ page }) => {
+    // PortfolioPage.tsx:207/379 — button text is "+ เพิ่มธุรกรรม"
+    // ("add transaction"), not the older "เพิ่มรายการ" ("add item").
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await expect(addBtn).toBeVisible({ timeout: 5000 });
   });
 
   test('clicking Add Transaction opens modal', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await addBtn.click();
     // Modal should appear with glass-panel style
     await expect(page.locator('.glass-panel').first()).toBeVisible();
   });
 
   test('Add Transaction modal has Symbol input', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await addBtn.click();
-    await expect(page.getByPlaceholder(/symbol|หลักทรัพย์/i).first()).toBeVisible({ timeout: 5000 });
+    // AddTransactionModal.tsx:288 — placeholder is "ค้นหา เช่น PTT, AAPL,
+    // 7203.T..."; neither "symbol" nor "หลักทรัพย์" ever appears in it.
+    await expect(page.getByPlaceholder(/ค้นหา/i).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('Add Transaction modal has Quantity input', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await addBtn.click();
-    await expect(page.getByPlaceholder(/จำนวน|quantity/i).first()).toBeVisible({ timeout: 5000 });
+    // AddTransactionModal.tsx:397-403 — the "จำนวน (หุ้น)" label is a plain
+    // sibling <div>, not a <label htmlFor>, so it isn't part of the input's
+    // accessible name; the placeholder is a bare "100" with no "จำนวน" or
+    // "quantity" text in it.
+    await expect(page.getByPlaceholder('100', { exact: true }).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('Add Transaction modal has Price input', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await addBtn.click();
-    await expect(page.getByPlaceholder(/ราคา|price/i).first()).toBeVisible({ timeout: 5000 });
+    // AddTransactionModal.tsx:414-426 — same pattern: "ราคาต่อหุ้น" label
+    // is a plain sibling <div>; placeholder is a bare "38.00".
+    await expect(page.getByPlaceholder('38.00', { exact: true }).first()).toBeVisible({ timeout: 5000 });
   });
 
   test('Add Transaction modal closes on cancel/close button', async ({ page }) => {
-    const addBtn = page.getByRole('button', { name: /เพิ่มรายการ|Add Transaction/i });
+    const addBtn = page.getByRole('button', { name: /เพิ่มธุรกรรม|Add Transaction/i });
     await addBtn.click();
     await expect(page.locator('.glass-panel').first()).toBeVisible();
 
