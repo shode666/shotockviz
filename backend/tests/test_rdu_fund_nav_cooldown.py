@@ -312,15 +312,27 @@ class TestEquityAlertUnaffected:
     ):
         engine = create_engine(equity_sqlite_db_url)
 
+        # bd:shotockviz-wx3 — the quote's `ts` must ACTUALLY advance between
+        # ticks, which is what this test claims to simulate. It previously
+        # used `int(now)`, and all three ticks ran inside the same wall-clock
+        # second, so every tick saw a byte-identical quote. That passed only
+        # because bd:shotockviz-rdu compared the quote's `ts` against
+        # `triggered_at` (which the loop rewinds 61 minutes), never against
+        # the quote it last fired on. Once wx3 made the comparison
+        # like-for-like, the unfaithful simulation showed up as a failure —
+        # correctly: re-notifying on a byte-identical cached quote is exactly
+        # the noise these beads remove. Advancing by 5 minutes per tick
+        # matches the real fetch cadence the docstring above describes.
+        tick = {"n": 0}
+
         def _fresh_equity_redis(*_a, **_k):
-            # ts = "now" on every call, exactly like a real quote that is
-            # genuinely re-fetched every ~1-6 min (price_fetcher /
-            # alert_symbol_refresher) between checks.
+            base = int(datetime.now(timezone.utc).timestamp())
             r = MagicMock()
             r.get.return_value = json.dumps(
-                {"price": 150.0, "ts": int(datetime.now(timezone.utc).timestamp())}
+                {"price": 150.0, "ts": base + tick["n"] * 300}
             ).encode()
             r.publish.return_value = 1
+            tick["n"] += 1
             return r
 
         with (

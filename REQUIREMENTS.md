@@ -374,6 +374,20 @@ Drawing features (horizontal line only):
   > send a wrong notification every hour forever. `POST /api/v1/alerts`
   > evaluates the condition against live data at creation and refuses with
   > **409** plus the current value, unless the caller passes `confirm=true`.
+  > **Re-fire needs NEW data, not just elapsed time
+  > (`bd:shotockviz-rdu`, `bd:shotockviz-wx3`):** the cooldown alone is a
+  > wall clock, and a wall clock does not know whether the number being
+  > compared has changed. Re-eligibility therefore ALSO requires the compared
+  > value's own as-of to be newer than the as-of of the data the alert last
+  > fired on (`alerts.triggered_data_at`) — the live quote's or fund NAV's
+  > `ts` for the price types, the closed bar's own timestamp for the 5
+  > indicator types. Without it, a Thai fund's once-daily NAV re-fired once
+  > per cooldown for the rest of the day (up to ~24 identical messages from
+  > one crossing), and so did every indicator alert, whose closed daily bar
+  > is equally constant intraday. Equities are unaffected: their quote `ts`
+  > advances every fetch cycle, far faster than the 60-minute cooldown.
+  > **This is not a second cooldown** — it has no duration of its own, and
+  > `alert_cooldown_minutes` remains the only timing setting.
   > **Closed-bar evaluation (`bd:shotockviz-1sf`):** the 5 indicator alert
   > types (RSI Overbought/Oversold, Golden/Death Cross, Volume Spike) are
   > evaluated on CLOSED bars only. A cross that existed intraday and was gone

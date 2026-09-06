@@ -170,6 +170,21 @@ class Alert(Base):
     status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), default=AlertStatus.ACTIVE)
     channel: Mapped[AlertChannel] = mapped_column(Enum(AlertChannel), default=AlertChannel.TELEGRAM)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # bd:shotockviz-wx3 — the as-of of the DATA this alert last fired on, as
+    # distinct from `triggered_at` (when we fired) and from `value_as_of`
+    # (bd:shotockviz-eb1 — the trading units the USER'S threshold is stated
+    # in, for split rebasing; a different fact about a different value).
+    # For PRICE_ABOVE/PRICE_BELOW this is the quote's or fund NAV's own `ts`;
+    # for the 5 indicator types it is the closed bar's timestamp. The claim
+    # guard requires it to advance before an alert may fire again, so a
+    # standing alert cannot re-notify against a number that has not changed —
+    # a Thai fund's once-daily NAV, or a daily bar's indicator, which by
+    # construction does not move intraday. NULL = never recorded, treated as
+    # "no constraint", so pre-existing rows behave exactly as before and fill
+    # this in on their next fire. Additive, nullable — migration 20260906_0012.
+    triggered_data_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # bd:shotockviz-93h/0ka — total number of times this alert has ever fired.
     # Exists because a standing alert's `status` is now sticky (see AlertStatus
     # docstring above): "TRIGGERED" alone cannot distinguish an alert that just

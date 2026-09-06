@@ -48,12 +48,18 @@ dev today). Chosen instead: `claim_alert()` takes an optional `value_ts` —
 the compared value's own as-of (the `ts` already on every quote-shaped
 dict: `cache_and_publish_quotes()` stamps it for equities,
 `fund_payload_to_quote()` forwards fund_fetcher's stamp for funds) — and
-ALSO requires it to be newer than the alert's own `triggered_at` before a
-re-claim can win. This is additive to the wall-clock cooldown, not a
-replacement, and it is NOT a second cooldown constant: it has no duration
-of its own, just a strict "is this actually a new value" check against a
-column (`triggered_at`) this task already reads and writes for the
-existing cooldown. For equities, whose quote `ts` advances every fetch
+ALSO requires it to be newer than the as-of of the data the alert last
+fired on before a re-claim can win. This is additive to the wall-clock
+cooldown, not a replacement, and it is NOT a second cooldown constant: it
+has no duration of its own, just a strict "is this actually a new value"
+check.
+
+bd:shotockviz-wx3 corrected WHAT that check compares against. This bead
+originally compared `value_ts` to `triggered_at` (when we fired), which
+is only right because a quote's `ts` is roughly "now"; it is a coincidence
+of that one data source, not a rule. The comparison is now against
+`alerts.triggered_data_at` — the as-of of the data we fired on — so like
+is compared with like. For equities, whose quote `ts` advances every fetch
 cycle — far faster than the 60-min cooldown — this changes nothing
 observable: by the time the cooldown elapses, the cached quote is always
 newer than the last fire anyway (test_rdu_fund_nav_cooldown.py's
@@ -62,18 +68,23 @@ the same NAV can now win a claim at most once, and the next fetched NAV
 (next day) is eligible again — see
 test_rdu_fund_nav_cooldown.py::TestFundAlertRefiresAtMostOncePerNav.
 
-Deliberately NOT extended to the 5 indicator alert types (RSI/Golden-
-Death-Cross/Volume-Spike) in this bead: those evaluate the daily OHLCV
-cache (`_load_daily_bars` below), whose bars carry a bar *date*, not a
-fetch timestamp — turning "has this bar's date advanced" into the same
-value_ts shape is a real, separate follow-up (they have an identical
-once-a-day staleness pattern to funds: a daily bar's derived indicator is
-just as constant intraday as a fund's NAV), not implemented here because
-it touches `_evaluate_indicator_alert`'s bar-consuming shape rather than
-the quote-cache path this bd's AC and reproduction are scoped to.
-`claim_alert()` is called with `value_ts=None` for these today, which
-falls back to cooldown-only eligibility — byte-for-byte the same
-behaviour every alert type had before this bead.
+bd:shotockviz-wx3 — the 5 indicator alert types (RSI Overbought/Oversold,
+Golden/Death Cross, Volume Spike) are covered by the same rule now, and
+they needed it more: they are used more than price alerts on funds, and
+bd:shotockviz-1sf made them evaluate CLOSED bars only, so the value they
+compare is a daily bar's derived indicator, which by construction does not
+move intraday. An RSI alert that became true therefore stayed true and
+re-notified once per 60-minute cooldown for the rest of the day, exactly
+like the fund NAV case.
+
+Their as-of is the closed bar's own timestamp (`_bar_value_ts` below), and
+that is precisely why `claim_alert` compares against `triggered_data_at`
+rather than `triggered_at`: a 1D bar dated 2026-09-04 read on 2026-09-06
+is a date in the PAST, so `triggered_at < bar_ts` would be false from the
+very first fire and would silently convert every indicator alert into
+fire-once-forever — the one-shot behaviour bd:shotockviz-93h exists to
+remove. `value_ts=None` remains the fallback for a source with no as-of at
+all, and still means cooldown-only eligibility.
 """
 from datetime import datetime, timedelta, timezone
 from celery import shared_task
@@ -269,6 +280,41 @@ def _quote_value_ts(quote: dict) -> datetime | None:
         return None
 
 
+def _bar_value_ts(bar: dict) -> datetime | None:
+    """The closed bar's own as-of, for the 5 indicator alert types.
+
+    bd:shotockviz-wx3 — sibling of `_quote_value_ts` above, and the reason
+    `claim_alert` compares against `triggered_data_at` rather than
+    `triggered_at`: this timestamp is a DATE IN THE PAST (a 1D bar dated
+    2026-09-04 read on 2026-09-06), not a fetch time, so it is only
+    comparable against another data as-of.
+
+    Accepts either shape the cache has carried: `time_unix` (epoch seconds)
+    when present, else the `time` string the daily payload actually uses
+    today (`'2026-09-04'`, interpreted as UTC midnight — the bar's calendar
+    date is what identifies it, and no intraday precision is needed to
+    answer "is this a different bar from the one we fired on").
+
+    Returns None on anything unparseable, which makes the caller fall back to
+    cooldown-only eligibility rather than fail — the pre-bd behaviour.
+    """
+    raw = bar.get("time_unix")
+    if raw is not None:
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc)
+        except (TypeError, ValueError, OSError, OverflowError):
+            return None
+
+    raw = bar.get("time")
+    if not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def claim_alert(
     db,
     alert_id: int,
@@ -338,8 +384,20 @@ def claim_alert(
         or_(Alert.triggered_at.is_(None), Alert.triggered_at <= cutoff),
     ]
     if value_ts is not None:
+        # bd:shotockviz-wx3 — compare against `triggered_data_at` (the as-of
+        # of the data we last fired on), NOT against `triggered_at` (when we
+        # fired). bd:shotockviz-rdu used the latter, which happens to work
+        # for quotes only because a quote's `ts` is roughly "now"; a closed
+        # daily bar's timestamp is a date in the PAST, so that comparison is
+        # false from the first fire and would make every indicator alert
+        # fire once and never again — the exact bug bd:shotockviz-93h
+        # existed to remove. Comparing like against like fixes both cases
+        # with one rule instead of a per-type special case.
         conditions.append(
-            or_(Alert.triggered_at.is_(None), Alert.triggered_at < value_ts)
+            or_(
+                Alert.triggered_data_at.is_(None),
+                Alert.triggered_data_at < value_ts,
+            )
         )
 
     # synchronize_session=False: this call only needs the row-level UPDATE's
@@ -361,6 +419,13 @@ def claim_alert(
         .values(
             status=AlertStatus.TRIGGERED,
             triggered_at=now,
+            # bd:shotockviz-wx3 — written in the SAME atomic UPDATE that
+            # claims the alert, so it can never drift from `triggered_at`
+            # or from the number of notifications actually sent. Left
+            # untouched when the caller has no freshness signal
+            # (`value_ts=None`), rather than being clobbered with `now`,
+            # which would fabricate an as-of the data never had.
+            triggered_data_at=value_ts if value_ts is not None else Alert.triggered_data_at,
             trigger_count=Alert.trigger_count + 1,
         )
         .execution_options(synchronize_session=False)
@@ -403,12 +468,13 @@ def check_all_alerts(self):
             for alert in alerts:
                 try:
                     alert_type_value = alert.alert_type.value
-                    # bd:shotockviz-rdu — the compared value's own as-of,
-                    # when the alert's data source provides one. Stays
-                    # None for indicator types (see module docstring for
-                    # why) and for a value-less cache miss, which makes
-                    # claim_alert() below fall back to cooldown-only
-                    # eligibility exactly as before this bead.
+                    # bd:shotockviz-rdu / bd:shotockviz-wx3 — the compared
+                    # value's own as-of. Set for BOTH families now: the
+                    # quote/NAV `ts` for the price types, the closed bar's
+                    # timestamp for the 5 indicator types. Stays None only
+                    # when the source provides no as-of at all, which makes
+                    # claim_alert() fall back to cooldown-only eligibility
+                    # exactly as before these beads.
                     value_ts: datetime | None = None
 
                     if alert_type_value in _INDICATOR_ALERT_TYPES:
@@ -427,6 +493,16 @@ def check_all_alerts(self):
                             continue
                         triggered, display_value = _evaluate_indicator_alert(alert, bars)
                         price = float(bars[-1]["close"])
+                        # bd:shotockviz-wx3 — the indicator's value comes from
+                        # the newest CLOSED bar (bd:shotockviz-1sf dropped the
+                        # forming one), so that bar's own timestamp IS the
+                        # as-of of the compared value. Without this an RSI or
+                        # cross alert that became true stayed true against an
+                        # unchanged daily bar and re-notified once per
+                        # 60-minute cooldown for the rest of the day — the
+                        # same defect bd:shotockviz-rdu fixed for fund NAVs,
+                        # and on the more commonly used alert types.
+                        value_ts = _bar_value_ts(bars[-1])
                         if not triggered:
                             continue
                     else:
