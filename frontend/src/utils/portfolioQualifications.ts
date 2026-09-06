@@ -32,6 +32,11 @@ export interface QualificationHolding {
     currency_conflict?: boolean;
 }
 
+export interface QualificationFxRate {
+    source?: string;
+    [key: string]: unknown;
+}
+
 export interface QualificationInput {
     holdings?: QualificationHolding[] | null;
     has_pending_prices?: boolean;
@@ -40,10 +45,24 @@ export interface QualificationInput {
     fx_estimated?: boolean;
     fx_unavailable_symbols?: string[] | null;
     currency_conflict_symbols?: string[] | null;
-    fx_rates?: unknown[] | null;
+    fx_rates?: QualificationFxRate[] | null;
 }
 
 const list = (symbols: string[]) => symbols.join(', ');
+
+// bd:shotockviz-q5o — `source: "identity"` (backend/services/portfolio_service.py)
+// means "this currency equals the base currency", i.e. a single-currency book.
+// It is a real FxRate record (rate=1.0) so downstream math has something to
+// key off of, but it is not an FX *disclosure* — there is no rate, no
+// estimate, and no currency-return dimension to tell the user about. Only
+// rates with a currency that actually differs from base are "real" FX for
+// qualification purposes.
+const isRealFxRate = (r: QualificationFxRate) => r?.source !== 'identity';
+
+/** The fx_rates the book actually needs to say something about. */
+export function realFxRates(a: QualificationInput | null | undefined): QualificationFxRate[] {
+    return (a?.fx_rates ?? []).filter(isRealFxRate);
+}
 
 /**
  * Ordered, worst first. Empty array = the totals need no qualification, and the
@@ -91,8 +110,9 @@ export function buildQualifications(a: QualificationInput | null | undefined): Q
         });
     }
 
-    // 4. The FX return itself. "ไม่ทราบ" is a different claim from 0.
-    if (a.fx_rates && a.fx_rates.length > 0) {
+    // 4. The FX return itself. "ไม่ทราบ" is a different claim from 0. An
+    //    identity-only book (bd:shotockviz-q5o) has nothing here to disclose.
+    if (realFxRates(a).length > 0) {
         if (a.fx_pl == null) {
             out.push({
                 key: 'fx-pl-unknown',
@@ -117,5 +137,5 @@ export function buildQualifications(a: QualificationInput | null | undefined): Q
 /** True when there is anything at all to render above the figures. */
 export function hasQualifications(a: QualificationInput | null | undefined): boolean {
     if (!a) return false;
-    return buildQualifications(a).length > 0 || (a.fx_rates?.length ?? 0) > 0;
+    return buildQualifications(a).length > 0 || realFxRates(a).length > 0;
 }

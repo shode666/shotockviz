@@ -8,7 +8,7 @@ import { extractErrorMessage } from '@/services/apiErrorHandler';
 import { AddTransactionModal, type EditableTransaction } from '@/components/portfolio/AddTransactionModal';
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable';
 import { usePortfolioData } from '@/hooks/usePortfolioData';
-import { buildQualifications, hasQualifications, type QualificationTone } from '@/utils/portfolioQualifications';
+import { buildQualifications, hasQualifications, realFxRates, type QualificationTone } from '@/utils/portfolioQualifications';
 
 const CURR_SIGN: Record<string, string> = { THB: '฿', USD: '$' };
 
@@ -57,7 +57,10 @@ const TONE_COLOR: Record<QualificationTone, string> = {
 function BookQualifications({ analytics }: { analytics: any }) {
     if (!hasQualifications(analytics)) return null;
     const items = buildQualifications(analytics);
-    const rates: FxRateInfo[] = analytics?.fx_rates ?? [];
+    // bd:shotockviz-q5o — identity rates (single-currency book) are excluded
+    // here, not just from `items`: a "THB/THB 1.0000 · identity" row and the
+    // FX-return line below it are noise when there is no FX dimension at all.
+    const rates: FxRateInfo[] = realFxRates(analytics) as unknown as FxRateInfo[];
     const fxPl: number | null | undefined = analytics?.fx_pl;
 
     return (

@@ -454,12 +454,16 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess, transaction }:
                         </div>
                     </div>
 
-                    {/* วันที่ — bd:shotockviz-gij: disabled in edit mode, not silently
-                        broken. TransactionUpdate.date (backend/models/schemas.py) resolves
-                        its own annotation to NoneType — a PUT body with any `date` key
-                        422s regardless of value (bd:shotockviz-qml, backend-owned, out of
-                        scope here). Offering an editable date that always fails on submit
-                        would be exactly the dishonest control this engagement removes. */}
+                    {/* วันที่ — disabled in edit mode. bd:shotockviz-qml fixed the server's
+                        422 on TransactionUpdate.date, so that is no longer why this is
+                        locked. It stays locked on Dave#8's evidence (bd:shotockviz-q5s):
+                        realized P&L is recomputed from the whole date-ordered transaction
+                        list on every read (portfolio_service.py), so moving one date
+                        silently shifts realized figures book-wide; and an edit never
+                        re-validates fx_rate against the bd:shotockviz-fnn observation-window
+                        rule, so moving a trade out of the window it was priced under would
+                        leave a rate the system's own rule says should not exist for that
+                        date. Only lift this once both are handled. */}
                     <div>
                         <div className="text-[10px] uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-text-sub)' }}>
                             วันที่
@@ -475,7 +479,8 @@ export function AddTransactionModal({ isOpen, onClose, onSuccess, transaction }:
                         />
                         {isEditMode && (
                             <p className="text-[10px] mt-1" style={{ color: 'var(--color-text-sub)' }}>
-                                แก้ไขวันที่ยังไม่รองรับ (ข้อจำกัดฝั่งเซิร์ฟเวอร์) — ลบแล้วสร้างใหม่หากต้องการเปลี่ยนวันที่
+                                แก้ไขวันที่ไม่ได้ — กำไรที่รับรู้แล้วคำนวณจากลำดับวันที่ของธุรกรรมทั้งหมด
+                                การขยับวันที่รายการเดียวจะกระทบตัวเลขย้อนหลังทั้งพอร์ต ลบแล้วสร้างใหม่หากต้องการเปลี่ยนวันที่
                             </p>
                         )}
                     </div>

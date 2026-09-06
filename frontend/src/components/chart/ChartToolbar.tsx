@@ -61,10 +61,11 @@ export default function ChartToolbar({
                         <button
                             key={tf}
                             onClick={() => onTFChange(tf)}
-                            className="text-xs px-2 py-1 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1"
-                            style={isActive
-                                ? { background: 'var(--color-accent-strong)', color: '#fff', border: '1px solid var(--color-accent-strong)' }
-                                : { color: 'var(--color-text-sub)', border: '1px solid transparent', background: 'transparent' }
+                            aria-pressed={isActive}
+                            className={`text-xs px-2 py-1 rounded-lg font-medium whitespace-nowrap transition-all cursor-pointer flex items-center gap-1 ${isActive ? 'btn-accent' : ''}`}
+                            style={!isActive
+                                ? { color: 'var(--color-text-sub)', border: '1px solid transparent', background: 'transparent' }
+                                : undefined
                             }
                             onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = 'var(--color-hover)'; }}
                             onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
