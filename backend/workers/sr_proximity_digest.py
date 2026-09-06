@@ -10,6 +10,7 @@ DB — same pattern as workers/sr_auto_pivot.py.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from celery import shared_task
 from core.logger import get_logger
@@ -25,6 +26,41 @@ SLOT_HEADERS = {
     "set_open": "ก่อน SET เปิด",
     "us_premarket": "ก่อน US pre-market",
 }
+
+# bd:shotockviz-3fx — each slot exists to be read 30 minutes before ONE
+# specific market's session opens, so "is there a session to open?" is asked
+# in that market's own local calendar, not in UTC and not in the server's.
+# At the two scheduled times the two calendars happen to agree (19:30 ICT =
+# 07:30/08:30 ET, same weekday either side of US DST), but keying each slot
+# to its own exchange timezone means the predicate stays correct if the
+# schedule is ever moved, instead of being right by coincidence.
+SLOT_MARKET_TZ = {
+    "set_open": ZoneInfo("Asia/Bangkok"),      # SET
+    "us_premarket": ZoneInfo("America/New_York"),  # NYSE/NASDAQ
+}
+
+
+def is_trading_day_for_slot(slot: str, utc_now: datetime) -> bool:
+    """True if the market this slot precedes trades on its own local date.
+
+    ⚠️ WEEKENDS ONLY. This codebase has no exchange holiday calendar —
+    nothing in `backend/` models SET holidays or NYSE holidays, and inventing
+    a hardcoded list here would rot silently the first year it isn't updated.
+    So on a public holiday the digest still sends, and the levels it lists
+    are simply the previous session's. That is a known, deliberate gap, not
+    an oversight: filed rather than faked. The Saturday/Sunday case is worth
+    gating on its own because it is 2 days in 7, exact, and needs no
+    calendar to be correct.
+
+    Unknown slot -> True. A slot name this module does not recognize is a
+    scheduling mistake, and failing open (send) surfaces it to the user,
+    where failing closed (silence) would hide it forever.
+    """
+    tz = SLOT_MARKET_TZ.get(slot)
+    if tz is None:
+        logger.warning("sr digest: unknown slot, trading-day gate not applied", slot=slot)
+        return True
+    return utc_now.astimezone(tz).weekday() < 5  # Mon=0 .. Fri=4
 
 # bd:shotockviz-p48 — "same level, seen from >=2 sources" tolerance for
 # collapsing digest matches into one line. Reused from sr_auto_pivot's own
@@ -221,13 +257,38 @@ def _send_telegram_message(chat_id: str, text: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 @shared_task(bind=True, max_retries=2, default_retry_delay=120)
-def send_sr_proximity_digest(self, slot: str):
+def send_sr_proximity_digest(self, slot: str, now_utc_iso: str | None = None):
     """Compute + send the S/R proximity digest for one beat slot.
 
     `slot` in {"set_open", "us_premarket"} — passed from beat args
     (celery_app.py), used for the dedupe lock key and message header.
     """
     from core.config import settings
+
+    # bd:shotockviz-3fx — cheapest gate first: no DB, no Redis, no run-lock
+    # claim on a day the target market never opens. Claiming the lock here
+    # would also be wrong, not just wasteful: the lock is keyed per ICT day,
+    # so burning it on a skipped Saturday is harmless, but skipping before
+    # the claim keeps "the lock was taken" meaning "a digest was attempted".
+    # `now_utc_iso` is an injected clock, never passed by celery-beat (its
+    # `args` are `("set_open",)` / `("us_premarket",)` only). It exists so the
+    # digest's integration tests can pin a weekday instead of reading the wall
+    # clock — without it, adding the trading-day gate below would make the
+    # whole digest test file go red every Saturday and Sunday, which is a test
+    # that lies about the code rather than one that checks it.
+    utc_now = (
+        datetime.fromisoformat(now_utc_iso).astimezone(timezone.utc)
+        if now_utc_iso
+        else datetime.now(timezone.utc)
+    )
+    if not is_trading_day_for_slot(slot, utc_now):
+        logger.info(
+            "sr digest: not a trading day for this slot, skipping",
+            slot=slot,
+            local_weekday=utc_now.astimezone(SLOT_MARKET_TZ[slot]).strftime("%A")
+            if slot in SLOT_MARKET_TZ else "unknown",
+        )
+        return
 
     if not settings.telegram_bot_token:
         logger.info("Telegram bot token not configured, skipping sr proximity digest", slot=slot)
@@ -247,7 +308,7 @@ def send_sr_proximity_digest(self, slot: str):
 
         # ICT date (UTC+7) — the 19:30 ICT slot crosses the UTC date boundary
         # (spec §5), so the lock key must use ICT's calendar date, not UTC's.
-        ict_now = datetime.now(timezone.utc) + timedelta(hours=7)
+        ict_now = utc_now + timedelta(hours=7)
         run_key = f"lock:sr_digest:{slot}:{ict_now.date().isoformat()}"
 
         # Claim BEFORE sending any message (spec §5) — at-most-once per

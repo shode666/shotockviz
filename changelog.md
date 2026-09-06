@@ -8,6 +8,64 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Every Celery cron job was firing 7 hours early (2026-09-06)
+
+**Found by the user receiving a Telegram S/R digest at 12:30 on a Sunday.**
+`bd:shotockviz-rwq` (P0), `3fx`, `18r`, `pdb`.
+
+- **Root cause.** `celery_app.conf.timezone` is `settings.tz` =
+  `Asia/Bangkok`. Celery evaluates `crontab()` against `conf.timezone`;
+  `enable_utc=True` only affects message headers. Every one of the 8
+  crontab entries had been written as UTC with a `# = HH:MM ICT` comment
+  doing the conversion, so all 8 fired 7 hours early. The S/R digest reached
+  the user at **02:30 and 12:30 ICT instead of 09:30 and 19:30**;
+  `db-housekeeping` was deleting retention rows at **20:00 ICT (US
+  pre-market)** instead of 03:00; `compute-auto-pivots` ran at 11:00 ICT
+  **mid-SET-session** instead of 18:00 after the close; `fetch-fund-navs`
+  ran at 12:00 ICT, before the NAV it fetches is published.
+- All 8 restated in ICT wall-clock. `backend/tests/test_beat_schedule_ict.py`
+  (11 tests) asserts each job's intended ICT time and that no entry is the
+  UTC conversion of its own intent; one test asserts the "30 minutes before
+  the market opens" relationship the digest exists for, rather than the
+  literal clock values.
+- **No trading-day gate** (`3fx`). `sr_proximity_digest` had no weekday check
+  at all — hence a full digest on a Sunday. Added
+  `is_trading_day_for_slot()`: pure, per-slot, keyed to the target
+  exchange's own timezone (`set_open` → Asia/Bangkok, `us_premarket` →
+  America/New_York), gating before any I/O or run-lock claim. **Exchange
+  holidays are deliberately NOT covered** — this codebase has no holiday
+  calendar and a hardcoded list would rot silently; the gap is asserted by a
+  test rather than implied. 18 tests.
+- The digest's existing integration tests read the wall clock, so the gate
+  turned them red on weekends. Fixed properly (injected `now_utc_iso`,
+  pinned to an instant that is a trading day in **both** exchange
+  calendars), not by mocking the gate away.
+- **Production had never delivered a single digest** (`18r`).
+  `ModuleNotFoundError: No module named 'models'` in the GHCR image:
+  `celery` is a console script, so `sys.path[0]` is `/usr/local/bin`; Celery
+  puts CWD on `sys.path` only long enough to load the app module, so forked
+  pool workers inherit `workers.*` in `sys.modules` but cannot import
+  anything new — every lazy `from models... import` inside a task body
+  failed. Invisible in dev because `docker-compose.dev.yml` sets
+  `PYTHONPATH: /app` and the GHCR compose does not. Fixed in the image
+  (`ENV PYTHONPATH=/app`) so the divergence cannot recur. Reproduced on the
+  droplet before and after.
+- **Bot token was in plaintext in `docker logs`** (`pdb`). httpx logs the
+  request URL at INFO and the Telegram token is a path segment of it.
+  `core.logger.setup_logging()` was only ever called by `main.py`, so no
+  worker had the httpx suppression. Wired into Celery's
+  `after_setup_logger`/`after_setup_task_logger`, plus a handler-level
+  `_SecretRedactingFilter` that rewrites the token out of any record from
+  any logger — the part that does not depend on knowing which library leaks
+  it. 7 tests.
+- Verified live on the dev stack: beat now reports `sr-digest-us-premarket`
+  next in 6:28 (→19:30 ICT) and `db-housekeeping` in 13:58 (→03:00 ICT);
+  invoking both digest slots on the actual Sunday logs
+  `not a trading day for this slot, skipping local_weekday=Sunday` and
+  returns without sending; 0 `api.telegram.org` lines since restart.
+- Gates: backend **644 passed, 2 skipped** · tsc exit 0.
+
+
 ### TypeScript strict mode enabled — type gate is finally honest (2026-09-06)
 
 **`npx tsc --noEmit -p .` exits clean for the first time since the initial commit.**

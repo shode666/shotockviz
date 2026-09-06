@@ -36,6 +36,26 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 COPY --chown=stockviz:stockviz . .
 
+# bd:shotockviz-18r — make /app importable for EVERY entrypoint, not just the
+# ones launched as `python -m ...`.
+#
+# `celery -A workers.celery_app worker` is a console script, so `sys.path[0]`
+# is `/usr/local/bin`, not the CWD. Celery puts the CWD on `sys.path` long
+# enough to load the app module and then takes it back off, so the forked
+# pool workers inherit `workers.*` already in `sys.modules` but cannot import
+# anything new: every LAZY `from models... import` inside a task body raises
+# `ModuleNotFoundError: No module named 'models'`. Reproduced on the droplet
+# 2026-09-06 — `sr_proximity_digest` had never once delivered in production
+# because of this, and every other task that lazy-imports `models` (that is
+# most of them, including `alert_checker`) was one code path away from the
+# same failure.
+#
+# `docker-compose.dev.yml` sets `PYTHONPATH: /app` on the celery services,
+# which is exactly why this was invisible in dev. Setting it in the image
+# removes the dev/prod divergence rather than adding a third place to keep
+# in sync.
+ENV PYTHONPATH=/app
+
 USER stockviz
 
 EXPOSE 8000

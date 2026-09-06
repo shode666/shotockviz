@@ -44,6 +44,64 @@ def setup_logging():
                   "redis.connection", "redis.asyncio.connection"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
+    install_secret_redaction()
+
+
+class _SecretRedactingFilter(logging.Filter):
+    """Scrub the Telegram bot token out of any log record that carries it.
+
+    bd:shotockviz-pdb — the token is not a header we control, it is a path
+    segment of the Telegram API URL
+    (`https://api.telegram.org/bot<TOKEN>/sendMessage`), so ANY library that
+    logs a request URL logs the secret. httpx did exactly that at INFO in
+    every Celery worker (workers never called `setup_logging()`, so the
+    WARNING suppression above only ever applied to the FastAPI process), and
+    the token sat in plaintext in `docker logs` for both dev and prod.
+
+    Raising httpx to WARNING fixes the one library we know about. This
+    filter is the part that does not depend on knowing about them: it runs
+    on the handler, so it sees every record from every logger, and it
+    rewrites the message instead of dropping it — a redacted line is still
+    a useful line. It never raises: a logging filter that throws would take
+    down the call site it was meant to protect.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        token = settings.telegram_bot_token
+        if not token:
+            return True
+        try:
+            if isinstance(record.msg, str) and token in record.msg:
+                record.msg = record.msg.replace(token, "<redacted>")
+            if record.args:
+                if isinstance(record.args, dict):
+                    record.args = {
+                        k: (v.replace(token, "<redacted>") if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
+                elif isinstance(record.args, tuple):
+                    record.args = tuple(
+                        v.replace(token, "<redacted>") if isinstance(v, str) else v
+                        for v in record.args
+                    )
+        except Exception:  # never let logging hygiene break the caller
+            pass
+        return True
+
+
+def install_secret_redaction():
+    """Attach `_SecretRedactingFilter` to every root handler, idempotently.
+
+    Called from `setup_logging()` (FastAPI) and from Celery's
+    `after_setup_logger`/`after_setup_task_logger` signals in
+    `workers/celery_app.py` — Celery installs its OWN handlers after the
+    worker boots, so a filter attached at import time would not be on them.
+    """
+    root = logging.getLogger()
+    for handler in root.handlers:
+        if not any(isinstance(f, _SecretRedactingFilter) for f in handler.filters):
+            handler.addFilter(_SecretRedactingFilter())
+
 
 def get_logger(name: str = __name__):
     return structlog.get_logger(name)

@@ -299,7 +299,18 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 ## Celery Workers (CQRS Write Side)
 
 > 18 modules registered in `backend/workers/celery_app.py:13-33`, not 8.
-> Schedules below are from `celery_app.py:52-169` (`beat_schedule`).
+> Schedules below are from `celery_app.py` (`beat_schedule`).
+>
+> **⚠️ Every `crontab()` in `beat_schedule` is ICT, not UTC.** `conf.timezone`
+> is `settings.tz` = `Asia/Bangkok`, and Celery evaluates crontab against
+> `conf.timezone`; `enable_utc=True` only affects message headers. Until
+> 2026-09-06 (`bd:shotockviz-rwq`) all 8 crontab entries were written as UTC
+> with a `# = HH:MM ICT` comment, so every one of them fired **7 hours
+> early** — the S/R digest reached the user at 02:30 and 12:30 ICT on a
+> Sunday, and `housekeeping` was deleting rows at 20:00 ICT (US pre-market)
+> instead of 03:00. Write the ICT wall-clock time you want; do not convert.
+> `backend/tests/test_beat_schedule_ict.py` asserts the intended ICT time of
+> each job.
 
 | Worker | Schedule | Data Source | Cache Key |
 |--------|----------|-------------|-----------|
@@ -313,13 +324,13 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 | `history_prefetcher` | 30min (fills cold keys only; effective refresh is 6h per key TTL) | yfinance history | `ohlcv:{symbol}:{tf}` |
 | `on_demand_listener` | On API cache miss | yfinance | varies |
 | `symbol_registrar` | 15min (`scan-unregistered-symbols`) | yfinance (market classification) | `cache:name:{symbol}` |
-| `index_populator` | Weekly, Sunday 00:00 UTC | Wikipedia (S&P 500, NASDAQ 100 constituent tables) | — (writes PostgreSQL) |
+| `index_populator` | Weekly, Sunday 00:00 ICT | Wikipedia (S&P 500, NASDAQ 100 constituent tables) | — (writes PostgreSQL) |
 | `news_fetcher` | 30min | Google News RSS (`feedparser`) | `cache:news:{symbol}` |
-| `sr_auto_pivot` | Daily 11:00 UTC (18:00 ICT) | OHLCV bars → computed pivot levels | — (writes `sr_levels` table, `source='auto_pivot'`) |
-| `sr_proximity_digest` | 2x/day: 02:30 UTC (09:30 ICT), 12:30 UTC (19:30 ICT) | Reads `sr_levels` + quote cache → Telegram | — (read-only, sends Telegram) |
-| `corporate_actions_fetcher` | Daily 19:00 UTC (02:00 ICT) | yfinance (dividends/splits) | — (writes `stock_events` table) |
-| `financials_history_fetcher` | Daily 18:00 UTC (01:00 ICT) | yfinance (10y financial statements) | — (writes financials table) |
-| `earnings_events_fetcher` | Daily 23:00 UTC (06:00 ICT) | yfinance (EPS actual vs. estimate) | — (writes earnings_events table) |
+| `sr_auto_pivot` | Daily 18:00 ICT | OHLCV bars → computed pivot levels | — (writes `sr_levels` table, `source='auto_pivot'`) |
+| `sr_proximity_digest` | 2x/day: 09:30 ICT + 19:30 ICT, **weekdays only** | Reads `sr_levels` + quote cache → Telegram | — (read-only, sends Telegram) |
+| `corporate_actions_fetcher` | Daily 02:00 ICT | yfinance (dividends/splits) | — (writes `stock_events` table) |
+| `financials_history_fetcher` | Daily 01:00 ICT | yfinance (10y financial statements) | — (writes financials table) |
+| `earnings_events_fetcher` | Daily 06:00 ICT | yfinance (EPS actual vs. estimate) | — (writes earnings_events table) |
 | `fgi_fetcher` | 30min | CNN Fear & Greed Index | `fgi:current` |
 
 

@@ -37,6 +37,18 @@ from models.user import User
 from models.watchlist import Watchlist, WatchlistItem
 from workers.sr_proximity_digest import send_sr_proximity_digest
 
+# bd:shotockviz-3fx — the digest now refuses to run on a non-trading day, so
+# every test in this file that invokes the real task must pin a weekday.
+# Without this the whole file went red every Saturday and Sunday.
+#
+# 2026-09-07 12:30 UTC is a trading day for BOTH slots, which is the reason
+# for this specific instant rather than any Monday: it is Monday 19:30 in
+# Bangkok (set_open's calendar) AND Monday 08:30 in New York
+# (us_premarket's). Monday 02:30 UTC would NOT do — that is still Sunday
+# 22:30 in New York, so the us_premarket gate correctly refuses it.
+TRADING_MONDAY_UTC_ISO = "2026-09-07T12:30:00+00:00"
+
+
 
 def _quote(price: float) -> bytes:
     return json.dumps({"price": price}).encode()
@@ -115,7 +127,7 @@ def _run(sqlite_db_url, slot, fake_redis, mock_post):
         patch("redis.from_url", return_value=fake_redis),
         patch("httpx.post", mock_post),
     ):
-        send_sr_proximity_digest(slot)
+        send_sr_proximity_digest(slot, now_utc_iso=TRADING_MONDAY_UTC_ISO)
 
 
 class TestFullMultiUserFlow:
