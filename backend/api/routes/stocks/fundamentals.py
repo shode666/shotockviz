@@ -76,13 +76,29 @@ async def get_fundamentals(
             await stock_service.request_data_fetch(sym, "fundamentals")
         return StockFundamentals(symbol=sym)
 
-    # bd:shotockviz-f14 — `data` (from the cached JSON) never carries `ts`
-    # itself (see FUNDAMENTALS_CACHE_TTL_SECONDS docstring); derive it here
-    # so the response can state how old this snapshot is. `data.get("ts")`
-    # first: harmless no-op today (the cached payload has no such key so this
-    # is always None), but future-proofs against the worker one day stamping
-    # its own `ts` without silently overriding a real value with a guess.
-    ts = data.get("ts") or await _fundamentals_as_of_ts(sym)
+    # bd:shotockviz-5e7.1 — `workers/fundamentals_fetcher.py` now stamps a
+    # real `ts` into every payload it writes (the "future-proof" case
+    # bd:shotockviz-f14 anticipated below is live as of this change: this
+    # `data.get("ts")` is no longer always None). Two other writers of
+    # `fundamentals:{symbol}` are out of this bd's scope and still don't
+    # stamp `ts` — `workers/on_demand_listener.py:_fetch_fundamentals` and
+    # `services/cache_orchestrator.py`'s asyncio fallback — so a symbol
+    # last refreshed by either of those, or cached before this deployed,
+    # still falls through to the TTL-derived estimate below. That estimate
+    # is a WEAKER signal than a real stamp (see `_fundamentals_as_of_ts`
+    # docstring: it tells you when the key was WRITTEN, not necessarily
+    # when it was fetched, and silently drifts wrong the moment a TTL
+    # changes — e.g. the asyncio fallback above writes this same key with
+    # a 300s TTL, not this file's assumed 14400s), so it stays labelled as
+    # an inference in the logs rather than look identical to a real stamp.
+    # NOTE (open question, see hand-off): `StockFundamentals` has no field
+    # to carry that real-vs-inferred distinction into the HTTP response
+    # itself — adding one means editing `models/schemas.py`, out of this
+    # bd's file scope.
+    ts = data.get("ts")
+    if ts is None:
+        logger.debug("fundamentals ts is TTL-inferred, not a real stamp", symbol=sym)
+        ts = await _fundamentals_as_of_ts(sym)
     return StockFundamentals(**{**data, "ts": ts})
 
 

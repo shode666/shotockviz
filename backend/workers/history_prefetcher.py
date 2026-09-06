@@ -157,6 +157,13 @@ def prefetch_history(self):
 
             # Cache in Redis (strip time_unix for lightweight JSON)
             cache_bars = [{k: v for k, v in b.items() if k != "time_unix"} for b in bars]
+            # bd:shotockviz-5e7.1 — cache_and_publish_history() also stamps
+            # a sibling `{cache_key}:ts` freshness marker here (see its
+            # docstring in workers/helpers/cache_publisher.py for why that
+            # is a companion key rather than a change to `bars`' shape).
+            # This is the ONLY call site that ever writes it — other paths
+            # that touch the same `cache_key` (services/cache_orchestrator.py,
+            # workers/on_demand_listener.py) don't.
             cache_and_publish_history(
                 redis_client, cache_key, cache_bars,
                 ttl=21600, symbol=symbol, timeframe=timeframe,

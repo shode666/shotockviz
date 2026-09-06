@@ -41,6 +41,41 @@ def cache_and_publish_quotes(
     return count
 
 
+def history_ts_key(cache_key: str) -> str:
+    """Sibling freshness-marker key for an `ohlcv:{symbol}:{tf}` entry.
+
+    bd:shotockviz-5e7.1 — the primary key stays a bare JSON *list*, never a
+    `{..., "ts": ...}` wrapper like `cache_and_publish_quotes()` uses for
+    quotes. Two writers outside this bd's file boundary `setex` that SAME
+    `ohlcv:{symbol}:{tf}` key with a raw `json.dumps(bars)` list —
+    `services/cache_orchestrator.py` (`fetch_stock_history`'s L2 fill and
+    the asyncio on-demand fallback) and `workers/on_demand_listener.py`
+    (`_fetch_history`) — and `workers/alert_checker.py:_load_daily_bars`
+    reads it back with `isinstance(bars, list)` as a hard gate: if this
+    key ever held a dict instead of a list, every indicator alert
+    (golden/death cross, RSI) would silently stop evaluating the moment
+    history_prefetcher's write won the race, with no exception raised
+    anywhere. None of those three files are in this bd's scope, so the
+    payload shape is left exactly alone; the real fetch timestamp goes in
+    this companion key instead, as `{"ts": <epoch seconds>}` — same field
+    name/shape `cache_and_publish_quotes()` writes for quotes, so
+    `workers.pipeline_health._parse_ts()` can parse either canary with
+    the same function.
+
+    Compat: only `cache_and_publish_history()` (i.e. only
+    `history_prefetcher.py`) ever writes this key. The other two writers
+    named above never touch it, so a symbol last refreshed via one of
+    THOSE paths has no companion key at all, or one that lags behind the
+    primary key's actual freshness — a reader must treat "missing" as
+    "unknown, not an error" (never fabricate a value), same convention
+    `_parse_ts`/`compute_staleness` already use for a missing/malformed
+    quote. Keys already in Redis when this deploys simply have no
+    companion key until this symbol's next history_prefetcher-driven
+    write; nothing needs flushing, it self-heals within one TTL window.
+    """
+    return f"{cache_key}:ts"
+
+
 def cache_and_publish_history(
     redis_client,
     cache_key: str,
@@ -65,6 +100,12 @@ def cache_and_publish_history(
         return
 
     redis_client.setex(cache_key, ttl, json.dumps(bars))
+    # bd:shotockviz-5e7.1 — real server fetch time in a sibling key; see
+    # history_ts_key() docstring for why this is not embedded in `bars`
+    # itself. Same TTL as the primary key so the two expire together.
+    redis_client.setex(
+        history_ts_key(cache_key), ttl, json.dumps({"ts": int(time.time())})
+    )
 
     try:
         msg = {
