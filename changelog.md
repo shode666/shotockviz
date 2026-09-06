@@ -8,6 +8,42 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### A dev stack can no longer message the user's real phone (2026-09-06)
+
+`bd:shotockviz-4d9`. The dev DB's user 1 carries the same live
+`telegram_chat_id` as production and the dev stack has a real
+`TELEGRAM_BOT_TOKEN`, so every scheduled notification in this project reached
+the user's actual phone **from a laptop** — which is where the 02:30 and 12:30
+Sunday digests came from. Production had never sent one at all
+(`bd:shotockviz-18r`).
+
+- The only guard was a sentence in `CLAUDE.md` telling agents not to send. It
+  is now `settings.telegram_is_dry_run`: on everywhere except
+  `APP_ENV=production`, with an explicit `TELEGRAM_DRY_RUN` overriding in
+  both directions. `APP_ENV=prod` (a near-miss typo) fails safe, asserted by
+  a test.
+- Five call sites each built the Telegram URL and POSTed it —
+  `alert_checker`, `sr_proximity_digest`, `pipeline_health`,
+  `gap_list_digest`, and the account-link confirmation in `auth.py`. All go
+  through `services/telegram_notify.py` now, and a test walks `workers/` and
+  `api/routes/` asserting nothing builds the API URL itself.
+- A suppressed send reports success deliberately — the caller's bookkeeping
+  (run-lock claimed, `triggered_at` committed) must treat it as done, or dev
+  retries forever on a message that will never leave. The message is logged
+  in full with its chat id: a silent no-op is not verifiable.
+- The suite runs with dry run **off** (autouse conftest fixture, reason in its
+  docstring) so "a message was sent" tests still exercise the real branch;
+  they would otherwise pass with the sender deleted. The suppression has its
+  own file that turns it back on.
+- **Verified live**: with a real token loaded and the user's real chat id as
+  the target, `send_telegram_message('83678…', 'THIS MUST NOT ARRIVE')` logged
+  `TELEGRAM DRY RUN — message NOT sent app_env=development` and made 0 HTTP
+  calls. Prod was checked FIRST and does set `APP_ENV=production` — without
+  that, this change would have silently disabled every production
+  notification instead of enabling the guard.
+- Gates: backend **764 passed, 2 skipped** · tsc exit 0.
+
+
 ### A 20:00 ICT overnight-gap Telegram digest, scoped to one user's book (2026-09-06)
 
 `bd:shotockviz-06z`. He already checks US pre-market at 20:00 ICT one symbol
