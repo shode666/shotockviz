@@ -98,9 +98,16 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
 - รองรับ timeframes: 1m, 5m, 15m, 1h, 4h, 1D, 1W, 1M
 
 #### FR-DATA-003: Round-Robin Price Fetching (CQRS Write Side)
+
+> **Correction (not a gap — the spec undercounts a shipped feature):** the
+> round-robin has **6** market slots today, not 5.
+> `backend/workers/price_fetcher.py:117-126` (`MARKET_SLOTS`) adds a Crypto
+> slot (BTC-USD, ETH-USD, 24/7, `bd:features-2026-09` slice B) after Europe.
+> Cadence is correspondingly ~6 minutes per market, not ~5.
+
 - Celery task `fetch_prices` runs ทุก 1 นาที
-- หมุนสลับ 5 market slots: SET → US → Asia (JP/HK/CN/KR) → Europe (UK/DE/FR/NL) → Overview
-- แต่ละตลาด update ทุก ~5 นาที
+- หมุนสลับ 6 market slots: SET → US → Asia (JP/HK/CN/KR) → Europe (UK/DE/FR/NL) → Crypto (BTC/ETH, 24/7) → Overview
+- แต่ละตลาด update ทุก ~6 นาที
 - ตลาดที่ปิดจะถูก auto-skip → ตลาดที่เปิดได้ update ถี่ขึ้น
 - Backup: `fetch_overview_prices` ทุก 5 นาที (indices, USD/THB, Gold)
 
@@ -136,8 +143,18 @@ Indices tracked: ^SET.BK, ^GSPC (S&P 500), ^IXIC (NASDAQ), ^DJI, ^N225 (Nikkei),
 - สลับ timeframe ได้ทันทีโดยไม่ต้อง reload หน้า
 - แต่ละ timeframe ดึงจำนวน bars ที่เหมาะสม:
   - 1m → 1 วัน, 5m → 5 วัน, 15m → 15 วัน
-  - 1h → 60 วัน, 4h → 120 วัน
-  - 1D → 1 ปี, 1W → 3 ปี, 1M → 10 ปี
+  - 1h → 60 วัน, ~~4h → 120 วัน~~, ~~1D → 1 ปี~~, 1W → 3 ปี, 1M → 10 ปี
+
+> **Status: Deferred — two of the ranges above are not what is fetched.**
+> `on_demand_listener.py:26-35` (`TF_CONFIG`) is the actual interval/period
+> table used to serve chart requests:
+> - **4h** fetches `period="60d"` of 1h bars, aggregated to 4h — 60 days, not
+>   120.
+> - **1D** fetches `period="6mo"` (`on_demand_listener.py:32`, confirmed
+>   again in `history_prefetcher.py:100`) — 6 months, not 1 year.
+>
+> 1m→1 day, 5m→5 days, 15m→15 days, 1W→3 years and 1M→10 years all match the
+> code as documented above and are unaffected.
 
 #### FR-CHART-003: Drawing Tools (Logged-in Users only)
 
@@ -182,34 +199,61 @@ Drawing features (horizontal line only):
 - แสดงราคาและเวลาที่ Y-axis และ X-axis
 
 #### FR-CHART-005: Compare Mode
-- เปรียบเทียบ 2 หุ้นซ้อนกันบนกราฟเดียว (normalized %)
-- เลือกสีแยกให้แต่ละหุ้น
-- Legend แสดงชื่อทั้ง 2 ตัว
+
+> **Status: Deferred — not built.** `grep -ri "compare" frontend/src` finds no
+> chart-comparison code; every hit is unrelated (string/value comparisons in
+> `usePriceUpdates.ts`, `allocation.ts`, `SettingsPage.tsx`,
+> `transactionEditDiff.test.ts`). There is no overlay-two-symbols feature on
+> the chart today. Intent kept for future work.
+
+- ~~เปรียบเทียบ 2 หุ้นซ้อนกันบนกราฟเดียว (normalized %)~~
+- ~~เลือกสีแยกให้แต่ละหุ้น~~
+- ~~Legend แสดงชื่อทั้ง 2 ตัว~~
 
 ---
 
 ### 2.4 Technical Indicators
 
 #### FR-IND-001: Overlay Indicators (บนกราฟราคา)
+
+> **Status: Deferred — Ichimoku Cloud not built.** The chart's overlay toggle
+> list is fixed and does not include it: `ChartToolbar.tsx:31` —
+> `['Volume', 'MA 20', 'EMA 50', 'RSI 14', 'VWAP', 'MACD', 'BB']`. No Ichimoku
+> computation exists in `services/indicators.py` either. Intent kept for
+> future work. (Note: VWAP, on the same toggle line, is a real shipped
+> overlay this section never listed until now — added as a row below.)
+
 | Indicator | Parameters | Default |
 |-----------|-----------|---------|
 | SMA (Simple Moving Average) | Period | 20 |
 | EMA (Exponential Moving Average) | Period | 50 |
 | Bollinger Bands | Period, StdDev | 20, 2 |
-| Ichimoku Cloud | Conversion, Base, Span | 9, 26, 52 |
+| ~~Ichimoku Cloud~~ | ~~Conversion, Base, Span~~ | ~~9, 26, 52~~ |
+| VWAP *(undocumented until now)* | — | — |
 
 #### FR-IND-002: Oscillator Indicators (panel แยกใต้กราฟ)
+
+> **Status: Deferred — Stochastic not built.** Same toggle list as above
+> (`ChartToolbar.tsx:31`) has no Stochastic entry; `services/indicators.py`
+> has no Stochastic computation. Intent kept for future work.
+
 | Indicator | Parameters | Default |
 |-----------|-----------|---------|
 | RSI | Period | 14 |
 | MACD | Fast, Slow, Signal | 12, 26, 9 |
-| Stochastic | K, D, Smooth | 14, 3, 3 |
+| ~~Stochastic~~ | ~~K, D, Smooth~~ | ~~14, 3, 3~~ |
 | Volume | — | — |
 
 #### FR-IND-003: Indicator Management
-- เพิ่ม/ลบ indicator ได้ทันที
-- ปรับ parameter ได้ผ่าน settings panel
-- เปลี่ยนสี indicator ได้
+- เพิ่ม/ลบ indicator ได้ทันที — **built**: pill toggle buttons in
+  `ChartToolbar.tsx` (`onIndicatorToggle`)
+- ~~ปรับ parameter ได้ผ่าน settings panel~~ — **Status: Deferred, not built.**
+  The 7 indicators are a fixed list with the period baked into the label
+  (e.g. `'MA 20'`, `'EMA 50'`, `'RSI 14'`); there is no settings panel and no
+  code path that changes a period at runtime.
+- ~~เปลี่ยนสี indicator ได้~~ — **Status: Deferred, not built.** No color
+  picker or per-indicator color control exists anywhere in
+  `frontend/src/components/chart/`.
 
 ---
 
@@ -218,8 +262,18 @@ Drawing features (horizontal line only):
 #### FR-WATCH-001: CRUD
 - เพิ่มหุ้นเข้า watchlist (ไม่จำกัดจำนวน)
 - ลบหุ้นออกจาก watchlist
-- สร้างหลาย watchlist ได้ (เช่น "หุ้นไทย", "US Tech", "Japan Blue Chips")
-- ลาก drag-and-drop เรียงลำดับ
+- ~~สร้างหลาย watchlist ได้ (เช่น "หุ้นไทย", "US Tech", "Japan Blue Chips")~~ —
+  **Status: Deferred, not reachable from the UI.** The backend fully
+  supports it (`POST/GET/PUT/DELETE /watchlists`, `backend/api/routes/
+  watchlist.py`), but `Sidebar.tsx`'s `loadWatchlist()` (lines ~148-165)
+  only ever uses the first watchlist returned, auto-creating one named "My
+  Watchlist" if none exists — there is no UI to create a second one or
+  switch between them. Backend and data model are ready; the frontend
+  control is the missing piece.
+- ลาก drag-and-drop เรียงลำดับ — **built, verified in code**: `Sidebar.tsx`
+  (`handleDragStart`/`handleDragOver`/`handleDragEnd`, lines ~253-286) +
+  `PATCH /watchlists/{id}/stocks/reorder` (`watchlist.py:164-187`). This
+  bullet was not deferred — it works today.
 
 #### FR-WATCH-002: Display
 - แสดงราคาปัจจุบัน, % change, volume ใน sidebar
@@ -298,7 +352,11 @@ Drawing features (horizontal line only):
 
 - **Market**: SET, US, หรือทั้งหมด (SET + US) — see note above; JP/HK/UK/DE/CN/FR/NL/KR not yet screenable
 - **Price vs MA**: > MA200 / > MA50 / < MA200 / Any
-- **RSI**: min-max
+- ~~**RSI**: min-max~~ — **Status: Deferred, not built as a numeric range.**
+  The API param is a 4-value enum, not a min/max pair:
+  `rsi: Literal["oversold", "neutral", "overbought", "any"]`
+  (`backend/api/routes/screener.py:255`, evaluated by `_matches_rsi` at
+  line 59). A user cannot type an arbitrary RSI range.
 - **MACD Signal**: Buy / Sell / Neutral
 - **Volume**: X เท่าของค่าเฉลี่ย
 
@@ -345,16 +403,40 @@ Drawing features (horizontal line only):
 
 ### 3.2 Database Housekeeping
 
-เพื่อลดขนาด database ระบบจะ compress ข้อมูลเก่าอัตโนมัติ:
+> **Status: Deferred — this section describes aggregation that does not
+> exist; only deletion is built, and only 3 of the 4 rows below are real.**
+> `backend/workers/housekeeping.py` (`run_housekeeping`) deletes rows older
+> than a per-resolution cutoff — `1m: 7 days`, `5m: 90 days`,
+> `1D: 730 days` — and nothing more. It never aggregates a finer resolution
+> into a coarser one before deleting (there is no code path that writes a
+> `5m` bar from `1m` data, or a `1D` bar from `5m` data), and there is
+> **no `> 2 ปี → 1-week bars` rule at all** — data older than 730 days is
+> simply deleted, not rolled up into weekly bars. "Aggregate แล้วลบ" should
+> read "ลบ" (delete only) for both the 5-minute and 1-day rows, and the
+> `> 2 ปี` row should be struck.
+> The good news, verified against current code: the **delete** itself now
+> works (`bd:shotockviz-s3k`, applied 2026-09-06) — a prior bug compared
+> `ohlcv_bars.time_unix` (a bigint) against a timestamp interval, which
+> raised on every run and rolled back all three rules in the same
+> transaction, so nothing was ever deleted. Each rule now runs in its own
+> transaction and one rule's failure no longer blocks the others.
+> Separately, "ใช้ TimescaleDB hypertables with auto-compression" below is
+> also not built: `backend/db/migrations/versions/20260225_0001_ohlcv_bars.py`
+> creates the hypertable but no migration ever calls
+> `compress_chunks`/`add_compression_policy` — there is no TimescaleDB
+> native compression configured; row deletion is the only space-management
+> mechanism in place.
+
+เพื่อลดขนาด database ระบบจะลบข้อมูลเก่าเมื่อเกินอายุที่กำหนด (ไม่มี aggregate):
 
 | Age | Resolution | Action |
 |-----|-----------|--------|
 | < 7 วัน | 1-minute bars | เก็บ raw data |
-| 7 – 90 วัน | 5-minute bars | Aggregate แล้วลบ 1-min data |
-| 90 วัน – 2 ปี | 1-day bars | Aggregate แล้วลบ 5-min data |
-| > 2 ปี | 1-week bars | Aggregate แล้วลบ 1-day data |
+| 7 – 90 วัน | 5-minute bars | ~~Aggregate แล้ว~~ลบ 1-min data ที่เกินอายุ |
+| 90 วัน – 2 ปี | 1-day bars | ~~Aggregate แล้ว~~ลบ 5-min data ที่เกินอายุ |
+| ~~> 2 ปี~~ | ~~1-week bars~~ | ~~Aggregate แล้วลบ 1-day data~~ — not built; data > 2 ปี is deleted, not rolled up |
 
-Implementation: Celery beat runs `run_housekeeping` ทุกวัน 03:00 ICT. ใช้ TimescaleDB hypertables with auto-compression.
+Implementation: Celery beat runs `run_housekeeping` ทุกวัน 03:00 ICT (delete-only, per note above). ~~ใช้ TimescaleDB hypertables with auto-compression~~ — hypertable exists, native compression policy does not.
 
 ### 3.3 Security
 
@@ -374,7 +456,12 @@ Implementation: Celery beat runs `run_housekeeping` ทุกวัน 03:00 ICT
 - CQRS pattern: API pure-read จาก cache/DB → ไม่มี external API dependency ใน request path
 - Graceful degradation: ถ้า yfinance ล่ม → Celery retry 3 ครั้ง ด้วย exponential backoff
 - Cache stale-while-revalidate: แสดง cached data + background refresh
-- WebSocket auto-reconnect ด้วย exponential backoff (1s, 2s, 4s, 8s, max 30s)
+- WebSocket auto-reconnect ด้วย exponential backoff — **correction, built but
+  numbers were wrong**: actual sequence is 2s, 4s, 8s, 16s, capped at 30s
+  (`frontend/src/hooks/useWebSocket.ts:149` —
+  `Math.min(2000 * 2^attempt, 30_000)`), not 1s/2s/4s/8s/max 30s. The
+  mechanism works today; only the documented starting value and one step
+  were wrong.
 - Health check endpoint: `GET /api/health`
 
 ### 3.5 Scalability

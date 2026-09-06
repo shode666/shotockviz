@@ -1,8 +1,10 @@
 # ShotockViz — Master Plan
 
 **Project:** Self-hosted Stock Analysis Platform (Thai + US Markets)
-**Version:** 0.1.0 BETA → Target 1.0
-**Last Updated:** 2026-03-01
+**Version:** 0.1.3 BETA → Target 1.0
+**Last Updated:** 2026-09-06 (`bd:shotockviz-8v9` — corrected against current
+code; this file had been stale since 2026-03-01 and contradicted
+`tasklist.md`, per `docs/engagements/backlog-2026-09.md` D4)
 **Stack:** FastAPI + React 19 + TanStack Start + TimescaleDB + Redis + Celery
 
 ---
@@ -19,14 +21,16 @@ ShotockViz is a **self-hosted, privacy-first stock analysis platform** tailored 
 
 ---
 
-## Current Status: Phase 1 (Stabilization)
+## Current Status: Phase 1 (Stabilization) — ✅ Resolved (historical)
 
-**Status:** 🔴 In Progress — Core bugs being fixed
-**Blockers:**
-- Frontend production bundle outdated (missing interval-leak fixes, `dataVersion` hook, names in sidebar)
-- PTT.BK Yahoo Finance returning empty bars (rate limiting)
-- Celery workers not populating Redis (quotes all 202)
-- Fundamentals 404 for US stocks (Yahoo Finance API version mismatch)
+**Status:** These 4 blockers were live as of 2026-03-01 and are all closed —
+`tasklist.md:83-84,95,212,219,238` record each as `[x]`. Kept here as
+history, not as an open list. See `CLAUDE.md` § Current Status & Priorities
+for what is actually in progress today (2026-09-06).
+- ~~Frontend production bundle outdated (missing interval-leak fixes, `dataVersion` hook, names in sidebar)~~ — fixed and shipped
+- ~~PTT.BK Yahoo Finance returning empty bars (rate limiting)~~ — fixed, `data_received` flag added (`tasklist.md:219`)
+- ~~Celery workers not populating Redis (quotes all 202)~~ — CQRS refactor since then made this the documented fallback path, not a bug
+- ~~Fundamentals 404 for US stocks (Yahoo Finance API version mismatch)~~ — fixed, v11→v10→v8 fallback chain (`tasklist.md:44`)
 
 ---
 
@@ -117,11 +121,13 @@ ShotockViz is a **self-hosted, privacy-first stock analysis platform** tailored 
 
 ### Phase 5 — Scale & Operations
 > Goal: Production-ready for 50+ concurrent users, easy to maintain
+> Alembic row below: 8 migrations on disk, head `20260906_0008_alert_value_as_of`
+> (`backend/db/migrations/versions/`) — not a TODO.
 
 | Feature | Status | Priority |
 |---------|--------|----------|
 | Admin dashboard: user management, system metrics | 🔴 TODO | P2 |
-| Alembic migrations: proper DB schema versioning | 🔴 TODO | P2 |
+| ~~Alembic migrations: proper DB schema versioning~~ | 🟢 Done | - |
 | Frontend build pipeline: CI auto-rebuild on push | 🔴 TODO | P2 |
 | Structured logging dashboard (Grafana / Loki) | 🔴 TODO | P3 |
 | API rate limit tuning: authenticated users get more | 🟢 Done | - |
@@ -193,9 +199,15 @@ dataVersion bump triggers:
 
 ### Market Hours
 
+> SET row corrected against the primary source,
+> [set.or.th "Trading Procedure — Trading Hours"](https://www.set.or.th/en/market/information/trading-procedure/trading-hours)
+> (extended hours effective 2026-03-25) — see `CLAUDE.md` § Market Hours for
+> the full session breakdown. The previous `14:30–17:00` afternoon figure
+> here was wrong under both the current and the pre-extension schedule.
+
 | Market | Hours (ICT) | Notes |
 |--------|-------------|-------|
-| SET Thailand | Mon–Fri 10:00–12:30, 14:30–17:00 | Lunch break |
+| SET Thailand | Mon–Fri 10:00–12:30, 14:00–16:30 | Lunch break 12:30-14:00 |
 | US Markets | Mon–Fri 20:30–03:00+1 (ICT) | Pre/post market ±2h |
 | Data latency | 15 min delay | Free API tier limitation |
 

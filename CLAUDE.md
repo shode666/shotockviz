@@ -25,8 +25,8 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
 | Backend | FastAPI (Python 3.13) + SQLAlchemy 2 + Pydantic 2 |
 | Database | PostgreSQL 16 + TimescaleDB (time-series) |
 | Cache | Redis 7 (caching + Celery broker + WebSocket pub/sub) |
-| Background | Celery 5.6 + Beat (price, names, fundamentals, fund NAV, history prefetch, alerts) |
-| Data | Yahoo Finance + pythainav (Thai fund NAV) + Stooq (US fallback) |
+| Background | Celery 5.6 + Beat — **18** registered task modules (`backend/workers/celery_app.py:13-33`), not 8 — see § Celery Workers |
+| Data | Yahoo Finance + SEC Open Data API (Thai fund NAV, Finnomena fallback — no `pythainav` dependency, `backend/requirements.txt:59`) + Stooq (US fallback) |
 | Proxy | Caddy 2 (reverse proxy + auto TLS) |
 
 ## Docker Commands
@@ -150,24 +150,50 @@ ShotockViz/
 
 ## Current Status & Priorities
 
-**Phase 1 (Stabilization):** ✅ Complete — critical fixes applied, fast-response pattern implemented.
-**Phase 2 (CQRS Refactor):** ✅ Complete — API pure-read, 5 new Celery workers created.
-**Phase 3 (Data Completeness):** 🔧 In progress — Thai fund NAV + data gaps.
+> This section describes the product **as of 2026-09-06** — it is a snapshot,
+> not a running log. `bd:shotockviz-24c`/`8v9` rewrote it because the
+> previous version listed 5 priorities that were all done or superseded, and
+> Patrick was handed it as session context and got misrouted by it directly.
 
-### Current Priorities
-1. **Frontend Docker rebuild** — compiled bundle outdated, source fixes not active
-2. **Backend Docker rebuild** — new Celery workers need to be registered
-3. **Verify CQRS flow** — API returns cache-only → Celery fetches → WS notifies → client re-fetches
-4. **Thai Fund NAV** — pythainav integration via `fund_fetcher.py` (daily at 19:00 ICT)
-5. **Fix sidebar names** — `name_fetcher.py` pre-populates all company names
+**Phase 1 (Stabilization) / Phase 2 (CQRS Refactor):** ✅ Complete and stable
+— superseded by two production deploys since. The 5 priorities and 5
+"Completed" items formerly listed here (frontend/backend Docker rebuild,
+verify CQRS flow, Thai Fund NAV, fix sidebar names) are all done; see
+`docs/engagements/backlog-2026-09.md` for the record.
 
-### Completed
-- ✅ All API endpoints respond < 5s (cache-only reads)
-- ✅ WebSocket `data_ready` notification pattern
-- ✅ PTT.BK retry logic fixed
-- ✅ Cache key consistency fixed across 5 files
-- ✅ Memory leak fixes in 4 frontend components
-- ✅ 5 new Celery workers (name, fundamentals, fund, history, on-demand)
+**What is actually true today:**
+- **Alerts**: all 7 types (Price Above/Below, RSI Overbought/Oversold,
+  Golden/Death Cross, Volume Spike) are evaluated by `alert_checker.py`
+  (`bd:shotockviz-06e`) — not just the 2 price types. Telegram is the only
+  notification channel (`bd:shotockviz-675`).
+- **Portfolio valuation**: current market-value totals + an allocation
+  breakdown are implemented (`bd:shotockviz-916`,
+  `backend/services/portfolio_service.py`). Sharpe Ratio, Beta, and Max
+  Drawdown are struck from scope, not just unbuilt — no flow-adjusted
+  portfolio return series exists to compute them from
+  (`REQUIREMENTS.md` FR-PORT-003).
+- **WebSocket auth + rate limiting**: `/api/ws/prices` requires an auth
+  token (`backend/main.py:356`, `websocket_prices(ws, token)`); REST
+  endpoints are rate-limited per IP/user
+  (`backend/api/middleware/rate_limit.py`, exercised by
+  `backend/tests/test_quotes_rate_limit.py` and
+  `test_rate_limit_proxy_boundary_live.py`).
+- **Quality gates are green**: `npx tsc --noEmit -p .` is clean under
+  `"strict": true` (flipped 2026-09-06, `bd:shotockviz-9z0`,
+  `frontend/tsconfig.json:36`), and the Playwright E2E suite passed
+  226/226 the same day (`changelog.md`, "TypeScript strict mode enabled —
+  type gate is finally honest" entry, "Gates:" line).
+- **Migrations**: Alembic head is `20260906_0008_alert_value_as_of`, 8
+  migrations on disk (`backend/db/migrations/versions/`) — this is not a
+  TODO, it is the schema-versioning mechanism in active use.
+
+**Known, currently-true documentation gaps:** `REQUIREMENTS.md` carries 11
+FR/NFR claims that describe features not actually built as written
+(Ichimoku, Stochastic, indicator parameter/colour controls, Compare Mode,
+"1D → 1 year" history range, RSI min/max screener filter, multi-watchlist
+creation UI, aggregate-then-delete + auto-compression housekeeping) — each
+is now marked `Status: Deferred` in place with what is actually there
+instead, per `bd:shotockviz-24c`.
 
 ### See Also
 - Full priority breakdown → `ShotockViz_Development_Plan.docx`
@@ -178,17 +204,48 @@ ShotockViz/
 
 - **CQRS (Command Query Responsibility Segregation)** — API endpoints are pure-read (Redis/PostgreSQL only). Celery workers are the sole data ingesters (Yahoo Finance, pythainav, Stooq). On cache miss, API triggers Celery task via `request_data_fetch()` → worker fetches → caches → publishes WS `data_ready` → frontend re-fetches automatically.
 - **2-layer read cache (API side)** — Redis L1 (sub-ms) → PostgreSQL L2 (10-50ms). API never touches external services.
-- **Celery write side** — 8 workers: `price_fetcher` (quotes), `name_fetcher` (company names), `fundamentals_fetcher` (PE/PB/EPS), `fund_fetcher` (Thai NAV via pythainav), `history_prefetcher` (OHLCV warm cache), `on_demand_listener` (API cache-miss handler), `alert_checker`, `housekeeping`
+- **Celery write side** — **18** registered task modules
+  (`backend/workers/celery_app.py:13-33`, not 8): `price_fetcher` (quotes),
+  `alert_checker`, `alert_symbol_refresher`, `housekeeping`, `name_fetcher`,
+  `fundamentals_fetcher`, `fund_fetcher`, `history_prefetcher`,
+  `on_demand_listener`, `symbol_registrar`, `index_populator`,
+  `news_fetcher`, `sr_auto_pivot`, `sr_proximity_digest`,
+  `corporate_actions_fetcher`, `financials_history_fetcher`,
+  `earnings_events_fetcher`, `fgi_fetcher`. Full schedule → § Celery
+  Workers below.
 - **TimescaleDB hypertable** — `StockPrice1m` + `ohlcv_bars` for efficient time-series queries with auto-compression
 - **WebSocket push** — Redis pub/sub `price_updates` channel → WebSocket broadcast: `price_update`, `data_ready`, `nav_update`, `alert_triggered`, `names_ready`
 - **Google OAuth** — `@react-oauth/google` with `useGoogleOneTapLogin` in `__root.tsx` for seamless re-auth. **NO custom token management code on frontend.**
-- **Thai Fund NAV** — `pythainav` library fetches from SEC Thailand / บลจ. websites. Daily at 19:00 ICT (T+1 delay acceptable).
+- **Thai Fund NAV** — fetched directly from the SEC Open Data API
+  (`api.sec.or.th`), with a Finnomena public-API fallback
+  (`backend/workers/fund_fetcher.py:1-48`; `backend/requirements.txt:59`
+  states explicitly "no pythainav dep" — that library is not installed and
+  not used). Daily at 19:00 ICT (T+1 delay acceptable). Note: the same task
+  also writes the NAV into `quote:{symbol}` (the same Redis key
+  `price_fetcher` uses for live prices, `fund_fetcher.py:428-440`) with an
+  86400s TTL vs. `price_fetcher`'s 120s — a fund symbol carrying a
+  PRICE_ABOVE/BELOW alert will read a stale NAV as if it were a live quote.
 
 ## Market Hours (ICT timezone)
 
+> **SET hours below are confirmed against the primary source**,
+> [set.or.th "Trading Procedure — Trading Hours"](https://www.set.or.th/en/market/information/trading-procedure/trading-hours)
+> (extended hours effective 2026-03-25): Pre-Open I 09:30-10:00, Trading
+> Session I 10:00-12:30, Pre-Open II 13:30-14:00, Trading Session II
+> 14:00-16:30, Pre-Close 16:30-close. `REQUIREMENTS.md:81` agrees
+> (`10:00-16:30, break 12:30-14:00`). `master_plan.md` previously said
+> `14:30-17:00` for the afternoon session — that was wrong (stale
+> pre-extension figure that doesn't even match the pre-extension schedule)
+> and has been corrected there to match this row.
+> Separately: `backend/workers/price_fetcher.py:86` (`_set_hours`) gates
+> fetching on a single continuous `02:30-09:45 UTC` (09:30-16:45 ICT)
+> window with **no lunch-break gap** — this is a known, deliberate superset
+> (extra polling 12:30-14:00 costs a few no-op yfinance calls, no
+> trader-visible effect; not a doc/code mismatch worth fixing).
+
 | Market | Hours | Notes |
 |--------|-------|-------|
-| SET | 10:00-12:30, 14:00-16:30 | Break 12:30-14:00 |
+| SET | 10:00-12:30, 14:00-16:30 | Break 12:30-14:00 (source above) |
 | US (NYSE/NASDAQ) | 21:30-04:00 (next day) | Pre-market from 20:00 |
 | Celery price fetch | Every 1 min during market hours | via celery-beat schedule |
 | Celery names | Every 6 hours | prefetch_names |
@@ -223,16 +280,29 @@ Primary user is an experienced Thai+US stock trader (8yr SET, 4yr US). Swing + p
 
 ## Celery Workers (CQRS Write Side)
 
+> 18 modules registered in `backend/workers/celery_app.py:13-33`, not 8.
+> Schedules below are from `celery_app.py:52-169` (`beat_schedule`).
+
 | Worker | Schedule | Data Source | Cache Key |
 |--------|----------|-------------|-----------|
-| `price_fetcher` | 1min (market hours) | yfinance batch | `quote:{symbol}` |
+| `price_fetcher` | 1min, round-robin across 6 market slots | yfinance batch | `quote:{symbol}` |
+| `alert_symbol_refresher` | 60s | yfinance batch (active-alert symbols only) | `quote:{symbol}` |
+| `alert_checker` | 60s | Redis cache read | — |
+| `housekeeping` | Daily 03:00 ICT | PostgreSQL (delete-only past age cutoff, see REQUIREMENTS.md §3.2) | — |
 | `name_fetcher` | 6h | yfinance info | `cache:name:{symbol}` |
 | `fundamentals_fetcher` | 4h | yfinance info | `fundamentals:{symbol}` |
-| `fund_fetcher` | Daily 19:00 ICT | pythainav (SEC) | `fund:{symbol}` |
-| `history_prefetcher` | 30min | yfinance history | `ohlcv:{symbol}:{tf}` |
+| `fund_fetcher` | Daily 19:00 ICT | SEC Open Data API + Finnomena fallback (no pythainav) | `fund:{symbol}` **and** `quote:{symbol}` (dual-write, 86400s TTL — see note above) |
+| `history_prefetcher` | 30min (fills cold keys only; effective refresh is 6h per key TTL) | yfinance history | `ohlcv:{symbol}:{tf}` |
 | `on_demand_listener` | On API cache miss | yfinance | varies |
-| `alert_checker` | 60s | Redis cache read | — |
-| `housekeeping` | Daily 03:00 ICT | PostgreSQL | — |
+| `symbol_registrar` | 15min (`scan-unregistered-symbols`) | yfinance (market classification) | `cache:name:{symbol}` |
+| `index_populator` | Weekly, Sunday 00:00 UTC | Wikipedia (S&P 500, NASDAQ 100 constituent tables) | — (writes PostgreSQL) |
+| `news_fetcher` | 30min | Google News RSS (`feedparser`) | `cache:news:{symbol}` |
+| `sr_auto_pivot` | Daily 11:00 UTC (18:00 ICT) | OHLCV bars → computed pivot levels | — (writes `sr_levels` table, `source='auto_pivot'`) |
+| `sr_proximity_digest` | 2x/day: 02:30 UTC (09:30 ICT), 12:30 UTC (19:30 ICT) | Reads `sr_levels` + quote cache → Telegram | — (read-only, sends Telegram) |
+| `corporate_actions_fetcher` | Daily 19:00 UTC (02:00 ICT) | yfinance (dividends/splits) | — (writes `stock_events` table) |
+| `financials_history_fetcher` | Daily 18:00 UTC (01:00 ICT) | yfinance (10y financial statements) | — (writes financials table) |
+| `earnings_events_fetcher` | Daily 23:00 UTC (06:00 ICT) | yfinance (EPS actual vs. estimate) | — (writes earnings_events table) |
+| `fgi_fetcher` | 30min | CNN Fear & Greed Index | `fgi:current` |
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
