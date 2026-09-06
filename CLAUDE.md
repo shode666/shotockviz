@@ -15,6 +15,24 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
    docker-compose -f docker-compose.dev.yml up -d frontend
    ```
 5. **Auth uses Google OAuth (one-tap)** — NO custom token management on frontend. User explicitly demanded this 3 times. Tokens handled by `useGoogleOneTapLogin` in `__root.tsx`.
+6. **NEVER write a polling loop that waits on another task.** No
+   `until grep ... ; do sleep N; done`, no `while [ ! -f x ]`, no "kick off
+   a background run and watch for its output". Run the command in the
+   foreground and read its exit status.
+
+   This cost 15.5 hours on 2026-09-05: a loop was left watching a file for
+   `passed|failed`, the wrapped job only ever wrote `PID:…` and `[exited
+   with code 0]`, so the condition could never become true and it slept in
+   a loop ~5,600 times until someone noticed it in the task panel. It also
+   produced two agent hand-backs with no results at all, because the agent
+   returned "waiting for the background run" instead of an answer.
+
+   The long jobs here are known and bounded — the full E2E suite is ~5
+   minutes, the backend suite ~25 seconds, a production image build ~1
+   minute. All of them finish well inside a normal command timeout. If
+   something genuinely must run detached, it is the caller's job to
+   collect it, and a waiting condition that can never be satisfied is a
+   hang, not a wait.
 
 ## Tech Stack
 
