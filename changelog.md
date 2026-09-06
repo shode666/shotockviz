@@ -8,6 +8,30 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### A 401 mid-save no longer tells you to try again while logging you out (2026-09-06)
+
+`bd:shotockviz-2qw`. Two individually-correct signals fired together: the
+session was cleared (deliberate — bd:shotockviz-tjh left both PATCH saves
+unflagged so a genuinely expired session still logs you out), and the
+component's own `.catch` rendered its inline save error. The trader was
+logged out and simultaneously invited to retry a form they no longer had a
+session for.
+
+- The 401 still clears the session. What changed is that the branch doing the
+  clearing marks its own rejection, so a component can tell a logout from a
+  rejected save — a stamp rather than three places re-deriving
+  `status === 401 && !skipAuthClearOn401`.
+- **The bug was not where it looked.** `PortfolioPage` gates on
+  `isAuthenticated`, so the logout unmounts the panel and its error node —
+  nothing was ever visible there. `SettingsPage` has no gate and keeps
+  rendering, so that is the real surface. **The first E2E assertion, written
+  against the Portfolio panel, passed with the fix deleted** — a test proving
+  nothing. It is kept and labelled as such; the load-bearing one targets
+  SettingsPage and fails `Expected: 0, Received: 1` without the guard.
+- Gates: tsc 0 · frontend services 18/18 · utils 157/157 · E2E **232 passed,
+  0 failed**.
+
+
 ### Wave 6 — the last four follow-ups (2026-09-06)
 
 `bd:shotockviz-tjh`, `5e7.2`, `f14.2`, `649.1.1`.
