@@ -8,6 +8,62 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### Wave 3 — honesty on cached numbers, a concentration limit, a dead-pipeline detector (2026-09-06)
+
+`bd:shotockviz-kmi`, `3ir`, `032`, `ubw`, `f14`, `5e7`, `649`.
+
+- **The last two insufficient-data sentinels** (`kmi`). `compute_rsi` returned
+  50.0 — dead-centre "neutral", so the screener's `rsi == "neutral"` filter
+  silently accepted symbols whose RSI was never computed — and
+  `compute_volume_ratio` fell back to `vol_avg = 1`, making the "ratio" the
+  raw share count, so every "> 2x average" filter passed unconditionally.
+  Both return `None` now. `alert_checker`'s RSI/VOLUME_SPIKE branches then
+  compared that `None` (`032`, fixed in the same commit, red-proven with the
+  actual `TypeError`), while GOLDEN_CROSS/DEATH_CROSS beside them already
+  guarded.
+- **Fund NAV stopped masquerading as a live quote** (`3ir`) — `fund_fetcher`
+  no longer dual-writes into `quote:{symbol}` (120s TTL, "live equity
+  quote") with an 86400s NAV. **The consequence was chased down rather than
+  shipped** (`ubw`): three consumers had no `fund:{symbol}` fallback and
+  would have gone from "reads a stale NAV as if live" to "sees nothing at
+  all" — including `alert_checker`, where a fund price alert would simply
+  never fire again, which looks exactly like "the level was never crossed".
+  All five call sites now share one converter (`services/fund_quote.py`);
+  two of the five had already drifted **inside a single file**.
+- **Cached numbers say how old they are** (`f14`, partial). Fundamentals now
+  carry an as-of derived from the Redis key's remaining TTL —
+  `fundamentals_fetcher` stamps no `ts` — and `None` when unknown, never a
+  fabricated time. New pure `frontend/src/utils/cachedValueAge.ts` renders a
+  literal age with **no invented freshness tiers**: the amber/red thresholds
+  on the price field came from a measured round-robin worst case, and nobody
+  has spec'd what "too old" means for a PE ratio. Screener columns and the
+  news list split to `f14.1`.
+- **Something now says when ingest dies** (`5e7`). The liveness signal is
+  cache freshness, **not** Celery task success — the failure this exists to
+  catch is `yfinance_batch_quotes` returning `{}` for every symbol, which
+  does not raise, so task-success stays green straight through the outage.
+  No market-hours gate is needed because the canary set is the
+  Overview/Crypto slots, which `price_fetcher` gates on `_always`. One alert
+  per outage (SETNX, 1h), one recovery message on the stale→fresh
+  transition. **Deliberately not armed on dev**: dev's pipeline goes stale
+  every time that Mac sleeps, and dev shares the user's live
+  `telegram_chat_id` (`4d9`).
+- **Concentration became a limit** (`649`) — computed from `bd:916`'s
+  existing `Allocation` rather than a second fold, with excluded positions
+  (unpriced, FX-unavailable, currency-conflict) carried forward as
+  `not_checked`: never counted as compliant, never invented as breached.
+  Each breach carries how much to sell to land on the limit, using the
+  two-sided formula, because this book has no cash leg.
+- Gates: backend **728 passed, 2 skipped** · tsc exit 0 · frontend unit
+  **157/157**.
+- **Process defect found and rewound before pushing**: four agents shared one
+  working tree with no `git worktree` isolation, and a commit for one bead
+  captured another's half-finished edits — producing a commit that was not
+  importable while the test suite stayed green, because the suite runs
+  against the working tree, not the commit. Recorded as CLAUDE.md Critical
+  Rule 7.
+
+
 ### Every Celery cron job was firing 7 hours early (2026-09-06)
 
 **Found by the user receiving a Telegram S/R digest at 12:30 on a Sunday.**

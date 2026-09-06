@@ -34,6 +34,27 @@ ShotockViz is a **self-hosted stock analysis platform** for Thai (SET/MAI) and U
    collect it, and a waiting condition that can never be satisfied is a
    hang, not a wait.
 
+7. **Never run two agents on the same file in one working tree.** There is
+   no `git worktree` isolation between concurrent agent sessions here — they
+   share one checkout. Give each agent a disjoint file set up front, and
+   before committing on behalf of one, check `git diff` for edits that
+   belong to another.
+
+   This produced a broken commit on 2026-09-06. `backend/api/routes/
+   portfolio.py` and `backend/models/schemas.py` were each needed by two
+   agents. Committing one agent's work captured the other's half-finished
+   endpoint wiring, and the resulting commit was not importable —
+   `ImportError: cannot import name 'PortfolioConcentration' from
+   'models.schemas'`, because the schema it imported was still uncommitted
+   in the other agent's file. Caught only by explicitly stashing the tree
+   and importing at HEAD; the test suite was green the whole time, because
+   the suite runs against the *working tree*, not against the commit.
+
+   Two consequences worth keeping: a green suite is not evidence that a
+   commit builds, and once edits are interleaved, splitting them back apart
+   after the fact means hunk surgery — one honest commit naming every bead
+   it contains beats three tidy ones that do not build.
+
 ## Tech Stack
 
 | Layer | Technology |
