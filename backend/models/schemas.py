@@ -152,13 +152,17 @@ class StockFundamentals(BaseModel):
     week_52_high: Optional[float] = None
     week_52_low: Optional[float] = None
     avg_volume: Optional[float] = None
-    # bd:shotockviz-f14 — epoch SECONDS this fundamentals snapshot was fetched.
-    # `workers/fundamentals_fetcher.py` (out of scope for this bd) doesn't
-    # stamp a `ts` field into the cached payload the way `cache_publisher.py`
-    # does for quotes, so `api/routes/stocks/fundamentals.py` derives this
-    # read-side from the `fundamentals:{symbol}` Redis key's remaining TTL
-    # instead (same fixed-TTL `setex`, so `now - (TTL - remaining)` recovers
-    # the fetch time). `None` when unknown — never fabricated.
+    # bd:shotockviz-f14 / bd:shotockviz-f14.2 — epoch SECONDS this
+    # fundamentals snapshot was fetched. All three writers of
+    # `fundamentals:{symbol}` stamp this at write time now:
+    # `workers/fundamentals_fetcher.py` (bd:shotockviz-5e7.1),
+    # `workers/on_demand_listener.py:_fetch_fundamentals`, and
+    # `services/cache_orchestrator.py`'s two write sites. There is no
+    # read-side inference anymore (`api/routes/stocks/fundamentals.py`
+    # used to derive one from the Redis key's remaining TTL; that was
+    # deleted with bd:shotockviz-f14.2, not kept as a labelled fallback).
+    # `None` only for a payload written before all three writers were
+    # fixed — self-heals on that key's next write. Never fabricated.
     ts: Optional[int] = None
 
 

@@ -92,26 +92,20 @@ def prefetch_fundamentals(self):
                     week_52_low=_get_field("fiftyTwoWeekLow"),
                     avg_volume=_get_field("averageVolume"),
                     # bd:shotockviz-5e7.1 — real server fetch time, the
-                    # field bd:shotockviz-f14 already reserved on
-                    # `StockFundamentals` (models/schemas.py) as Optional
-                    # and always None because nothing wrote it yet.
-                    # `api/routes/stocks/fundamentals.py` already prefers
-                    # this over its own TTL-inferred estimate
-                    # (`data.get("ts") or await _fundamentals_as_of_ts(...)`)
-                    # — see that file for the "prefer real, label the
-                    # fallback as inferred" read-side logic.
+                    # field bd:shotockviz-f14 reserved on
+                    # `StockFundamentals` (models/schemas.py) and nothing
+                    # wrote until this.
                     #
-                    # Compat: two other writers of `fundamentals:{symbol}`
-                    # are out of this bd's file scope and unchanged —
-                    # `workers/on_demand_listener.py:_fetch_fundamentals`
-                    # and `services/cache_orchestrator.py`'s asyncio
-                    # fallback. Their writes (and any key cached before
-                    # this deploys) still carry `ts=None`; the read side
-                    # already treats that as "fall back to TTL inference",
-                    # so nothing needs a flush — a symbol's `ts` starts
-                    # reflecting reality again on this task's next
-                    # successful run for it (worst case ~4h after deploy,
-                    # this task's own cadence).
+                    # bd:shotockviz-f14.2 — the other two writers of
+                    # `fundamentals:{symbol}` now stamp it too
+                    # (`workers/on_demand_listener.py:_fetch_fundamentals`
+                    # and `services/cache_orchestrator.py`), so the read
+                    # side's TTL-inferred fallback was DELETED rather than
+                    # kept and labelled: a guess you can remove beats a
+                    # guess you have to explain. `ts` is therefore either a
+                    # real stamp or `None` meaning genuinely unknown — it
+                    # is never estimated. Keys written before that deploy
+                    # carry `ts=None` and self-heal on their next fetch.
                     ts=int(time.time()),
                 )
 

@@ -3,13 +3,11 @@ Pure file move: `GET /{symbol}/fundamentals`, `GET /{symbol}/financials`,
 `GET /{symbol}/earnings`.
 """
 import json as _json
-import time
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from api.middleware.auth import get_optional_user
-from core import cache_keys
 from core.logger import get_logger
 from models.schemas import StockFundamentals
 from models.user import User
@@ -22,36 +20,6 @@ from schemas.envelope import EnvelopingAPIRoute
 # from the parent (stocks/__init__.py, lifted /api/stocks -> /stocks).
 router = APIRouter(route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
-
-# bd:shotockviz-f14 — must match `workers/fundamentals_fetcher.py`'s
-# `redis_client.setex(cache_key, 14400, ...)` (verified in that file: 4h,
-# the same cadence as celery-beat's `prefetch_fundamentals` schedule,
-# CLAUDE.md § Celery Workers). The worker itself is out of scope for this
-# bd, so age is recovered read-side from the key's own TTL rather than by
-# adding a stamped field to the cached payload.
-FUNDAMENTALS_CACHE_TTL_SECONDS = 14400
-
-
-async def _fundamentals_as_of_ts(symbol: str) -> int | None:
-    """Epoch seconds the cached fundamentals were fetched, derived from the
-    `fundamentals:{symbol}` Redis key's remaining TTL.
-
-    `setex(key, FUNDAMENTALS_CACHE_TTL_SECONDS, ...)` fixes the TTL at write
-    time, so `elapsed = FUNDAMENTALS_CACHE_TTL_SECONDS - remaining_ttl` is the
-    snapshot's age, and `now - elapsed` is when it was fetched. Returns
-    `None` — never a guessed number — when the TTL can't be read: no expiry
-    set (`-1`), key gone (`-2`, e.g. it expired in the gap between this call
-    and the `read_fundamentals()` call that found data), or Redis is down.
-    """
-    try:
-        r = await stock_service.get_redis()
-        remaining = await r.ttl(cache_keys.fundamentals(symbol))
-        if remaining is None or remaining < 0:
-            return None
-        elapsed = max(0, FUNDAMENTALS_CACHE_TTL_SECONDS - remaining)
-        return int(time.time()) - elapsed
-    except Exception:
-        return None
 
 
 @router.get("/{symbol}/fundamentals", response_model=StockFundamentals)
@@ -76,30 +44,21 @@ async def get_fundamentals(
             await stock_service.request_data_fetch(sym, "fundamentals")
         return StockFundamentals(symbol=sym)
 
-    # bd:shotockviz-5e7.1 — `workers/fundamentals_fetcher.py` now stamps a
-    # real `ts` into every payload it writes (the "future-proof" case
-    # bd:shotockviz-f14 anticipated below is live as of this change: this
-    # `data.get("ts")` is no longer always None). Two other writers of
-    # `fundamentals:{symbol}` are out of this bd's scope and still don't
-    # stamp `ts` — `workers/on_demand_listener.py:_fetch_fundamentals` and
-    # `services/cache_orchestrator.py`'s asyncio fallback — so a symbol
-    # last refreshed by either of those, or cached before this deployed,
-    # still falls through to the TTL-derived estimate below. That estimate
-    # is a WEAKER signal than a real stamp (see `_fundamentals_as_of_ts`
-    # docstring: it tells you when the key was WRITTEN, not necessarily
-    # when it was fetched, and silently drifts wrong the moment a TTL
-    # changes — e.g. the asyncio fallback above writes this same key with
-    # a 300s TTL, not this file's assumed 14400s), so it stays labelled as
-    # an inference in the logs rather than look identical to a real stamp.
-    # NOTE (open question, see hand-off): `StockFundamentals` has no field
-    # to carry that real-vs-inferred distinction into the HTTP response
-    # itself — adding one means editing `models/schemas.py`, out of this
-    # bd's file scope.
-    ts = data.get("ts")
-    if ts is None:
-        logger.debug("fundamentals ts is TTL-inferred, not a real stamp", symbol=sym)
-        ts = await _fundamentals_as_of_ts(sym)
-    return StockFundamentals(**{**data, "ts": ts})
+    # bd:shotockviz-f14.2 — all three writers of `fundamentals:{symbol}`
+    # now stamp a real epoch-seconds `ts` at write time:
+    # `workers/fundamentals_fetcher.py` (bd:shotockviz-5e7.1),
+    # `workers/on_demand_listener.py:_fetch_fundamentals`, and
+    # `services/cache_orchestrator.py`'s two write sites
+    # (`fetch_stock_fundamentals` and the Celery-down asyncio fallback).
+    # The TTL-derived estimate this file used to fall back to
+    # (`_fundamentals_as_of_ts`, keyed off the Redis key's own remaining
+    # TTL) has been deleted rather than kept as a labelled fallback — a
+    # guess you can remove beats a guess you have to explain. `ts` is
+    # `None`, never fabricated, only for a key written by one of the two
+    # fixed writers before this deploy (worst case ~5min, their TTL) or
+    # by `fundamentals_fetcher` before bd:5e7.1 shipped (worst case ~4h,
+    # its TTL) — both self-heal on that key's next write, no flush needed.
+    return StockFundamentals(**data)
 
 
 @router.get("/{symbol}/financials")

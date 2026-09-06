@@ -1,27 +1,42 @@
 """bd:shotockviz-f14 — "no cached number says how old it is", fundamentals slice.
 
-`workers/fundamentals_fetcher.py` (out of scope for this bd) never stamps a
-`ts` into the cached `fundamentals:{symbol}` payload the way
-`cache_publisher.py` does for quotes. `api/routes/stocks/fundamentals.py`
-recovers it read-side from the key's remaining TTL instead (fixed 14400s
-`setex`, so `elapsed = 14400 - remaining_ttl`).
+UPDATED by bd:shotockviz-f14.2: the TTL-derived inference this file
+originally tested (`api/routes/stocks/fundamentals.py`'s now-deleted
+`_fundamentals_as_of_ts`, keyed off the Redis key's remaining TTL) has
+been removed — all three writers of `fundamentals:{symbol}` stamp a real
+`ts` at write time now (`workers/fundamentals_fetcher.py`,
+`workers/on_demand_listener.py:_fetch_fundamentals`,
+`services/cache_orchestrator.py`'s two write sites), so a guess that can
+be removed was removed rather than kept as a labelled fallback. See
+`tests/test_f14_2_fundamentals_ts_writers.py` for the writer-side
+RED-proof and the `TestInferenceDeleted` class that proves the deletion
+itself (both the route's behavior and the removed module symbols).
+
+`test_ts_derived_from_remaining_ttl` below is renamed to
+`test_ts_stays_none_despite_live_remaining_ttl` and its assertion flipped
+to match: a payload with no stamped `ts` now returns `ts=None`
+regardless of how much TTL is left on the key, because there is no
+inference left to derive one from.
 
 Hermetic: `services.stock_service.get_redis` is patched with an in-memory
 fake exposing just `get`/`ttl` — no live Redis needed. `override_db`
 (conftest.py) satisfies `get_optional_user`'s `Depends(get_db)` for the
 anonymous request path.
 
-RED-proof (see Dave's hand-off report): before this bd's fix,
+RED-proof (original, bd:shotockviz-f14): before that bd's fix,
 `StockFundamentals` had no `ts` field at all, so the response body never
-carried the key these tests assert on — `test_ts_derived_from_remaining_ttl`
-and `test_ts_present_when_no_ttl_metadata_is_stale` both failed with
-`KeyError: 'ts'` / `assert None == <int>`, and the endpoint had nothing to
-patch `.ttl(...)` against (the route never called it), so the "ttl -2 -> ts
-is None" test failed for the opposite reason: it asserted a behavior with
-no code path to reach.
+carried the key these tests assert on.
+
+RED-proof (this update, bd:shotockviz-f14.2): before this update,
+`test_ts_stays_none_despite_live_remaining_ttl` (as
+`test_ts_derived_from_remaining_ttl`) asserted `body["ts"] is not None`
+against a live TTL — which passed against the pre-fix inference and now
+fails it (`assert None is not None`) once the inference path is
+deleted; see `docker-compose ... pytest tests/test_f14_fundamentals_ts.py -q`
+in Dave's f14.2 hand-off report for the actual run showing that single
+failure isolated from the other two (unaffected) tests in this file.
 """
 import json
-import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -70,9 +85,12 @@ def stub_request_fetch(monkeypatch):
 
 @pytest.mark.usefixtures("override_db")
 class TestFundamentalsTsFromTtl:
-    def test_ts_derived_from_remaining_ttl(self, monkeypatch):
-        """900s have elapsed out of the 14400s TTL (remaining=13500) -> the
-        response's ts should be ~900s in the past, not absent/None."""
+    def test_ts_stays_none_despite_live_remaining_ttl(self, monkeypatch):
+        """900s have elapsed out of a live 14400s TTL (remaining=13500) —
+        that used to be enough for the now-deleted TTL inference to
+        produce a non-None ts. With no cached `ts` field and the
+        inference gone, the response must return ts=None: a live TTL is
+        no longer treated as a signal for anything."""
         key = cache_keys.fundamentals("NVDA")
         fake = FakeRedis(
             values={key: json.dumps(RAW_FUNDAMENTALS)},
@@ -80,23 +98,21 @@ class TestFundamentalsTsFromTtl:
         )
         monkeypatch.setattr("services.stock_service.get_redis", lambda: _async_return(fake))
 
-        before = int(time.time())
         resp = TestClient(app).get(FUNDAMENTALS_PATH)
-        after = int(time.time())
 
         assert resp.status_code == 200
         body = resp.json()["data"]
         assert body["pe_ratio"] == 45.2
         assert "ts" in body
-        assert body["ts"] is not None
-        expected = before - 900
-        # allow a couple seconds of test-runtime slack on both ends
-        assert expected - 2 <= body["ts"] <= (after - 900) + 2
+        assert body["ts"] is None
 
     def test_ts_none_when_ttl_metadata_missing(self, monkeypatch):
         """Key has data but no expiry info (ttl() returns -2, e.g. it expired
         in the gap between the read_fundamentals() call and this one) ->
-        ts must be None, never a guessed number."""
+        ts must be None, never a guessed number. (Unaffected by the
+        bd:shotockviz-f14.2 inference deletion: this was already the
+        expected value, for a different reason before — the inference
+        function used to also return None here.)"""
         key = cache_keys.fundamentals("NVDA")
         fake = FakeRedis(
             values={key: json.dumps(RAW_FUNDAMENTALS)},

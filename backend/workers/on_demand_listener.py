@@ -375,6 +375,14 @@ def _fetch_fundamentals(symbol: str, redis_client) -> bool:
             week_52_high=_get_field("fiftyTwoWeekHigh"),
             week_52_low=_get_field("fiftyTwoWeekLow"),
             avg_volume=_get_field("averageVolume"),
+            # bd:shotockviz-f14.2 — real server fetch time, same convention
+            # `workers/fundamentals_fetcher.py` uses since bd:shotockviz-5e7.1
+            # (cache_publisher.py's `cache_and_publish_quotes` is the
+            # original pattern this mirrors). This was the last of two
+            # writers of `fundamentals:{symbol}` that stamped nothing;
+            # `api/routes/stocks/fundamentals.py`'s TTL-derived fallback
+            # was deleted once both were fixed.
+            ts=int(time.time()),
         )
 
         # Cache in Redis

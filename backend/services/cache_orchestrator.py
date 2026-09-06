@@ -10,6 +10,7 @@ This module bridges all layers and coordinates data flow.
 """
 import asyncio
 import json
+import time
 from typing import Optional
 
 import redis.asyncio as aioredis
@@ -159,6 +160,14 @@ async def fetch_stock_fundamentals(symbol: str) -> Optional[StockFundamentals]:
     try:
         r = await get_redis()
         if fundamentals:
+            # bd:shotockviz-f14.2 — real server fetch time. `fetch_fundamentals_direct`
+            # (services/providers/yahoo_fundamentals.py) never sets `ts`, so it is
+            # stamped here, at the point the value is actually cached — same
+            # convention `workers/fundamentals_fetcher.py` uses since
+            # bd:shotockviz-5e7.1. This was one of two writers of
+            # `fundamentals:{symbol}` that stamped nothing; the API route's
+            # TTL-derived fallback was deleted once both were fixed.
+            fundamentals = fundamentals.model_copy(update={"ts": int(time.time())})
             await r.setex(cache_key, 300, fundamentals.model_dump_json())
         else:
             # Negative cache — avoid hammering Yahoo when rate-limited
@@ -348,6 +357,10 @@ async def _asyncio_fetch_fallback(symbol: str, data_type: str, timeframe: str | 
                     _fetch_fundamentals_direct(symbol), timeout=12.0
                 )
                 if fundamentals:
+                    # bd:shotockviz-f14.2 — this was the second (and, per the bd,
+                    # explicitly named) writer that stamped no `ts`; see the
+                    # matching comment on `fetch_stock_fundamentals` above.
+                    fundamentals = fundamentals.model_copy(update={"ts": int(time.time())})
                     await r.setex(
                         cache_keys.fundamentals(symbol), 300,
                         fundamentals.model_dump_json(),
