@@ -1,7 +1,37 @@
-"""Celery task for checking price/indicator alerts."""
-from datetime import datetime, timezone
+"""Celery task for checking price/indicator alerts.
+
+bd:shotockviz-93h / bd:shotockviz-0ka (2026-09-06) — alerts are STANDING with
+a cooldown, not one-shot. Previously `claim_alert()` set `is_active=False`
+alongside `status=TRIGGERED` on every fire, which permanently removed the
+alert from this task's selection query (`is_active==True AND
+status==ACTIVE`) — nothing anywhere ever wrote `status` back to ACTIVE, so a
+fired alert was spent and the only recovery was delete-and-recreate
+(bd:shotockviz-0ka). That is now the design, not a bug: `is_active` stays
+True through a fire (it is the user's own arm/pause control,
+`PATCH /alerts/{id}/toggle` — untouched by this task), and re-eligibility is
+governed by `triggered_at` + `settings.alert_cooldown_minutes` instead of by
+`status`. See models/alert.py's `AlertStatus` docstring for what `status`
+means now (a sticky "has this ever fired" flag, not a lifecycle gate).
+
+RE-NOTIFY WHILE THE CONDITION STILL HOLDS, once cooldown expires: yes,
+deliberately. A level crossed and held through a full cooldown window is a
+later, separate event worth telling the trader about again — that is what
+"standing" is FOR (a trader who wants exactly one notification per crossing,
+ever, already has that: it is what one-shot used to do, and the user
+rejected keeping that as the only mode). The cooldown itself is what absorbs
+"crossed and held" vs "oscillating either side of a level" — see
+core/config.py's `alert_cooldown_minutes` for the length reasoning. This task
+does not additionally track "has price left the zone since last fire" before
+allowing a re-fire: that would turn a standing alert back into a one-shot
+with a timer (silent forever after the first fire unless price re-crosses),
+which is the exact outcome the user's decision was written to avoid, and it
+would need new persisted state (a "currently past threshold" flag) this
+schema does not have and nothing in the brief asked for.
+"""
+from datetime import datetime, timedelta, timezone
 from celery import shared_task
 from core import cache_keys
+from core.config import settings
 from core.logger import get_logger
 from services import indicators
 
@@ -116,8 +146,8 @@ def _evaluate_indicator_alert(alert, bars: list[dict]) -> tuple[bool, float]:
 
 
 def claim_alert(db, alert_id: int) -> bool:
-    """Atomically claim one ACTIVE alert for triggering — the DB row IS the
-    dedupe key (bd:features-2026-09 slice 3, Sara ADR-T3).
+    """Atomically claim one eligible alert for triggering — the DB row IS
+    the dedupe key (bd:features-2026-09 slice 3, Sara ADR-T3).
 
     Returns True iff THIS call won the claim (rowcount==1) — only the
     winner may send a notification. Commits on every call (both the win
@@ -129,22 +159,56 @@ def claim_alert(db, alert_id: int) -> bool:
     `check_all_alerts`) so the race condition itself is unit-testable
     without needing Celery/Redis machinery — see
     tests/test_alert_checker_idempotency.py.
+
+    bd:shotockviz-93h / bd:shotockviz-0ka — the WHERE guard changed from
+    "never fired before" (`status==ACTIVE`) to "not fired recently"
+    (never fired, OR fired outside the cooldown window) — see the module
+    docstring for why. `is_active` is no longer written here: it is the
+    user's own arm/pause control (`PATCH /alerts/{id}/toggle`) and a fire
+    must not silently flip it, or a standing alert would go right back to
+    behaving like one-shot.
+
+    The cutoff (`now - cooldown`) is computed ONCE by the caller and
+    passed in rather than each call re-deriving `now()` independently:
+    two overlapping claims computing their own `now()` a few ms apart
+    could otherwise let a losing claim's cutoff drift to just barely
+    before the winner's freshly-committed `triggered_at`, defeating the
+    dedupe. In production `check_all_alerts` calls this once per alert
+    per tick with one shared `cutoff`, so this only matters for
+    same-tick concurrency (the scenario this function's own tests
+    exercise), not tick-to-tick cooldown timing.
     """
-    from sqlalchemy import update
+    from sqlalchemy import or_, update
     from models.alert import Alert, AlertStatus
 
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=settings.alert_cooldown_minutes)
+
+    # synchronize_session=False: this call only needs the row-level UPDATE's
+    # rowcount, not an auto-refreshed in-memory `alert` object — the default
+    # 'evaluate' strategy would otherwise re-run this WHERE clause in Python
+    # against whatever Alert instance is already resident in `db`'s identity
+    # map (check_all_alerts loads the alert into this same session before
+    # calling claim_alert), comparing its already-loaded `triggered_at`
+    # against `cutoff` as plain Python datetimes. That is harmless on
+    # Postgres (TIMESTAMPTZ round-trips as tz-aware either way) but raises
+    # `TypeError: can't compare offset-naive and offset-aware datetimes` on
+    # SQLite in tests, whose DateTime type silently drops tzinfo on read —
+    # found running this bead's own cooldown tests. Skipping the in-Python
+    # re-evaluation entirely removes the discrepancy instead of papering
+    # over it with tzinfo-stripping on one side.
     result = db.execute(
         update(Alert)
         .where(
             Alert.id == alert_id,
-            Alert.status == AlertStatus.ACTIVE,
             Alert.is_active == True,
+            or_(Alert.triggered_at.is_(None), Alert.triggered_at <= cutoff),
         )
         .values(
             status=AlertStatus.TRIGGERED,
-            is_active=False,
             triggered_at=datetime.now(timezone.utc),
+            trigger_count=Alert.trigger_count + 1,
         )
+        .execution_options(synchronize_session=False)
     )
     db.commit()
     return result.rowcount == 1
@@ -152,14 +216,23 @@ def claim_alert(db, alert_id: int) -> bool:
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def check_all_alerts(self):
-    """Check all active alerts and trigger notifications if conditions met."""
+    """Check all active alerts and trigger notifications if conditions met.
+
+    bd:shotockviz-93h — selection no longer filters on `status`: every
+    is_active alert is standing and re-checked every tick, whether or not
+    it has fired before. Alerts inside their cooldown window ARE still
+    evaluated here (so the "no cached quote"/"no cached daily bars"
+    observability logging below stays accurate for them too) but
+    `claim_alert()` below will refuse the claim for one still cooling
+    down, so it cannot re-notify early.
+    """
     try:
         import redis
         import json
         from core.config import settings
         from sqlalchemy import create_engine, select
         from sqlalchemy.orm import Session
-        from models.alert import Alert, AlertStatus
+        from models.alert import Alert
 
         r = redis.from_url(settings.redis_url)
 
@@ -169,7 +242,7 @@ def check_all_alerts(self):
 
         with Session(engine) as db:
             alerts = db.execute(
-                select(Alert).where(Alert.is_active == True, Alert.status == AlertStatus.ACTIVE)
+                select(Alert).where(Alert.is_active == True)
             ).scalars().all()
 
             for alert in alerts:
@@ -243,10 +316,23 @@ def check_all_alerts(self):
                     won_claim = claim_alert(db, alert.id)
 
                     if not won_claim:
-                        # Another concurrent run already claimed this alert —
-                        # skip silently, do not notify twice.
+                        # bd:shotockviz-93h — the old message here
+                        # ("already claimed by ANOTHER run") stopped being
+                        # accurate the moment claim_alert's guard grew a
+                        # second reason to refuse a claim: it can lose
+                        # because a concurrent run genuinely won the race
+                        # (the original case this log existed for), OR
+                        # because THIS SAME alert already fired inside its
+                        # own cooldown window (the far more common case
+                        # now that alerts are standing) — cheap to tell
+                        # apart (an extra query) but not worth it just to
+                        # word a log line; naming both possibilities is
+                        # enough to not repeat this project's own
+                        # documented failure mode of a message asserting
+                        # something the code doesn't actually guarantee.
                         logger.info(
-                            "Alert already claimed by another run, skipping",
+                            "Alert not claimed — still cooling down or already "
+                            "claimed by a concurrent run this tick, skipping",
                             alert_id=alert.id,
                             symbol=alert.symbol,
                         )

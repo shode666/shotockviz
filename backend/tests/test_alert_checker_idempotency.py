@@ -165,7 +165,11 @@ class TestConcurrentTriggerIsIdempotent:
             sent_chat_id = mock_post.call_args.kwargs["json"]["chat_id"]
             assert sent_chat_id == "128845067"
 
-    def test_alert_ends_up_triggered_and_inactive(self, sqlite_db_url):
+    def test_alert_ends_up_triggered_and_still_active(self, sqlite_db_url):
+        """bd:shotockviz-93h — standing alerts stay `is_active=True` through
+        a fire (was `is_active=False`, the one-shot "spent" behavior this
+        bead retires). `trigger_count` is the atomic counter bumped by the
+        same claim UPDATE."""
         with (
             patch("core.config.settings.database_url", sqlite_db_url),
             patch("core.config.settings.telegram_bot_token", "fake-token"),
@@ -178,8 +182,68 @@ class TestConcurrentTriggerIsIdempotent:
         with Session(engine) as db:
             alert = db.query(Alert).one()
             assert alert.status == AlertStatus.TRIGGERED
-            assert alert.is_active is False
+            assert alert.is_active is True
             assert alert.triggered_at is not None
+            assert alert.trigger_count == 1
+        engine.dispose()
+
+    def test_second_fire_within_cooldown_is_not_claimed(self, sqlite_db_url):
+        """bd:shotockviz-93h — a level crossed and retraced inside the
+        cooldown window must not re-notify; `claim_alert` refuses the claim
+        while `triggered_at` is still inside `settings.alert_cooldown_minutes`."""
+        engine = create_engine(sqlite_db_url)
+        with Session(engine) as db:
+            alert_id = db.query(Alert).one().id
+            assert claim_alert(db, alert_id) is True  # first fire
+
+        with (
+            patch("core.config.settings.database_url", sqlite_db_url),
+            patch("core.config.settings.telegram_bot_token", "fake-token"),
+            patch("redis.from_url", return_value=_fake_redis()),
+            patch("httpx.post") as mock_post,
+        ):
+            check_all_alerts()  # condition is still true (fake redis price=150 > 100)
+
+        # Still cooling down — must NOT have sent a second Telegram message.
+        mock_post.assert_not_called()
+
+        with Session(engine) as db:
+            alert = db.query(Alert).one()
+            assert alert.trigger_count == 1  # unchanged — no second claim
+        engine.dispose()
+
+    def test_second_fire_after_cooldown_elapses_re_notifies(self, sqlite_db_url):
+        """bd:shotockviz-93h — a level crossed and HELD through a full
+        cooldown window is a later, separate event: standing alerts
+        re-notify once cooldown expires if the condition still holds."""
+        from datetime import datetime, timedelta, timezone
+
+        engine = create_engine(sqlite_db_url)
+        with Session(engine) as db:
+            alert_id = db.query(Alert).one().id
+            assert claim_alert(db, alert_id) is True  # first fire
+            # Force triggered_at to look like it happened well outside the
+            # (default 60-min) cooldown window, without waiting a real hour.
+            db.query(Alert).filter(Alert.id == alert_id).update(
+                {"triggered_at": datetime.now(timezone.utc) - timedelta(minutes=120)}
+            )
+            db.commit()
+
+        with (
+            patch("core.config.settings.database_url", sqlite_db_url),
+            patch("core.config.settings.telegram_bot_token", "fake-token"),
+            patch("redis.from_url", return_value=_fake_redis()),
+            patch("httpx.post") as mock_post,
+        ):
+            mock_post.return_value = MagicMock(status_code=200)
+            check_all_alerts()
+
+        mock_post.assert_called_once()
+
+        with Session(engine) as db:
+            alert = db.query(Alert).one()
+            assert alert.trigger_count == 2
+            assert alert.is_active is True
         engine.dispose()
 
 

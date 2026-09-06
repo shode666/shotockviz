@@ -56,6 +56,12 @@ interface AlertRow {
     status?: string | null;
     is_active?: boolean;
     triggered_at?: string | null;
+    // bd:shotockviz-93h — alerts are standing (fire again after a cooldown),
+    // so a single triggered/not-triggered chip can no longer say whether this
+    // is the first fire or the 40th; trigger_count is what does. Optional —
+    // absent/undefined on a row from a backend that predates this field
+    // renders as "no count line" rather than crashing (see `?? 0` below).
+    trigger_count?: number;
 }
 
 export default function AlertsPage() {
@@ -331,6 +337,21 @@ export default function AlertsPage() {
                                             {s.label}
                                             {statusKey === 'triggered' && a.triggered_at && ` ${formatTriggeredTime(a.triggered_at)}`}
                                         </div>
+                                        {/* bd:shotockviz-93h — alerts are standing (re-fire after a
+                                            cooldown, models/alert.py's AlertStatus docstring), so the
+                                            status label's own "แจ้งแล้ว" text alone no longer says
+                                            whether this is the first fire or the 40th. Deliberately
+                                            worded WITHOUT "แจ้งแล้ว" (tests/e2e/ui-honesty-2026-09.spec.ts
+                                            F11 asserts on that exact substring for the status chip —
+                                            reusing it here made getByText('แจ้งแล้ว') match 2 elements
+                                            and fail strict mode; found running this bead's own E2E gate).
+                                            `?? 1` covers rows from before this field existed:
+                                            status==='TRIGGERED' already implies >=1 fire. */}
+                                        {statusKey === 'triggered' && (
+                                            <div className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                                                ทั้งหมด {a.trigger_count ?? 1} ครั้ง
+                                            </div>
+                                        )}
                                     </div>
                                     <button onClick={() => openEditModal(a)} aria-label={`แก้ไข alert ${displaySymbol(a.symbol)}`} className="text-xs px-2 py-1 rounded-lg transition-colors" style={{ color: 'var(--color-text-sub)' }}
                                         onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--color-hover)'; e.currentTarget.style.color = 'var(--color-accent-text)' }}

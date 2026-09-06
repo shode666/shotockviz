@@ -87,6 +87,26 @@ class Settings(BaseSettings):
     finnhub_api_key: str = ""
     telegram_bot_token: str = ""
 
+    # bd:shotockviz-93h — global cooldown for standing alerts (all alerts are
+    # "standing", not one-shot; see models/alert.py AlertStatus docstring).
+    # Measured from `triggered_at` (the fire, not the check tick): the user's
+    # own framing was protecting against "a price oscillating either side of
+    # a level for an hour", which states its own timescale — 60 minutes maps
+    # 1:1 onto that, comfortably absorbing chop within a SET half-session
+    # (10:00-12:30 / 14:00-16:30, 2.5h each) without silencing a real,
+    # sustained move for the rest of the day. `alert_checker.py` samples
+    # every ~60s (bd:shotockviz-cm3) — 60 minutes is 60x that sampling
+    # interval, i.e. still tiny next to how often the level is actually
+    # re-checked, so it throttles NOTIFICATION frequency without meaningfully
+    # delaying detection.
+    #
+    # Deliberately ONE GLOBAL DEFAULT, not a per-alert field: a per-alert
+    # cooldown picker is the same shape of decision the user already
+    # rejected for lifetime ("once/standing/cooldown" at creation) —
+    # a knob nobody wants to set on every alert. If this number ever needs
+    # tuning, it is one env var, not N alert rows.
+    alert_cooldown_minutes: int = 60
+
     # SEC Open Data API (Thai mutual fund NAV)
     # Register free at https://api-portal.sec.or.th
     sec_fund_factsheet_key: str = ""   # Subscribe to "Fund Factsheet" API

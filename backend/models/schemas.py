@@ -449,6 +449,10 @@ class AlertResponse(BaseModel):
     status: str
     channel: str
     triggered_at: Optional[datetime] = None
+    # bd:shotockviz-93h — total fire count, so the UI can show "แจ้งแล้ว 3
+    # ครั้ง" rather than a single triggered/not-triggered chip. See
+    # models/alert.py's `trigger_count` column doc.
+    trigger_count: int = 0
     created_at: datetime
     # bd:shotockviz-eb1 — the date `value` was last written, i.e. the trading
     # units the level is stated in. Surfaced so a level that has been rebased by

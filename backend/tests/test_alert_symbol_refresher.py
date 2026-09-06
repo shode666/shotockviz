@@ -81,16 +81,19 @@ class TestGetActivePriceAlertSymbols:
             ("NVDA", AlertType.PRICE_BELOW, AlertStatus.ACTIVE, True),
             # Indicator type — must NOT be included (reads OHLCV cache, not quote cache).
             ("TSLA", AlertType.RSI_OVERSOLD, AlertStatus.ACTIVE, True),
-            # Inactive — must NOT be included.
+            # Inactive (user-paused) — must NOT be included.
             ("MSFT", AlertType.PRICE_ABOVE, AlertStatus.ACTIVE, False),
-            # Already triggered — must NOT be included.
+            # bd:shotockviz-93h — already triggered but still is_active=True
+            # (standing) — MUST still be included: it can fire again once its
+            # cooldown elapses and needs a fresh quote to compare against in
+            # the meantime. `status` no longer gates this query at all.
             ("GOOGL", AlertType.PRICE_ABOVE, AlertStatus.TRIGGERED, True),
         ])
 
         with patch("core.config.settings.database_url", sqlite_db_url):
             symbols = _get_active_price_alert_symbols()
 
-        assert set(symbols) == {"AAPL", "NVDA"}
+        assert set(symbols) == {"AAPL", "NVDA", "GOOGL"}
 
     def test_no_alerts_returns_empty_list(self, tmp_path):
         sqlite_db_url = self._seed(tmp_path, [])

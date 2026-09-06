@@ -258,8 +258,11 @@ class TestCheckAllAlertsEvaluatesIndicatorTypes:
         with Session(engine) as db:
             alert = db.query(Alert).one()
             assert alert.status == AlertStatus.TRIGGERED
-            assert alert.is_active is False
+            # bd:shotockviz-93h — standing alerts stay armed through a fire;
+            # is_active is the user's own pause control, untouched here.
+            assert alert.is_active is True
             assert alert.triggered_at is not None
+            assert alert.trigger_count == 1
         engine.dispose()
 
     def test_indicator_alert_cache_miss_logs_and_skips(self, sqlite_db_url_factory):

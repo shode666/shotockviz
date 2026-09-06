@@ -47,14 +47,22 @@ logger = get_logger(__name__)
 
 
 def _get_active_price_alert_symbols() -> list[str]:
-    """Distinct symbols with at least one ACTIVE, is_active PRICE_ABOVE/
-    PRICE_BELOW alert. Excludes the 5 indicator alert types (see module
-    docstring — they don't read this cache).
+    """Distinct symbols with at least one is_active PRICE_ABOVE/PRICE_BELOW
+    alert. Excludes the 5 indicator alert types (see module docstring —
+    they don't read this cache).
+
+    bd:shotockviz-93h — no longer filters on `status`. Alerts are standing
+    with a cooldown now (models/alert.py's AlertStatus docstring), so an
+    already-TRIGGERED alert can fire again once its cooldown elapses and
+    still needs a fresh quote to compare against in the meantime — the old
+    `status == ACTIVE` filter would have starved every alert of quote
+    refreshes forever after its first fire, silently defeating "standing"
+    for the one thing this task exists to keep current.
     """
     try:
         from sqlalchemy import create_engine, select, distinct
         from core.config import settings
-        from models.alert import Alert, AlertStatus, AlertType
+        from models.alert import Alert, AlertType
 
         engine = create_engine(settings.sync_database_url, pool_pre_ping=True)
         try:
@@ -62,7 +70,6 @@ def _get_active_price_alert_symbols() -> list[str]:
                 rows = conn.execute(
                     select(distinct(Alert.symbol)).where(
                         Alert.is_active == True,
-                        Alert.status == AlertStatus.ACTIVE,
                         Alert.alert_type.in_([AlertType.PRICE_ABOVE, AlertType.PRICE_BELOW]),
                     )
                 ).fetchall()

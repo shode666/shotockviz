@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
-from sqlalchemy import String, Date, DateTime, Float, Boolean, Enum, ForeignKey, func
+from sqlalchemy import String, Date, DateTime, Float, Boolean, Integer, Enum, ForeignKey, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from core.database import Base
 
@@ -72,6 +72,52 @@ class AlertStatus(str, PyEnum):
     # status` — no query needed beyond the grep above showing nothing
     # ever assigns it) and nothing can write it once the Python member is
     # gone. No migration added for this.
+    #
+    # bd:shotockviz-93h / bd:shotockviz-0ka (2026-09-06) — MEANING CHANGED.
+    # The paragraph above described the one-shot design: TRIGGERED meant
+    # "spent", set alongside is_active=False so the checker's
+    # `status==ACTIVE AND is_active==True` selection query would never
+    # pick the row up again, and nothing ever wrote status back to ACTIVE
+    # (bd:shotockviz-0ka's finding) — the only recovery was
+    # delete-and-recreate.
+    #
+    # The user's decision (relayed by Oliver, not re-opened here): every
+    # alert is STANDING, with a cooldown, rather than a per-alert
+    # once/standing/cooldown picker at creation time — that picker was
+    # offered and explicitly rejected as a setting nobody wants to make on
+    # every alert (same shape objection as the one that killed a
+    # per-alert lifetime field). So there is nothing to "re-arm": nothing
+    # disarms in the first place.
+    #
+    # That retires TRIGGERED-as-lifecycle-exit. Per Oliver's framing this
+    # is one of "the field changes meaning" or "it stops being a
+    # lifecycle marker and becomes 'last fired'" — this project takes the
+    # latter, cheaper option, because it needs zero new enum members (see
+    # the struck-EXPIRED/INACTIVE history above — this bead exists
+    # partly to NOT repeat that shape of defect):
+    #   ACTIVE     = has never fired.
+    #   TRIGGERED  = has fired at least once, ever — a STICKY historical
+    #     flag, not a gate. `alert_checker.claim_alert()` still sets it
+    #     (idempotently — it may already be TRIGGERED) alongside
+    #     `triggered_at` and `trigger_count += 1`; it does NOT set
+    #     `is_active=False` any more, and no code path ever moves it back
+    #     to ACTIVE (a status file rewind would itself misrepresent
+    #     "has this ever fired" history, which is the whole point of
+    #     keeping the field).
+    # `status` and `is_active` stay two different concepts, per
+    # `bd:shotockviz-o0b`'s original separation, unchanged by this bead:
+    #   - `is_active` is STILL the only user arm/pause control, written
+    #     only by `PATCH /alerts/{id}/toggle`. The checker's eligibility
+    #     query is now `is_active==True AND (never fired OR cooldown
+    #     elapsed)` — `status` no longer appears in that WHERE clause at
+    #     all, because it no longer says anything about whether the row
+    #     is checkable, only about its fire history.
+    #   - Re-eligibility to fire again is governed by `triggered_at` +
+    #     `settings.alert_cooldown_minutes` (see workers/alert_checker.py
+    #     module docstring for the cooldown-length reasoning), NOT by
+    #     `status`. A fresh TRIGGERED alert and one that fired 40 times
+    #     this week look identical in `status` (both "TRIGGERED") —
+    #     `trigger_count` (below) is what tells them apart for display.
     ACTIVE = "ACTIVE"
     TRIGGERED = "TRIGGERED"
 
@@ -114,6 +160,16 @@ class Alert(Base):
     status: Mapped[AlertStatus] = mapped_column(Enum(AlertStatus), default=AlertStatus.ACTIVE)
     channel: Mapped[AlertChannel] = mapped_column(Enum(AlertChannel), default=AlertChannel.TELEGRAM)
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # bd:shotockviz-93h/0ka — total number of times this alert has ever fired.
+    # Exists because a standing alert's `status` is now sticky (see AlertStatus
+    # docstring above): "TRIGGERED" alone cannot distinguish an alert that just
+    # fired once from one on its 40th fire this week, and the UI needs to
+    # ("An alert that has fired three times this week is different from one
+    # that has never fired" — Oliver's brief). Incremented in the same atomic
+    # UPDATE that claims the alert (workers/alert_checker.py::claim_alert), so
+    # it can never drift from `triggered_at`/the actual number of Telegram
+    # sends. Additive, NOT NULL DEFAULT 0 — migration 20260906_0009.
+    trigger_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
