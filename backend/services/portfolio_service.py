@@ -110,7 +110,7 @@ Accounting rules pinned here (state them once, apply everywhere):
         One book, one cost flow.
 
      b) The data cannot support FIFO honestly. `transactions.date` is a DATE
-        (`models/portfolio.py:45`), there is no lot identifier, and the read
+        (`models/portfolio.py:59`), there is no lot identifier, and the read
         paths order by `date` alone — so two trades on the same day have no
         defined sequence and a FIFO answer would depend on the row order
         Postgres happened to return. Average cost is unaffected by the ordering
@@ -180,7 +180,7 @@ Accounting rules pinned here (state them once, apply everywhere):
    honest report is "this number may be short of shares you paid for", not "we
    cannot state this position".
 
-Money is `float` here only because `models/portfolio.py:33-35` stores qty/price/fee
+Money is `float` here only because `models/portfolio.py:47-49` stores qty/price/fee
 as `Float`. The Decimal/Numeric migration is a separate bead (Tara N8) and is NOT
 started here. The arithmetic below adds exactly one new term per BUY (`+ fee`),
 so it introduces no new rounding behaviour beyond that term.
