@@ -8,6 +8,33 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### dev and prod were fighting over the Telegram bot (2026-09-06)
+
+`bd:shotockviz-zz8`. Found by reading production logs after a deploy rather
+than trusting a green health check: `telegram.error.Conflict: terminated by
+other getUpdates request`, 9 tracebacks in 5 minutes on each side. Both stacks
+long-polled the same bot token, and only one consumer is allowed, so each
+killed the other's poll in a loop.
+
+- Not just noise: `/start` is how the trader gets their chat id, and whichever
+  instance won the race answered it — so a reply could come from a laptop
+  instead of production, or not at all.
+- `bd:shotockviz-4d9` had closed the outbound half (sends are dry-run outside
+  production). This is the inbound half, reusing the **same** switch rather
+  than adding a parallel one, with a test asserting no second switch exists.
+  Enforced in code, not by deleting the service from the dev compose — a
+  compose-level fix breaks the moment anyone runs the prod compose locally.
+- **A second bug, found only because the first fix was verified live instead
+  of assumed:** returning from `main()` is not a quiet stop. Under
+  `restart: unless-stopped` a clean exit is still a restart, so the container
+  relaunched every ~3 seconds repeating its own explanation. It idles now.
+  This also fixes the pre-existing no-token path, whose comment claimed to
+  avoid a crash-loop and did not.
+- Verified on both sides: dev logs the reason once and stays up without
+  flapping, 0 Conflict; prod's Conflict count went from continuous to 0.
+- Gates: backend **912 passed, 2 skipped**.
+
+
 ### A 401 mid-save no longer tells you to try again while logging you out (2026-09-06)
 
 `bd:shotockviz-2qw`. Two individually-correct signals fired together: the
