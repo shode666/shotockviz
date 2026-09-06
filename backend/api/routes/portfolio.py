@@ -18,10 +18,12 @@ from models.schemas import (
     HoldingResponse, FxRateInfo, ClosedPositionResponse, RealizedBookResponse,
     PortfolioAllocation, AllocationSliceResponse, AllocationExclusionResponse,
     PortfolioOpenRisk, PositionRiskResponse, RiskExclusionResponse,
+    PortfolioConcentration, ConcentrationBreachResponse,
 )
 from api.middleware.auth import get_current_user
 from services import corporate_actions, portfolio_service, stock_service
 from schemas.envelope import EnvelopingAPIRoute
+from services.fund_quote import fund_payload_to_quote
 
 # bd:deps-2026-09 S2 (ADR-001 r3) — prefix lifted /api/portfolio -> /portfolio,
 # mounted under /api/v1 in main.py. route_class = envelope wrap (ADR-002).
@@ -193,6 +195,19 @@ async def get_transactions(
 async def get_analytics(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
+    # bd:shotockviz-649 — the trader's own concentration limit, as a percent of
+    # `allocation.total_value`. Plain `float | None = None`, deliberately NOT
+    # `fastapi.Query(...)`: several tests (test_portfolio_fx.py,
+    # test_portfolio_valuation.py, test_portfolio_currency_and_curve.py,
+    # test_portfolio_realized_and_guards.py) call this coroutine directly
+    # (`get_analytics(user=test_user, db=test_db)`), bypassing FastAPI's
+    # dependency injection entirely. A `Query(...)` default evaluates to a
+    # FieldInfo marker object at *function-definition* time, not to `None` —
+    # every one of those direct calls would have received that marker as
+    # `concentration_limit_pct` and crashed doing range arithmetic on it. A
+    # plain `None` default has no such trap; the range check below is manual
+    # instead of `Query(ge=..., le=...)` for exactly that reason.
+    concentration_limit_pct: float | None = None,
 ):
     """Calculate portfolio analytics with current market prices."""
     try:
@@ -273,19 +288,14 @@ async def get_analytics(
                 pipe.get(cache_keys.fund(sym))
             fund_values = await pipe.execute()
             for sym, raw in zip(fund_misses, fund_values):
-                if raw:
-                    try:
-                        fund_data = _json.loads(raw)
-                        nav = fund_data.get("nav")
-                        if nav is not None:
-                            quote_map[sym] = {
-                                "symbol": sym, "price": float(nav),
-                                "change": 0.0, "change_pct": 0.0, "volume": 0,
-                                "type": "fund_nav",
-                            }
-                            misses = [m for m in misses if m != sym]
-                    except Exception:
-                        pass
+                # bd:shotockviz-ubw — one NAV→quote shape, in
+                # services/fund_quote.py. This copy also silently dropped
+                # `nav_date` and `ts`, so a fund holding's value carried no
+                # as-of at all; it does now.
+                fund_quote = fund_payload_to_quote(sym, raw)
+                if fund_quote is not None:
+                    quote_map[sym] = fund_quote
+                    misses = [m for m in misses if m != sym]
         except Exception:
             pass
 
@@ -337,6 +347,32 @@ async def get_analytics(
     # totals excluded arrives in `allocation.excluded` with its reason instead of
     # a 0% slice.
     allocation = portfolio_service.build_allocation(valued, totals)
+
+    # bd:shotockviz-649 — the same allocation, checked against a LIMIT. The
+    # limit itself is not persisted server-side this iteration (see
+    # services/portfolio_service.py's "WHERE THE LIMIT LIVES" note): the client
+    # sends its own remembered choice, and this route is the one place that
+    # validates it and applies it to the one `allocation` object above — so a
+    # bad query value 422s here rather than silently becoming "no limit" or
+    # "everything breached" downstream.
+    if concentration_limit_pct is None:
+        limit_pct = portfolio_service.DEFAULT_CONCENTRATION_LIMIT_PCT
+    elif not (
+        portfolio_service.MIN_CONCENTRATION_LIMIT_PCT
+        <= concentration_limit_pct
+        <= portfolio_service.MAX_CONCENTRATION_LIMIT_PCT
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"concentration_limit_pct must be between "
+                f"{portfolio_service.MIN_CONCENTRATION_LIMIT_PCT} and "
+                f"{portfolio_service.MAX_CONCENTRATION_LIMIT_PCT}"
+            ),
+        )
+    else:
+        limit_pct = concentration_limit_pct
+    concentration = portfolio_service.build_concentration_check(allocation, limit_pct)
 
     # bd:shotockviz-43y — exposure to loss. Same `valued`, same `totals`, so the
     # risk report's denominator IS the header's total and its included set IS the
@@ -441,6 +477,29 @@ async def get_analytics(
                 for e in allocation.excluded
             ],
             fx_estimated=allocation.fx_estimated,
+        ),
+        # bd:shotockviz-649 — same allocation, checked against `limit_pct`.
+        # `not_checked` is `allocation.excluded` carried forward unchanged: a
+        # position with no stated % cannot be said to have crossed one.
+        concentration=PortfolioConcentration(
+            limit_pct=concentration.limit_pct,
+            base_currency=concentration.base_currency,
+            breaches=[
+                ConcentrationBreachResponse(
+                    symbol=b.symbol,
+                    currency=b.currency,
+                    weight_pct=round(b.weight_pct, 2),
+                    limit_pct=round(b.limit_pct, 2),
+                    excess_pct=round(b.excess_pct, 2),
+                    value_base=round(b.value_base, 2),
+                    trim_value_base=round(b.trim_value_base, 2),
+                )
+                for b in concentration.breaches
+            ],
+            not_checked=[
+                AllocationExclusionResponse(symbol=e.symbol, reason=e.reason)
+                for e in concentration.not_checked
+            ],
         ),
         # bd:shotockviz-43y — open risk. `total_value` here is the same float as
         # `total_value` above. Read `stop_coverage_pct` with `open_risk`: the

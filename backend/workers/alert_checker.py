@@ -335,6 +335,21 @@ def check_all_alerts(self):
                         cache_key = cache_keys.quote(alert.symbol)
                         cached = r.get(cache_key)
                         if not cached:
+                            # bd:shotockviz-ubw — Thai fund NAVs stopped being
+                            # dual-written into quote:{symbol}
+                            # (bd:shotockviz-3ir), so a price alert on a fund
+                            # must read fund:{symbol} itself or it would never
+                            # fire again. The NAV is T+1 by design; see
+                            # bd:shotockviz-rdu for the separate question of
+                            # what a 60-minute alert cooldown means against a
+                            # number that only changes once a day.
+                            from services.fund_quote import fund_payload_to_quote
+
+                            fund_quote = fund_payload_to_quote(
+                                alert.symbol, r.get(cache_keys.fund(alert.symbol))
+                            )
+                            cached = json.dumps(fund_quote) if fund_quote else None
+                        if not cached:
                             # Visible-by-design: a persistent miss here means
                             # every ACTIVE alert for this symbol silently never
                             # fires. No retry/backfill added (out of scope) —

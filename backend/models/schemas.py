@@ -96,6 +96,14 @@ class StockFundamentals(BaseModel):
     week_52_high: Optional[float] = None
     week_52_low: Optional[float] = None
     avg_volume: Optional[float] = None
+    # bd:shotockviz-f14 — epoch SECONDS this fundamentals snapshot was fetched.
+    # `workers/fundamentals_fetcher.py` (out of scope for this bd) doesn't
+    # stamp a `ts` field into the cached payload the way `cache_publisher.py`
+    # does for quotes, so `api/routes/stocks/fundamentals.py` derives this
+    # read-side from the `fundamentals:{symbol}` Redis key's remaining TTL
+    # instead (same fixed-TTL `setex`, so `now - (TTL - remaining)` recovers
+    # the fetch time). `None` when unknown — never fabricated.
+    ts: Optional[int] = None
 
 
 # ─── Watchlist ─────────────────────────────────────────────────────────────
@@ -398,6 +406,44 @@ class PortfolioOpenRisk(BaseModel):
     fx_estimated: bool = False
 
 
+# ─── Concentration limit (bd:shotockviz-649) ───────────────────────────────
+# "concentration as a limit, not just a display" — bd:shotockviz-916 shipped
+# the % breakdown; this tells him when a slice of it crosses a threshold he
+# set. See services/portfolio_service.py for why `limit_pct` is a per-request
+# parameter (not a new column) and how rule 1/5's exclusions are carried
+# forward rather than re-decided.
+
+class ConcentrationBreachResponse(BaseModel):
+    """One position over the limit, and what closes the gap."""
+    symbol: str
+    currency: str = "THB"
+    weight_pct: float
+    limit_pct: float
+    excess_pct: float   # weight_pct - limit_pct, always > 0 in this list
+    value_base: float
+    # Sell this much BASE-currency value to land back exactly on the limit —
+    # the actionable half of the signal, not just "you are over".
+    trim_value_base: float
+
+
+class PortfolioConcentration(BaseModel):
+    """Concentration LIMIT applied to `PortfolioAllocation` (bd:shotockviz-649).
+
+    Same denominator, same inclusion set as `PortfolioAllocation`: a position
+    with no stated allocation % (`PortfolioAllocation.excluded`) cannot be said
+    to have crossed one, so it is carried into `not_checked` instead of being
+    counted as either breached or compliant.
+
+    `limit_pct` is NOT persisted server-side this iteration — the client sends
+    it (`?concentration_limit_pct=`) and keeps the trader's own choice in
+    localStorage; `DEFAULT_CONCENTRATION_LIMIT_PCT` applies until he sets one.
+    """
+    limit_pct: float
+    base_currency: str = "THB"
+    breaches: List[ConcentrationBreachResponse] = []
+    not_checked: List[AllocationExclusionResponse] = []
+
+
 class PortfolioAnalytics(BaseModel):
     # bd:shotockviz-sbe — these four are now unambiguously in `base_currency`.
     # They used to be a raw sum of THB and USD amounts.
@@ -430,6 +476,10 @@ class PortfolioAnalytics(BaseModel):
     # None only if the computation could not run at all; an empty risk set is
     # reported as a PortfolioOpenRisk with exclusions, not as a missing field.
     open_risk: Optional[PortfolioOpenRisk] = None
+    # bd:shotockviz-649 — the % breakdown as a LIMIT instead of just a display.
+    # Same denominator, same inclusion set as `allocation`. None only if the
+    # computation could not run at all (same posture as `open_risk`).
+    concentration: Optional[PortfolioConcentration] = None
     # ── realized side (bd:shotockviz-tmz) ─────────────────────────────────────
     # Summary only, in `base_currency`. The per-trade log lives on
     # GET /portfolio/realized so this hot path does not grow with the user's

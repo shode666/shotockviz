@@ -7,6 +7,7 @@ import { displaySymbol, formatPriceTH } from '@/utils/formatters';
 import { extractErrorMessage } from '@/services/apiErrorHandler';
 import { AddTransactionModal, type EditableTransaction } from '@/components/portfolio/AddTransactionModal';
 import { HoldingsTable } from '@/components/portfolio/HoldingsTable';
+import { ConcentrationLimitPanel } from '@/components/portfolio/ConcentrationLimitPanel';
 import { usePortfolioData } from '@/hooks/usePortfolioData';
 import { buildQualifications, hasQualifications, realFxRates, type QualificationTone } from '@/utils/portfolioQualifications';
 import { groupAllocation, donutSegments, exclusionSentence, hasAllocation } from '@/utils/allocation';
@@ -266,7 +267,7 @@ function StatCard({ label, value, sub, up }: { label: string; value: string | nu
 }
 
 export default function PortfolioPage() {
-    const { isAuthenticated } = useAuthStore();
+    const { isAuthenticated, user } = useAuthStore();
     const { analytics, txns, loading, timedOut, reload } = usePortfolioData();
     const [showModal, setShowModal] = useState(false);
     // bd:shotockviz-gij — null = "add new" (existing button), set = editing
@@ -444,6 +445,9 @@ export default function PortfolioPage() {
                                     below and the totals above; one computation
                                     (services/portfolio_service.py), three views. */}
                                 <AllocationPanel analytics={analytics} />
+                                {/* bd:shotockviz-649 — the same % breakdown, checked
+                                    against a threshold he sets, not just displayed. */}
+                                <ConcentrationLimitPanel analytics={analytics} userId={user?.id ?? null} />
                                 <HoldingsTable holdings={analytics?.holdings ?? []} hasPendingPrices={analytics?.has_pending_prices ?? false} />
                             </>
                         )}

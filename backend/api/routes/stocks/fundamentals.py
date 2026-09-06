@@ -3,11 +3,13 @@ Pure file move: `GET /{symbol}/fundamentals`, `GET /{symbol}/financials`,
 `GET /{symbol}/earnings`.
 """
 import json as _json
+import time
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 
 from api.middleware.auth import get_optional_user
+from core import cache_keys
 from core.logger import get_logger
 from models.schemas import StockFundamentals
 from models.user import User
@@ -20,6 +22,36 @@ from schemas.envelope import EnvelopingAPIRoute
 # from the parent (stocks/__init__.py, lifted /api/stocks -> /stocks).
 router = APIRouter(route_class=EnvelopingAPIRoute)
 logger = get_logger(__name__)
+
+# bd:shotockviz-f14 — must match `workers/fundamentals_fetcher.py`'s
+# `redis_client.setex(cache_key, 14400, ...)` (verified in that file: 4h,
+# the same cadence as celery-beat's `prefetch_fundamentals` schedule,
+# CLAUDE.md § Celery Workers). The worker itself is out of scope for this
+# bd, so age is recovered read-side from the key's own TTL rather than by
+# adding a stamped field to the cached payload.
+FUNDAMENTALS_CACHE_TTL_SECONDS = 14400
+
+
+async def _fundamentals_as_of_ts(symbol: str) -> int | None:
+    """Epoch seconds the cached fundamentals were fetched, derived from the
+    `fundamentals:{symbol}` Redis key's remaining TTL.
+
+    `setex(key, FUNDAMENTALS_CACHE_TTL_SECONDS, ...)` fixes the TTL at write
+    time, so `elapsed = FUNDAMENTALS_CACHE_TTL_SECONDS - remaining_ttl` is the
+    snapshot's age, and `now - elapsed` is when it was fetched. Returns
+    `None` — never a guessed number — when the TTL can't be read: no expiry
+    set (`-1`), key gone (`-2`, e.g. it expired in the gap between this call
+    and the `read_fundamentals()` call that found data), or Redis is down.
+    """
+    try:
+        r = await stock_service.get_redis()
+        remaining = await r.ttl(cache_keys.fundamentals(symbol))
+        if remaining is None or remaining < 0:
+            return None
+        elapsed = max(0, FUNDAMENTALS_CACHE_TTL_SECONDS - remaining)
+        return int(time.time()) - elapsed
+    except Exception:
+        return None
 
 
 @router.get("/{symbol}/fundamentals", response_model=StockFundamentals)
@@ -44,7 +76,14 @@ async def get_fundamentals(
             await stock_service.request_data_fetch(sym, "fundamentals")
         return StockFundamentals(symbol=sym)
 
-    return StockFundamentals(**data)
+    # bd:shotockviz-f14 — `data` (from the cached JSON) never carries `ts`
+    # itself (see FUNDAMENTALS_CACHE_TTL_SECONDS docstring); derive it here
+    # so the response can state how old this snapshot is. `data.get("ts")`
+    # first: harmless no-op today (the cached payload has no such key so this
+    # is always None), but future-proofs against the worker one day stamping
+    # its own `ts` without silently overriding a real value with a guess.
+    ts = data.get("ts") or await _fundamentals_as_of_ts(sym)
+    return StockFundamentals(**{**data, "ts": ts})
 
 
 @router.get("/{symbol}/financials")

@@ -1647,3 +1647,138 @@ def curve_fx_plan(
     plan.currency_conflict_symbols.sort()
     plan.fx_unavailable_symbols.sort()
     return plan
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Concentration limit — bd:shotockviz-649 ("concentration as a limit, not just
+# a display"). bd:shotockviz-916 shipped the % breakdown so he can SEE that one
+# name is 74% of the book; Tara's follow-on is that seeing it is not the same
+# as being told. This answers the position-sizing question directly: did any
+# name cross a threshold he set, this session or any other.
+#
+# WHERE THE LIMIT LIVES — decided, not left implicit. Not a new column on
+# `users` (alongside `telegram_chat_id`) and not a new table: this bead's file
+# scope does not include a migration or `models/user.py`, and inventing a
+# schema change outside a declared scope is the same class of move rule 4 /
+# FX-1 forbids for a rate — persistence is not built here. `limit_pct` is
+# instead a per-request parameter
+# (`GET /portfolio/analytics?concentration_limit_pct=`), computed the same way
+# every other number in this module is: given, not stored. The client
+# (`frontend/src/utils/concentrationLimit.ts`) persists the trader's choice in
+# localStorage, so "he sets it once" is true ON HIS DEVICE — the honest
+# boundary of this iteration. Whether the threshold should become a genuine
+# server-side per-user setting (its own migration, its own bead) is an open
+# question for Oliver, not decided here by building around the gap.
+# `DEFAULT_CONCENTRATION_LIMIT_PCT` applies until he has set one, so there is
+# always something to check against instead of nothing.
+#
+# RULE 1 / RULE 5 COLLISION — the one this bead was told to expect. A limit is
+# a statement about a %, and a position in `Allocation.excluded` (rule 2
+# unpriced, rule 4 fx_unavailable, rule 5 currency_conflict) HAS no % — for the
+# exact reason it has no slice. Two wrong answers were available and both are
+# refused:
+#   * counting it as compliant (0% < any limit) is the fabricated-loss bug of
+#     rule 2 with its sign flipped: a false "safe" reading manufactured from an
+#     unknown, the same move a 0% wedge makes when it claims "worth nothing";
+#   * counting it as breached invents a % rule 4 / FX-1 forbids inventing.
+# So it is neither. Every excluded position is carried into `not_checked` with
+# its `AllocationExclusion` UNCHANGED — a fifth surface does not get to
+# re-decide what `build_allocation` already decided (same doctrine as
+# `build_open_risk` reading its inclusions off `summarize`).
+#
+# ACTIONABILITY — "AAPL is over your limit" restates a number already on
+# screen, and restating it every session is exactly the noise a
+# breach-that-is-only-ever-true would be. What closes the gap is the
+# actionable half: `trim_value_base` is how much BASE-currency value to sell
+# to land the position EXACTLY on the limit — not
+# `value_base - limit_pct% of value_base`, because selling shrinks the
+# denominator too (this book tracks no cash leg; proceeds leave `total_value`
+# the same way the sold shares do — see the module docstring's own "no
+# position entity" note, rule 8 R-1). Solving
+#     (value_i - sold) / (total_value - sold) = target
+# for `sold` gives:
+#     sold = (value_i - target * total_value) / (1 - target)
+# ─────────────────────────────────────────────────────────────────────────────
+
+DEFAULT_CONCENTRATION_LIMIT_PCT = 25.0
+MIN_CONCENTRATION_LIMIT_PCT = 1.0
+# Strictly below 100: `sold` above divides by `(1 - target)`, and a 100% limit
+# is not a limit — a single name is always <= 100% of a book that contains it.
+MAX_CONCENTRATION_LIMIT_PCT = 99.0
+
+
+@dataclass
+class ConcentrationBreach:
+    """One position over the limit, and what closes the gap."""
+
+    symbol: str
+    currency: str
+    weight_pct: float
+    limit_pct: float
+    excess_pct: float        # weight_pct - limit_pct; always > 0 in this list
+    value_base: float
+    # Sell this much BASE-currency value to land back exactly on the limit.
+    # Never negative — clamped at 0.0, which is unreachable given the
+    # `weight_pct > limit_pct` guard above it but stated defensively rather
+    # than trusted, the same posture as `EXCLUDED_UNSTATABLE`.
+    trim_value_base: float
+
+
+@dataclass
+class ConcentrationCheck:
+    """The concentration LIMIT applied to one `Allocation` (rule 8-style view)."""
+
+    limit_pct: float
+    base_currency: str = BASE_CURRENCY
+    breaches: list[ConcentrationBreach] = field(default_factory=list)
+    # Positions `build_allocation` could not price/convert/state at all —
+    # `Allocation.excluded`, carried forward unchanged. Never "under the
+    # limit": that would be a compliance claim about an unknown %.
+    not_checked: list[AllocationExclusion] = field(default_factory=list)
+
+    @property
+    def breached(self) -> bool:
+        return len(self.breaches) > 0
+
+
+def build_concentration_check(allocation: Allocation, limit_pct: float) -> ConcentrationCheck:
+    """Which slices of `allocation` cross `limit_pct`, and what would fix it.
+
+    Takes the ALREADY-BUILT `Allocation` (bd:shotockviz-916) — the same object
+    the pie chart draws from. A sixth surface re-deciding who is priced,
+    convertible, or currency-consistent would be exactly the drift rules 2/4/5
+    (and `build_open_risk`'s reuse of them) exist to prevent.
+
+    `limit_pct` is assumed already range-checked by the caller
+    (`MIN_CONCENTRATION_LIMIT_PCT` / `MAX_CONCENTRATION_LIMIT_PCT`, enforced in
+    `api/routes/portfolio.py` — a route concern, not repeated here) — this
+    function does not clamp it, so a bad value fails loudly at the boundary
+    instead of silently changing what "the limit" means.
+    """
+    check = ConcentrationCheck(
+        limit_pct=limit_pct,
+        base_currency=allocation.base_currency,
+        not_checked=list(allocation.excluded),
+    )
+    if allocation.total_value <= 0:
+        return check  # nothing statable — same "no ratio over nothing" doctrine
+
+    target = limit_pct / 100.0
+    for s in allocation.slices:
+        if s.weight_pct <= limit_pct:
+            continue
+        trim = (s.value_base - target * allocation.total_value) / (1 - target)
+        check.breaches.append(ConcentrationBreach(
+            symbol=s.symbol,
+            currency=s.currency,
+            weight_pct=s.weight_pct,
+            limit_pct=limit_pct,
+            excess_pct=s.weight_pct - limit_pct,
+            value_base=s.value_base,
+            trim_value_base=max(trim, 0.0),
+        ))
+
+    # Worst breach first — same "biggest number first" convention as
+    # build_open_risk / build_allocation: that is the one he acts on.
+    check.breaches.sort(key=lambda b: (-b.excess_pct, b.symbol))
+    return check

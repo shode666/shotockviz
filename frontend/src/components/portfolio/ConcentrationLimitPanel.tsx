@@ -1,0 +1,180 @@
+import { useEffect, useState } from 'react';
+import { AlertTriangle, ShieldAlert } from 'lucide-react';
+import api from '@/services/api';
+import { displaySymbol, formatPriceTH } from '@/utils/formatters';
+import { hasAllocation } from '@/utils/allocation';
+import {
+    DEFAULT_CONCENTRATION_LIMIT_PCT,
+    MIN_CONCENTRATION_LIMIT_PCT,
+    MAX_CONCENTRATION_LIMIT_PCT,
+    isValidConcentrationLimitPct,
+    loadConcentrationLimitPct,
+    saveConcentrationLimitPct,
+    hasConcentrationBreach,
+    notCheckedSentence,
+    type ConcentrationInput,
+} from '@/utils/concentrationLimit';
+
+interface ConcentrationLimitPanelProps {
+    /** The page's own `/portfolio/analytics` result — read ONLY for
+     * `allocation` (unaffected by the limit) to decide whether there is
+     * anything to check yet. Never re-derives the breach itself. */
+    analytics: any;
+    userId: number | string | null | undefined;
+}
+
+/**
+ * bd:shotockviz-649 — "concentration as a limit, not just a display".
+ *
+ * bd:shotockviz-916's `AllocationPanel` (PortfolioPage.tsx) lets him SEE the
+ * % breakdown; this TELLS him when a name crosses a threshold he set,
+ * instead of asking him to re-read the donut every session.
+ *
+ * Fetches its OWN copy of `GET /portfolio/analytics?concentration_limit_pct=`
+ * rather than reading a field off the page's already-fetched `analytics`:
+ * that query param is the input that changes the instant he edits the
+ * threshold, and `usePortfolioData()` (out of this bead's file scope, see
+ * hand-off) fetches the book with no such param at all. This mirrors the
+ * pattern `usePortfolioData` itself already uses for its own out-of-band
+ * refetches (pending-price retry, WS `data_ready`) — a second targeted GET
+ * against a CQRS read endpoint (Redis/Postgres only, no external call) is a
+ * bounded, cheap cost, not a new architecture.
+ *
+ * The breach math is never duplicated here — see
+ * `services/portfolio_service.py::build_concentration_check` (single source)
+ * and `utils/concentrationLimit.ts` (this file's only local logic: bounds
+ * validation, localStorage persistence, and the "not checked" sentence).
+ *
+ * WHERE THE LIMIT LIVES: localStorage, keyed by `userId` — see
+ * `utils/concentrationLimit.ts`'s module docstring for why, and the open
+ * question for Oliver about moving it server-side.
+ */
+export function ConcentrationLimitPanel({ analytics, userId }: ConcentrationLimitPanelProps) {
+    const [limitPct, setLimitPct] = useState<number>(() => loadConcentrationLimitPct(userId));
+    const [inputValue, setInputValue] = useState<string>(() => String(loadConcentrationLimitPct(userId)));
+    const [inputError, setInputError] = useState<string | null>(null);
+    const [concentration, setConcentration] = useState<ConcentrationInput | null>(null);
+    const [loading, setLoading] = useState(false);
+
+    // Re-sync if the signed-in user changes mid-session (e.g. a shared
+    // browser). No-op re-render when the value already matches (React bails
+    // out on an equal primitive), so this does NOT double the fetch below on
+    // the normal mount.
+    useEffect(() => {
+        if (userId == null) return;
+        const restored = loadConcentrationLimitPct(userId);
+        setLimitPct(restored);
+        setInputValue(String(restored));
+    }, [userId]);
+
+    const hasBook = hasAllocation(analytics?.allocation);
+
+    useEffect(() => {
+        if (!hasBook || userId == null) return;
+        let cancelled = false;
+        setLoading(true);
+        api.get('/portfolio/analytics', { params: { concentration_limit_pct: limitPct } })
+            .then((res) => {
+                if (!cancelled) setConcentration(res.data?.concentration ?? null);
+            })
+            .catch(() => {
+                // A failed check must not block the rest of the page — the
+                // totals and the allocation panel above already rendered
+                // from the main fetch. Degrading this ONE signal to
+                // "unknown" (never rendered) is the honest outcome, not a
+                // page-wide error.
+                if (!cancelled) setConcentration(null);
+            })
+            .finally(() => {
+                if (!cancelled) setLoading(false);
+            });
+        return () => { cancelled = true; };
+    }, [hasBook, userId, limitPct]);
+
+    if (!hasBook) return null;
+
+    const handleSave = () => {
+        const parsed = Number(inputValue);
+        if (!isValidConcentrationLimitPct(parsed)) {
+            setInputError(`ระบุตัวเลข ${MIN_CONCENTRATION_LIMIT_PCT}-${MAX_CONCENTRATION_LIMIT_PCT}`);
+            return;
+        }
+        setInputError(null);
+        saveConcentrationLimitPct(userId, parsed);
+        setLimitPct(parsed); // triggers the effect above -> re-check against the server
+    };
+
+    const breached = hasConcentrationBreach(concentration);
+    const notChecked = notCheckedSentence(concentration);
+
+    return (
+        <div
+            data-testid="concentration-limit"
+            className="panel border rounded-2xl p-4 mb-4"
+            style={{ borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--color-border)' }}
+        >
+            <div className="flex items-center gap-2 mb-1">
+                <ShieldAlert size={13} aria-hidden="true" />
+                <h3 className="text-xs font-bold">ขีดจำกัดความเข้มข้นต่อชื่อ</h3>
+            </div>
+            <p className="text-[11px] mb-3" style={{ color: 'var(--color-text-sub)' }}>
+                แจ้งเตือนเมื่อหุ้นตัวใดตัวหนึ่งเกินสัดส่วนที่กำหนดของพอร์ต — คิดจากมูลค่าตลาดเดียวกับ &quot;สัดส่วนพอร์ต&quot; ด้านบน
+            </p>
+
+            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                <label htmlFor="concentration-limit-input" className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>
+                    ขีดจำกัดต่อชื่อ
+                </label>
+                <input
+                    id="concentration-limit-input"
+                    type="number"
+                    min={MIN_CONCENTRATION_LIMIT_PCT}
+                    max={MAX_CONCENTRATION_LIMIT_PCT}
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    className="w-20 text-xs px-2 py-1 rounded-lg outline-none"
+                    style={{ background: 'var(--color-input-bg)', border: '1px solid var(--color-border)' }}
+                    aria-describedby={inputError ? 'concentration-limit-error' : undefined}
+                />
+                <span className="text-[11px]" style={{ color: 'var(--color-text-sub)' }}>%</span>
+                <button onClick={handleSave} className="btn-accent text-[11px] px-3 py-1">บันทึก</button>
+                {loading && (
+                    <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>กำลังตรวจสอบ…</span>
+                )}
+            </div>
+            {inputError && (
+                <p id="concentration-limit-error" role="alert" className="text-[11px] mb-2" style={{ color: 'var(--color-red)' }}>
+                    {inputError}
+                </p>
+            )}
+
+            {breached ? (
+                <ul role="alert" className="flex flex-col gap-1.5 mt-2">
+                    {(concentration?.breaches ?? []).map((b) => (
+                        <li key={b.symbol} className="flex items-start gap-1.5 text-[11px]" style={{ color: 'var(--color-red)' }}>
+                            <AlertTriangle size={12} strokeWidth={2} aria-hidden="true" className="mt-[2px] shrink-0" />
+                            <span>
+                                <span className="font-semibold">{displaySymbol(b.symbol)}</span>{' '}
+                                {b.weight_pct.toFixed(1)}% — เกินขีดจำกัด {b.limit_pct.toFixed(0)}% ไป {b.excess_pct.toFixed(1)} จุด
+                                {' · '}ลดประมาณ ฿{formatPriceTH(b.trim_value_base)} เพื่อกลับเข้าเกณฑ์
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            ) : (
+                !loading && concentration != null && (
+                    <p className="text-[11px] mt-2" style={{ color: 'var(--color-text-sub)' }}>
+                        ยังไม่มีหุ้นตัวใดเกิน {limitPct}% ของพอร์ต
+                    </p>
+                )
+            )}
+
+            {notChecked && (
+                <p className="text-[10px] mt-3 flex items-start gap-1.5" style={{ color: 'var(--color-text-sub)' }}>
+                    <AlertTriangle size={11} strokeWidth={2} aria-hidden="true" className="mt-[2px] shrink-0" style={{ color: 'var(--color-yellow)' }} />
+                    <span>{notChecked}</span>
+                </p>
+            )}
+        </div>
+    );
+}

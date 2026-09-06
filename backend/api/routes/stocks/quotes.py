@@ -18,6 +18,7 @@ from services import stock_service
 
 from ._shared import _is_yahoo_fetchable
 from schemas.envelope import EnvelopingAPIRoute
+from services.fund_quote import fund_payload_to_quote
 
 # bd:deps-2026-09 S2 — route_class = envelope wrap (ADR-002); prefix comes
 # from the parent (stocks/__init__.py, lifted /api/stocks -> /stocks).
@@ -72,24 +73,17 @@ async def get_quotes_batch(symbols: str = Query(..., description="Comma-separate
                 pipe.get(cache_keys.fund(sym))
             fund_values = await pipe.execute()
             for sym, raw in zip(fund_misses, fund_values):
-                if raw:
-                    try:
-                        fund_data = _json.loads(raw)
-                        # Convert fund NAV to quote-like format for sidebar compatibility
-                        result[sym] = {
-                            "symbol": sym,
-                            "price": fund_data.get("nav"),
-                            "change": 0,
-                            "change_pct": 0,
-                            "volume": 0,
-                            "type": "fund_nav",
-                            "nav_date": fund_data.get("date"),
-                            "ts": fund_data.get("ts", 0),
-                        }
-                        # Remove from misses since we found fund data
-                        misses = [m for m in misses if m != sym]
-                    except Exception:
-                        pass
+                # bd:shotockviz-ubw — the NAV→quote shape lives in
+                # services/fund_quote.py now. It was hand-rolled in 5 places
+                # and had already drifted between two of them in this very
+                # file (the single-quote branch below forgot `ts` until
+                # bd:shotockviz-f14 caught it); the same drift is what let
+                # `quote:{symbol}` come to mean two different things.
+                fund_quote = fund_payload_to_quote(sym, raw)
+                if fund_quote is not None:
+                    result[sym] = fund_quote
+                    # Remove from misses since we found fund data
+                    misses = [m for m in misses if m != sym]
         except Exception:
             pass
 
@@ -140,16 +134,14 @@ async def get_quote(symbol: str):
     # L1.5: Check fund NAV cache (Thai mutual funds)
     try:
         r = await stock_service.get_redis()
-        fund_raw = await r.get(cache_keys.fund(sym))
-        if fund_raw:
-            fund_data = _json.loads(fund_raw)
-            nav = fund_data.get("nav")
-            if nav is not None:
-                return JSONResponse(content={
-                    "symbol": sym, "price": nav,
-                    "change": 0, "change_pct": 0, "volume": 0,
-                    "type": "fund_nav", "nav_date": fund_data.get("date"),
-                })
+        # bd:shotockviz-f14 — this branch used to omit `ts`, so StatusBar's
+        # getPriceFreshness() read "unknown" for a fund reached via the single
+        # -quote path even though fund_fetcher stamps a real one. It cannot
+        # drift from its sibling again: bd:shotockviz-ubw moved the shape into
+        # services/fund_quote.py and both branches call it.
+        fund_quote = fund_payload_to_quote(sym, await r.get(cache_keys.fund(sym)))
+        if fund_quote is not None:
+            return JSONResponse(content=fund_quote)
     except Exception:
         pass
 

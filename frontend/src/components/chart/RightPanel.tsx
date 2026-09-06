@@ -9,6 +9,7 @@ import notesService from '@/services/notesService';
 import alertService from '@/services/alertService';
 import { calculateRSI } from '@/utils/indicators';
 import { displaySymbol } from '@/utils/formatters';
+import { formatCachedAge } from '@/utils/cachedValueAge';
 import toast from 'react-hot-toast';
 
 function isTimeoutError(err: any): boolean {
@@ -41,6 +42,10 @@ interface Fundamentals {
     pe_ratio?: number | null;
     dividend_yield?: number | null;
     market_cap?: number | null;
+    // bd:shotockviz-f14 — epoch seconds this snapshot was fetched (backend
+    // derives it read-side from the fundamentals:{symbol} Redis key's TTL;
+    // see backend/api/routes/stocks/fundamentals.py). null/absent = unknown.
+    ts?: number | null;
 }
 
 interface QuoteData {
@@ -82,6 +87,18 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
     const [noteSaving, setNoteSaving] = useState(false);
     const [noteSaved, setNoteSaved] = useState(false);
     const saveTimer = useRef<any>(null);
+
+    // bd:shotockviz-f14 — re-render every 30s purely so an already-known
+    // fundamentals `ts`'s *displayed* age advances between the 4h refetches,
+    // without fabricating anything: same pattern as StatusBar.tsx's `now`
+    // state for the price field (bd:shotockviz-09j) — the value shown is
+    // still the real server timestamp's age, just recomputed periodically,
+    // NOT a wall clock rendered as the update time.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 30_000);
+        return () => clearInterval(t);
+    }, []);
 
     const fetchQuote = useCallback((sym: string, signal: AbortSignal) => {
         stockService.getQuote(sym)
@@ -235,6 +252,19 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
         ['Beta', fundamentals?.beta?.toFixed(2) ?? '—'],
     ];
 
+    // bd:shotockviz-f14 — every number in `stats`/`funData` above comes from
+    // this same 4h-cache `fundamentals` object. Only claim a real age when
+    // there's an actual figure on screen to caveat (an empty "—" row has
+    // nothing to caveat); when a figure IS showing but the age genuinely
+    // couldn't be derived (backend TTL race — see fundamentals.py), say so
+    // explicitly rather than silently omitting the line.
+    const hasFundamentalsData = !!fundamentals && [
+        fundamentals.week_52_high, fundamentals.week_52_low, fundamentals.avg_volume,
+        fundamentals.beta, fundamentals.eps, fundamentals.pe_ratio,
+        fundamentals.dividend_yield, fundamentals.market_cap,
+    ].some((v) => v != null);
+    const fundamentalsAge = formatCachedAge(fundamentals?.ts, now);
+
     const targetPrice = quote?.price ? parseFloat((quote.price * 1.05).toFixed(2)) : null;
 
     const handleQuickAlert = async () => {
@@ -333,7 +363,12 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
 
                             {/* Stats */}
                             <div className="p-3 border-b" style={{ borderColor: 'var(--color-border)' }}>
-                                <div className="text-[10px] uppercase tracking-wider mb-2 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Stats</div>
+                                <div className="text-[10px] uppercase tracking-wider mb-1 font-semibold" style={{ color: 'var(--color-text-sub)' }}>Stats</div>
+                                {hasFundamentalsData && (
+                                    <div className="text-[10px] mb-2" style={{ color: 'var(--color-text-sub)' }}>
+                                        ข้อมูลพื้นฐาน ณ {fundamentalsAge.label}
+                                    </div>
+                                )}
                                 {timedOut && (
                                     <div className="text-[11px] py-1 mb-1 flex items-center gap-1" style={{ color: 'var(--color-text-sub)' }}>
                                         <Timer size={12} strokeWidth={2} aria-hidden="true" /> Timed out —{' '}
@@ -519,6 +554,11 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
 
                                     {tab === 'fundamentals' && (
                                         <div className="flex flex-col gap-2">
+                                            {hasFundamentalsData && (
+                                                <div className="text-[10px] px-0.5" style={{ color: 'var(--color-text-sub)' }}>
+                                                    ข้อมูล ณ {fundamentalsAge.label}
+                                                </div>
+                                            )}
                                             {funData.map(([k, v]) => (
                                                 <div key={k} className="rounded-xl p-2.5 border" style={{ background: 'var(--color-input-bg)', borderColor: 'var(--color-border)' }}>
                                                     <div className="text-[10px] uppercase tracking-wider mb-1" style={{ color: 'var(--color-text-sub)' }}>{k}</div>

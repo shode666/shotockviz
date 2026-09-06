@@ -49,6 +49,14 @@ async def _fast_quote(symbol: str) -> dict | None:
         if cached:
             import json
             return json.loads(cached)
+        # bd:shotockviz-ubw — a Thai fund's NAV is no longer dual-written into
+        # quote:{symbol} (bd:shotockviz-3ir removed that: the key means "live
+        # equity quote, 120s TTL" and an 86400s NAV in it was read by price
+        # alerts as a live price). Consumers now look in fund:{symbol}
+        # themselves. Without this, a fund symbol in a watchlist would show
+        # nothing at all here rather than a NAV labelled as a NAV.
+        from services.fund_quote import fund_payload_to_quote
+        return fund_payload_to_quote(symbol, await r.get(cache_keys.fund(symbol)))
     except Exception:
         pass
     return None
@@ -86,10 +94,15 @@ async def _fetch_indices_cached() -> tuple[list[dict], list[str]]:
                 "price": cached.get("price"),
                 "change": cached.get("change"),
                 "change_pct": cached.get("change_pct"),
+                # bd:shotockviz-f14 — cache_publisher.py:36 stamps `ts` into
+                # every quote payload already; this route just wasn't
+                # forwarding it, so the index cards had no way to say when
+                # the price was true.
+                "ts": cached.get("ts"),
             })
         else:
             index_misses.append(sym)
-            indices.append({"name": name, "symbol": sym, "price": None, "change": None, "change_pct": None})
+            indices.append({"name": name, "symbol": sym, "price": None, "change": None, "change_pct": None, "ts": None})
 
     return indices, index_misses
 
@@ -171,6 +184,10 @@ async def _build_portfolio_summary(user: User, db: AsyncSession) -> tuple[dict |
                 "value_thb": round(v.current_value_base, 2) if v.current_value_base is not None else None,
                 "currency": v.currency.upper(),
                 "change_pct": (quotes.get(v.symbol) or {}).get("change_pct"),
+                # bd:shotockviz-f14 — a portfolio valuation is exactly the
+                # kind of number staleness should be able to change; forward
+                # the quote's own ts alongside it.
+                "ts": (quotes.get(v.symbol) or {}).get("ts"),
                 "unrealized_pct": round(v.unrealized_pl_pct, 2) if v.unrealized_pl_pct is not None else 0,
                 "fx_estimated": v.fx_estimated,
             })
@@ -262,6 +279,10 @@ async def _find_alerts_near_target(user: User, db: AsyncSession) -> tuple[int, l
                     "target": a.value,
                     "current": cached["price"],
                     "diff_pct": round(diff_pct, 2),
+                    # bd:shotockviz-f14 — an alert reported as "near target"
+                    # is exactly the kind of decision staleness should be
+                    # able to change; forward the quote's own ts.
+                    "ts": cached.get("ts"),
                 })
 
         return alert_count, triggered_alerts, alert_misses
@@ -312,11 +333,14 @@ async def _get_top_movers(symbols: list[str]) -> tuple[list[dict], list[str]]:
                 "symbol": sym,
                 "price": cached.get("price"),
                 "change_pct": cached.get("change_pct"),
-                "volume": cached.get("volume")
+                "volume": cached.get("volume"),
+                # bd:shotockviz-f14 — same forward-the-existing-ts fix as
+                # the index cards above.
+                "ts": cached.get("ts"),
             })
         else:
             mover_misses.append(sym)
-            movers.append({"symbol": sym, "price": None, "change_pct": None})
+            movers.append({"symbol": sym, "price": None, "change_pct": None, "ts": None})
 
     movers.sort(key=lambda x: abs(x.get("change_pct") or 0), reverse=True)
     return movers, mover_misses

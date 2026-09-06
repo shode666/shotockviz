@@ -373,6 +373,29 @@ def send_sr_proximity_digest(self, slot: str, now_utc_iso: str | None = None):
         # cache_and_publish_quotes() writes, core/cache_keys.py:36-38).
         # Fixed to go through cache_keys.quote() so it can't drift again.
         prices_raw = r.mget([cache_keys.quote(s) for s in all_symbols])
+
+        # bd:shotockviz-ubw — Thai fund NAVs are no longer dual-written into
+        # quote:{symbol} (bd:shotockviz-3ir), so a fund symbol on a watchlist
+        # would silently vanish from the digest rather than appear with its
+        # NAV. One extra MGET, only over the symbols that actually missed.
+        fund_misses = [s for s, raw in zip(all_symbols, prices_raw) if not raw]
+        if fund_misses:
+            from services.fund_quote import fund_payload_to_quote
+
+            fund_raw = r.mget([cache_keys.fund(s) for s in fund_misses])
+            recovered = {
+                s: json.dumps(q)
+                for s, q in (
+                    (s, fund_payload_to_quote(s, raw))
+                    for s, raw in zip(fund_misses, fund_raw)
+                )
+                if q is not None
+            }
+            prices_raw = [
+                raw if raw else recovered.get(s)
+                for s, raw in zip(all_symbols, prices_raw)
+            ]
+
         prices_by_symbol: dict[str, float] = {}
         for symbol, raw in zip(all_symbols, prices_raw):
             if not raw:
