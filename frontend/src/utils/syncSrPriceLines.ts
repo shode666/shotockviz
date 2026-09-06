@@ -18,6 +18,7 @@
  * resolves), so `LineStyle` is used for real here, not re-implemented.
  */
 import { LineStyle } from 'lightweight-charts';
+import type { LineWidth } from 'lightweight-charts';
 import { resolveSrLevelColor, resolveSrLevelTitle, type SrLevelLike } from './srLevelColor.ts';
 
 /** The subset of lightweight-charts' `ISeriesApi` this module actually calls. */
@@ -25,7 +26,7 @@ export interface SrLineSeriesLike {
     createPriceLine(options: {
         price: number;
         color: string;
-        lineWidth: number;
+        lineWidth: LineWidth;
         lineStyle: LineStyle;
         axisLabelVisible: boolean;
         title: string;

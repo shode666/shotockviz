@@ -2,6 +2,25 @@ import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3, Plus, X } from
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { isVwapAvailable } from '@/utils/indicators';
 import useHydrated from '@/hooks/useHydrated';
+import type { SelectedStock } from '@/store/appStore';
+import type { SrLevel } from '@/hooks/useSrLevels';
+
+interface ChartToolbarProps {
+    selectedStock: SelectedStock;
+    selectedTF: string;
+    onTFChange: (tf: string) => void;
+    chartType: string;
+    onChartTypeChange: (type: string) => void;
+    activeIndicators?: string[];
+    onIndicatorToggle?: (ind: string) => void;
+    isLoading?: boolean;
+    showSrLevels?: boolean;
+    onToggleSrLevels?: () => void;
+    isAuthenticated?: boolean;
+    onAddLevel?: () => void;
+    userLevels?: SrLevel[];
+    onDeleteLevel?: (id: number) => void;
+}
 
 const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D', '1W', '1M'];
 const chartTypes = [
@@ -30,7 +49,7 @@ export default function ChartToolbar({
     onAddLevel,
     userLevels = [],
     onDeleteLevel,
-}) {
+}: ChartToolbarProps) {
     // bd:shotockviz-6h3 — before hydration the SSR buttons have no handlers,
     // so a click was silently dropped. Same honesty rule as the F5/VWAP and
     // sign-in patterns below, applied in the time dimension: control groups

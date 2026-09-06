@@ -311,7 +311,7 @@ export default function PortfolioPage() {
         setEditingTxn(null);
     };
 
-    const fmtQty = (n) => n != null ? parseFloat(n.toFixed(8)).toString() : '—';
+    const fmtQty = (n: number | null | undefined) => n != null ? parseFloat(n.toFixed(8)).toString() : '—';
     const pnlUp = analytics ? analytics.unrealized_pl >= 0 : true;
     const baseCurrency: string = analytics?.base_currency ?? 'THB';
     // bd:shotockviz-fnn — an estimated rate must be visible on the figure

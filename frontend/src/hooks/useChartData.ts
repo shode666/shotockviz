@@ -96,7 +96,9 @@ interface UseChartDataReturn {
 
 interface UseChartDataProps {
     timeframe?: string;
-    onLoadingChange?: (loading: boolean) => void;
+    // `| null` because TradingChart's prop default is null (JSX callback-or-null
+    // convention there); the hook only ever invokes it via optional call.
+    onLoadingChange?: ((loading: boolean) => void) | null;
 }
 
 /**

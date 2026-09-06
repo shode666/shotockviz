@@ -196,7 +196,10 @@ export function calculateVWAP(data: Bar[]): IndicatorPoint[] {
             lastDate = barDate;
         }
 
-        const typicalPrice = (bar.high + bar.low + bar.close) / 3;
+        // Bar.high/low are optional (some sources send close-only bars).
+        // Without this fallback a single such bar makes typicalPrice NaN,
+        // and the NaN then poisons cumPV/VWAP for the rest of the day.
+        const typicalPrice = ((bar.high ?? bar.close) + (bar.low ?? bar.close) + bar.close) / 3;
         const volume = bar.volume || 0;
         cumPV += typicalPrice * volume;
         cumV += volume;

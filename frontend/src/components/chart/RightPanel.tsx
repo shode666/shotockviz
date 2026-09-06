@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import type { MouseEvent } from 'react';
 import { BellPlus, Timer, Newspaper, Briefcase, BarChart2, StickyNote, Save, Check, X, Info, Trash2 } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import useAuthStore from '@/store/authStore';
@@ -28,19 +29,52 @@ interface RightPanelProps {
     onClose: () => void;
 }
 
+// API payload shapes (backend fundamentals:{symbol} / quote:{symbol} caches,
+// portfolio analytics holdings). Fields the backend may omit or null out are
+// optional-nullable — the render code already treats every one as maybe-missing.
+interface Fundamentals {
+    week_52_high?: number | null;
+    week_52_low?: number | null;
+    avg_volume?: number | null;
+    beta?: number | null;
+    eps?: number | null;
+    pe_ratio?: number | null;
+    dividend_yield?: number | null;
+    market_cap?: number | null;
+}
+
+interface QuoteData {
+    price?: number | null;
+}
+
+interface Holding {
+    symbol: string;
+    qty?: number | null;
+    avg_cost?: number | null;
+    current_value?: number | null;
+    unrealized_pl_pct?: number | null;
+}
+
+interface NewsItem {
+    url?: string | null;
+    source?: string | null;
+    title?: string | null;
+    published_at?: string | number | null;
+}
+
 export default function RightPanel({ selectedStock, isOpen, onClose }: RightPanelProps) {
     const { isAuthenticated } = useAuthStore();
     const [tab, setTab] = useState('info');
 
     // Info tab state (Quick Alert + Stats + RSI Gauge)
-    const [fundamentals, setFundamentals] = useState(null);
-    const [quote, setQuote] = useState(null);
+    const [fundamentals, setFundamentals] = useState<Fundamentals | null>(null);
+    const [quote, setQuote] = useState<QuoteData | null>(null);
     const [rsi, setRsi] = useState<number | null>(null);
     const [timedOut, setTimedOut] = useState(false);
 
     // News/Fundamentals tab state (moved from BottomPanel)
-    const [news, setNews] = useState([]);
-    const [holding, setHolding] = useState(null);
+    const [news, setNews] = useState<NewsItem[]>([]);
+    const [holding, setHolding] = useState<Holding | null>(null);
     const [contentLoading, setContentLoading] = useState(false);
 
     // Notes tab state (moved from BottomPanel)
@@ -385,8 +419,8 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                                                             key={i}
                                                             {...linkProps}
                                                             className={`flex flex-col gap-1 p-2 rounded-lg transition-colors ${hasUrl ? '' : 'opacity-60 cursor-default'}`}
-                                                            onMouseEnter={hasUrl ? (e) => (e.currentTarget.style.background = 'var(--color-hover)') : undefined}
-                                                            onMouseLeave={hasUrl ? (e) => (e.currentTarget.style.background = 'transparent') : undefined}
+                                                            onMouseEnter={hasUrl ? (e: MouseEvent<HTMLElement>) => (e.currentTarget.style.background = 'var(--color-hover)') : undefined}
+                                                            onMouseLeave={hasUrl ? (e: MouseEvent<HTMLElement>) => (e.currentTarget.style.background = 'transparent') : undefined}
                                                         >
                                                             {!hasUrl && <span className="sr-only">ไม่มีลิงก์บทความ</span>}
                                                             <span className="badge badge-violet flex-shrink-0 text-[10px] w-fit">{n.source}</span>

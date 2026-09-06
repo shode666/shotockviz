@@ -44,9 +44,23 @@ function formatTriggeredTime(iso?: string | null): string {
 // 'in_app' outright.
 const EMPTY_FORM = { symbol: '', alert_type: 'Price Above', condition: 'above', value: '', channel: 'telegram' };
 
+// Row shape from GET /alerts (backend models/alert.py + schemas.py AlertResponse).
+// status/is_active feed getAlertStatusKey; the rest render in the table.
+interface AlertRow {
+    id: number;
+    symbol: string;
+    alert_type: string;
+    condition?: string | null;
+    value?: number | null;
+    channel?: string | null;
+    status?: string | null;
+    is_active?: boolean;
+    triggered_at?: string | null;
+}
+
 export default function AlertsPage() {
     const { isAuthenticated } = useAuthStore();
-    const [alerts, setAlerts] = useState([]);
+    const [alerts, setAlerts] = useState<AlertRow[]>([]);
     const [loading, setLoading] = useState(false);
     const [timedOut, setTimedOut] = useState(false);
     const [showModal, setShowModal] = useState(false);
@@ -57,7 +71,7 @@ export default function AlertsPage() {
     // same modal renders both; PUT only accepts condition/value/channel
     // (backend/models/schemas.py AlertUpdate), so symbol + alert_type render
     // read-only in edit mode rather than pretending to be changeable.
-    const [editingAlert, setEditingAlert] = useState<any>(null);
+    const [editingAlert, setEditingAlert] = useState<AlertRow | null>(null);
     const isEditMode = editingAlert !== null;
 
     // ─── Symbol autocomplete state ───
@@ -186,14 +200,14 @@ export default function AlertsPage() {
         }
     };
 
-    const handleDelete = async (id) => {
+    const handleDelete = async (id: number) => {
         try {
             await alertService.delete(id);
             setAlerts((prev) => prev.filter((a) => a.id !== id));
         } catch { /* ignore */ }
     };
 
-    const handleToggle = async (id) => {
+    const handleToggle = async (id: number) => {
         try {
             const res = await alertService.toggle(id);
             setAlerts((prev) => prev.map((a) => a.id === id ? res.data : a));

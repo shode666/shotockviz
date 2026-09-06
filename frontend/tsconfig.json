@@ -30,7 +30,10 @@
     "allowJs": true,
     /* Linting */
     "skipLibCheck": true,
-    "strict": false,
+    // bd:shotockviz-9z0 — was false since the initial commit; TanStack Router
+    // refuses to type its own API without strictNullChecks, so `tsc --noEmit`
+    // carried a permanent router.tsx baseline error until this flip.
+    "strict": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   }

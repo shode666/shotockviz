@@ -1,23 +1,80 @@
 import { useEffect, useRef, useState } from 'react';
 import { Timer, Landmark, BarChart3 } from 'lucide-react';
 import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries } from 'lightweight-charts';
+import type { IChartApi, ISeriesApi, LineWidth, SeriesType, Time, LineData, WhitespaceData, HistogramData } from 'lightweight-charts';
+import type { IndicatorPoint, HistogramPoint } from '@/utils/indicators';
 import useAppStore from '@/store/appStore';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP, isVwapAvailable } from '@/utils/indicators';
 import { useChartData } from '@/hooks/useChartData';
 import { syncSrPriceLines } from '@/utils/syncSrPriceLines';
+import type { SrLevel } from '@/hooks/useSrLevels';
+
+/** OHLCV snapshot under the crosshair, pushed up to ChartPage's overlay. */
+export interface CrosshairData {
+    open?: number;
+    high?: number;
+    low?: number;
+    close?: number;
+    volume?: number;
+    isUp?: boolean;
+}
+
+/** Any series on this chart (main candles/line/area, volume, indicator strips). */
+type AnySeries = ISeriesApi<SeriesType>;
+
+/** Series handles per indicator pill; multi-series indicators keep tuples. */
+interface IndicatorSeriesMap {
+    'MA 20'?: AnySeries;
+    'EMA 50'?: AnySeries;
+    'RSI 14'?: AnySeries;
+    'VWAP'?: AnySeries;
+    'MACD'?: [AnySeries, AnySeries, AnySeries]; // macd line, signal line, histogram
+    'BB'?: [AnySeries, AnySeries]; // upper, lower
+}
+
+/**
+ * Boundary adapter: indicator series (utils/indicators.ts) → lightweight-charts
+ * data. Two contract gaps are closed here, in one audited place:
+ *  - `value: null` warm-up points: the lib detects gaps by `value === undefined`
+ *    (isWhitespaceData, dist:11382) — a literal null used to slip through as
+ *    "fulfilled" data with a null value, which its types forbid. Emit the
+ *    documented whitespace form `{ time }` instead.
+ *  - `time` branding: runtime times are unix-seconds (intraday) or
+ *    "yyyy-mm-dd" (daily), both valid `Time` encodings, but plain API numbers
+ *    can't carry the lib's UTCTimestamp nominal brand — asserted here only.
+ */
+function toSeriesData(points: IndicatorPoint[] | HistogramPoint[]): (LineData<Time> | HistogramData<Time> | WhitespaceData<Time>)[] {
+    return points.map((p) => {
+        const time = p.time as Time;
+        if (p.value == null) return { time };
+        return 'color' in p && p.color !== undefined
+            ? { time, value: p.value, color: p.color }
+            : { time, value: p.value };
+    });
+}
+
+interface TradingChartProps {
+    timeframe?: string;
+    chartType?: string;
+    activeIndicators?: string[];
+    onCrosshairMove?: ((data: CrosshairData | null) => void) | null;
+    onLoadingChange?: ((loading: boolean) => void) | null;
+    showSrLevels?: boolean;
+    srLevels?: SrLevel[];
+}
 
 // bd:shotockviz-474 — srLevels now comes from a prop, not this component's
 // own useSrLevels() call. ChartPage.tsx owns that hook instead (single
 // fetch shared with the "your levels" delete list + the add-level modal's
 // refetch-on-success — three consumers of one fetch beats three fetches
 // that could disagree with each other after a create/delete).
-export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null, showSrLevels = false, srLevels = [] }) {
-    const containerRef = useRef(null);
-    const chartRef = useRef(null);
-    const seriesRef = useRef(null);
-    const volumeRef = useRef(null);
-    const indicatorsRef = useRef({}); // Store references to indicator series
-    const srPriceLinesRef = useRef([]); // Store references to S/R IPriceLine objects (bd:features-2026-09 slice 2)
+export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null, showSrLevels = false, srLevels = [] }: TradingChartProps) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const chartRef = useRef<IChartApi | null>(null);
+    const seriesRef = useRef<AnySeries | null>(null);
+    const volumeRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+    const indicatorsRef = useRef<IndicatorSeriesMap>({}); // Store references to indicator series
+    const srPriceLinesRef = useRef<unknown[]>([]); // Store references to S/R IPriceLine objects (bd:features-2026-09 slice 2)
     const { selectedStock, darkMode } = useAppStore();
 
     // Last computed value for the RSI/MACD strip labels (bd:ux-2026-09 g2 —
@@ -145,7 +202,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     high: bar.high,
                     low: bar.low,
                     close: bar.close,
-                    volume: volumeBar && 'value' in volumeBar ? volumeBar.value : undefined,
+                    volume: volumeBar && 'value' in volumeBar && typeof volumeBar.value === 'number' ? volumeBar.value : undefined,
                     isUp: bar.close >= bar.open,
                 });
             } else {
@@ -226,11 +283,15 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
             const chart = chartRef.current;
             const currentInds = indicatorsRef.current;
             if (chart) {
-                Object.keys(currentInds).forEach((key) => {
-                    if (Array.isArray(currentInds[key])) {
-                        currentInds[key].forEach((s: any) => { try { chart.removeSeries(s); } catch {} });
-                    } else {
-                        try { chart.removeSeries(currentInds[key]); } catch {}
+                // Object.keys() is typed string[] by design — assert back to the
+                // map's own keys (standard TS idiom; keys can only come from
+                // assignments to IndicatorSeriesMap above).
+                (Object.keys(currentInds) as (keyof IndicatorSeriesMap)[]).forEach((key) => {
+                    const entry = currentInds[key];
+                    if (Array.isArray(entry)) {
+                        entry.forEach((s) => { try { chart.removeSeries(s); } catch {} });
+                    } else if (entry) {
+                        try { chart.removeSeries(entry); } catch {}
                     }
                     delete currentInds[key];
                 });
@@ -262,14 +323,20 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
         // Update Indicators
         const chart = chartRef.current;
         const currentInds = indicatorsRef.current;
+        // seriesRef/volumeRef were non-null above, so the chart that created
+        // them exists too — this guard is for the type system and for the
+        // (unreachable today) case of refs drifting out of sync.
+        if (!chart) return;
 
-        // Remove inactive indicators
-        Object.keys(currentInds).forEach((key) => {
+        // Remove inactive indicators — same Object.keys() assertion as the
+        // empty-bars cleanup above.
+        (Object.keys(currentInds) as (keyof IndicatorSeriesMap)[]).forEach((key) => {
             if (!activeIndicators.includes(key) || bars.length === 0) {
-                if (Array.isArray(currentInds[key])) {
-                    currentInds[key].forEach(s => chart.removeSeries(s));
-                } else {
-                    chart.removeSeries(currentInds[key]);
+                const entry = currentInds[key];
+                if (Array.isArray(entry)) {
+                    entry.forEach(s => chart.removeSeries(s));
+                } else if (entry) {
+                    chart.removeSeries(entry);
                 }
                 delete currentInds[key];
             }
@@ -281,7 +348,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 if (!currentInds['MA 20']) {
                     currentInds['MA 20'] = chart.addSeries(LineSeries, { color: '#f59e0b', lineWidth: 2, crosshairMarkerVisible: false });
                 }
-                currentInds['MA 20'].setData(calculateSMA(bars, 20));
+                currentInds['MA 20'].setData(toSeriesData(calculateSMA(bars, 20)));
             }
 
             // Apply EMA 50
@@ -289,7 +356,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                 if (!currentInds['EMA 50']) {
                     currentInds['EMA 50'] = chart.addSeries(LineSeries, { color: '#3b82f6', lineWidth: 2, crosshairMarkerVisible: false });
                 }
-                currentInds['EMA 50'].setData(calculateEMA(bars, 50));
+                currentInds['EMA 50'].setData(toSeriesData(calculateEMA(bars, 50)));
             }
 
             // Apply RSI 14 — own band at the bottom of the plot ("strip" under the
@@ -306,7 +373,7 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     scaleMargins: macdAlsoActive ? { top: 0.62, bottom: 0.19 } : { top: 0.8, bottom: 0 },
                 });
                 const rsiData = calculateRSI(bars, 14);
-                currentInds['RSI 14'].setData(rsiData);
+                currentInds['RSI 14'].setData(toSeriesData(rsiData));
                 setRsiLast(rsiData.at(-1)?.value ?? null);
             } else {
                 setRsiLast(null);
@@ -319,14 +386,19 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                         color: '#9C27B0', lineWidth: 2, lineStyle: 2, crosshairMarkerVisible: false
                     });
                 }
-                currentInds['VWAP'].setData(calculateVWAP(bars));
+                currentInds['VWAP'].setData(toSeriesData(calculateVWAP(bars)));
             }
 
             // Apply MACD — own band, stacked below RSI's strip when both active.
             if (activeIndicators.includes('MACD')) {
                 if (!currentInds['MACD']) {
-                    const macdLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
-                    const signalLine = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1.5, crosshairMarkerVisible: false, priceScaleId: 'macd' });
+                    // lineWidth 1.5 predates strict mode: the declared LineWidth
+                    // type is 1|2|3|4 (typings.d.ts:4797) but the canvas renderer
+                    // accepts fractional widths and this is what prod renders
+                    // today. Assert rather than change the visual in a type-only
+                    // pass. bd:shotockviz-9z0
+                    const macdLine = chart.addSeries(LineSeries, { color: '#2962FF', lineWidth: 1.5 as LineWidth, crosshairMarkerVisible: false, priceScaleId: 'macd' });
+                    const signalLine = chart.addSeries(LineSeries, { color: '#FF6D00', lineWidth: 1.5 as LineWidth, crosshairMarkerVisible: false, priceScaleId: 'macd' });
                     const hist = chart.addSeries(HistogramSeries, { priceScaleId: 'macd' });
 
                     currentInds['MACD'] = [macdLine, signalLine, hist];
@@ -335,9 +407,10 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     scaleMargins: activeIndicators.includes('RSI 14') ? { top: 0.86, bottom: 0 } : { top: 0.8, bottom: 0 },
                 });
                 const macdData = calculateMACD(bars);
-                currentInds['MACD'][0].setData(macdData.macdLine);
-                currentInds['MACD'][1].setData(macdData.signalLine);
-                currentInds['MACD'][2].setData(macdData.histogram);
+                const [macdLineSeries, signalLineSeries, histSeries] = currentInds['MACD'];
+                macdLineSeries.setData(toSeriesData(macdData.macdLine));
+                signalLineSeries.setData(toSeriesData(macdData.signalLine));
+                histSeries.setData(toSeriesData(macdData.histogram));
                 setMacdLast(macdData.histogram.at(-1)?.value ?? null);
             } else {
                 setMacdLast(null);
@@ -351,8 +424,9 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
                     currentInds['BB'] = [upper, lower]; // Only drawing lines, filling area between them requires hack in lightweight-charts
                 }
                 const bbData = calculateBollingerBands(bars);
-                currentInds['BB'][0].setData(bbData.upper);
-                currentInds['BB'][1].setData(bbData.lower);
+                const [bbUpper, bbLower] = currentInds['BB'];
+                bbUpper.setData(toSeriesData(bbData.upper));
+                bbLower.setData(toSeriesData(bbData.lower));
             }
         }
 

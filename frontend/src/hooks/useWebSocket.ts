@@ -57,8 +57,8 @@ export default function useWebSocket() {
     const setDataReadyPayload = useAppStore(s => s.setDataReadyPayload);
     const selectedSymbol = useAppStore(s => s.selectedStock.sym);
     const [isConnected, setIsConnected] = useState(false);
-    const wsRef = useRef(null);
-    const reconnectTimeoutRef = useRef(null);
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const reconnectAttemptsRef = useRef(0);
 
     // Store latest setDataReadyPayload in ref to avoid stale closure
@@ -71,7 +71,7 @@ export default function useWebSocket() {
     const symbolRef = useRef(selectedSymbol);
     // What the server currently believes this socket is subscribed to (or
     // null if nothing is subscribed / the socket isn't open yet).
-    const subscribedSymbolRef = useRef(null);
+    const subscribedSymbolRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (!token || !user?.id) {

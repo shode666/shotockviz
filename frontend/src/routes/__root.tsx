@@ -31,6 +31,9 @@ function GoogleOneTapManager() {
 
     useGoogleOneTapLogin({
         onSuccess: async (response) => {
+            // Library types credential as string | undefined — treat a
+            // credential-less success like any other one-tap failure.
+            if (!response.credential) return
             try {
                 await googleLogin(response.credential)
             } catch {

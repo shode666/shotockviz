@@ -3,9 +3,16 @@ import { useNavigate } from '@tanstack/react-router';
 import { SlidersHorizontal, Play, Loader2, Download } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
-import { resultsToCsv } from '@/utils/csv';
+import { resultsToCsv, type ScreenerRow } from '@/utils/csv';
 
-const FILTER_OPTIONS = {
+// Screener API row = the CSV row shape + `up` (backend/api/routes/screener.py
+// sends the direction flag; the CSV export doesn't include it).
+interface ScreenerResult extends ScreenerRow {
+    up: boolean; // always sent — backend/api/routes/screener.py:190
+    pct?: string | number | null; // not in the payload today; read defensively in handleRowClick
+}
+
+const FILTER_OPTIONS: Record<string, string[]> = {
     market: ['SET + US', 'SET', 'US'],
     rsi: ['< 30 (Oversold)', '30–70 (Neutral)', '> 70 (Overbought)', 'Any'],
     volume: ['> 2x Average', '> 1.5x Average', 'Any'],
@@ -14,7 +21,9 @@ const FILTER_OPTIONS = {
 };
 
 // Map UI labels → API param values
-const FILTER_MAP = {
+// Values keyed by UI label — lookups fall back ('?? any/all') when a label
+// is missing, so plain string index signatures are the honest shape here.
+const FILTER_MAP: Record<string, Record<string, string>> = {
     market: { 'SET + US': 'all', 'SET': 'SET', 'US': 'US' },
     rsi: { '< 30 (Oversold)': 'oversold', '30–70 (Neutral)': 'neutral', '> 70 (Overbought)': 'overbought', 'Any': 'any' },
     volume: { '> 2x Average': '2x', '> 1.5x Average': '1.5x', 'Any': 'any' },
@@ -22,7 +31,7 @@ const FILTER_MAP = {
     price: { '> MA200': 'above_ma200', '> MA50': 'above_ma50', '< MA200': 'below_ma200', 'Any': 'any' },
 };
 
-const SIGNAL_STYLE = {
+const SIGNAL_STYLE: Record<string, { bg: string; color: string }> = {
     'Strong Buy': { bg: 'rgba(52,211,153,0.15)', color: 'var(--color-green)' },
     'Buy': { bg: 'rgba(96,165,250,0.15)', color: 'var(--color-blue)' },
     'Neutral': { bg: 'rgba(107,112,132,0.15)', color: 'var(--color-text-sub)' },
@@ -39,7 +48,7 @@ export default function ScreenerPage() {
         macd: 'Buy Signal',
         price: '> MA200',
     });
-    const [results, setResults] = useState([]);
+    const [results, setResults] = useState<ScreenerResult[]>([]);
     const [loading, setLoading] = useState(false);
     const [hasRun, setHasRun] = useState(false);
     const [error, setError] = useState('');
@@ -84,7 +93,7 @@ export default function ScreenerPage() {
         URL.revokeObjectURL(url);
     };
 
-    const handleRowClick = (r) => {
+    const handleRowClick = (r: ScreenerResult) => {
         // bd:shotockviz-a5g — the screener API returns `price` and `chg` as
         // pre-formatted STRINGS (backend/api/routes/screener.py), so the old
         // `r.price.toFixed(2)` threw a TypeError on every row click, before
@@ -203,6 +212,10 @@ export default function ScreenerPage() {
                             ) : (
                                 results.map((r) => {
                                     const sig = SIGNAL_STYLE[r.signal] || SIGNAL_STYLE['Neutral'];
+                                    // rsi arrives as number or a pre-formatted string
+                                    // (same dual shape as price/chg — see handleRowClick);
+                                    // only a numeric rsi drives the color thresholds.
+                                    const rsiNum = typeof r.rsi === 'number' ? r.rsi : null;
                                     return (
                                         <tr
                                             key={r.sym}
@@ -216,7 +229,7 @@ export default function ScreenerPage() {
                                             <td className="px-4 py-3" style={{ color: 'var(--color-text-sub)' }}>{r.name}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums">{r.price}</td>
                                             <td className="px-4 py-3 font-medium mono" style={{ color: r.up ? 'var(--color-green)' : 'var(--color-red)' }}>{r.up ? '▲' : '▼'} {r.chg}</td>
-                                            <td className="px-4 py-3 font-medium tabular-nums" style={{ color: r.rsi < 30 ? 'var(--color-green)' : r.rsi > 70 ? 'var(--color-red)' : 'var(--color-text)' }}>
+                                            <td className="px-4 py-3 font-medium tabular-nums" style={{ color: rsiNum != null && rsiNum < 30 ? 'var(--color-green)' : rsiNum != null && rsiNum > 70 ? 'var(--color-red)' : 'var(--color-text)' }}>
                                                 {typeof r.rsi === 'number' ? r.rsi.toFixed(1) : r.rsi}
                                             </td>
                                             <td className="px-4 py-3" style={{ color: r.macd === 'Buy' || r.macd === 'Strong Buy' ? 'var(--color-green)' : r.macd === 'Sell' ? 'var(--color-red)' : 'var(--color-text-sub)' }}>{r.macd}</td>

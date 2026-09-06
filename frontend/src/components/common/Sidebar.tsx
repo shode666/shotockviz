@@ -99,8 +99,8 @@ export default function Sidebar() {
     const STAY_PUT_ROUTES = ['/news', '/screener', '/alerts', '/portfolio', '/dashboard'];
 
     // Watchlist state
-    const [watchlistId, setWatchlistId] = useState(null);
-    const [symbols, setSymbols] = useState([]);
+    const [watchlistId, setWatchlistId] = useState<number | string | null>(null);
+    const [symbols, setSymbols] = useState<string[]>([]);
     const [names, setNames] = useState<Record<string, { name: string; market?: string | null }>>({});
 
     // Price polling via shared hook
@@ -157,7 +157,7 @@ export default function Sidebar() {
             } else {
                 const first = lists[0];
                 setWatchlistId(first.id);
-                setSymbols(first.items?.map((i) => i.symbol) ?? []);
+                setSymbols(first.items?.map((i: { symbol: string }) => i.symbol) ?? []);
             }
         } catch { /* ignore */ }
     }, [isAuthenticated]);
@@ -194,7 +194,7 @@ export default function Sidebar() {
     // indices+guest poll (indicesData) instead.
     const getQuote = (sym: string) => (isAuthenticated ? prices[sym] : indicesData[sym]);
 
-    const handleSelect = (sym, name) => {
+    const handleSelect = (sym: string, name: string) => {
         const p = getQuote(sym);
         setSelectedStock({
             sym, name,
@@ -232,7 +232,7 @@ export default function Sidebar() {
         });
     }, [prices]);
 
-    const handleRemove = async (sym) => {
+    const handleRemove = async (sym: string) => {
         if (!watchlistId || deletingSyms.has(sym)) return;
 
         // Optimistic remove — feels instant
@@ -295,7 +295,9 @@ export default function Sidebar() {
             name: names[sym]?.name || sym,
             market: names[sym]?.market || null,
         }))
-        : GUEST_SYMBOLS;
+        // Same shape as the authenticated branch — guest rows have no
+        // market metadata (prices come from the poll via getQuote, not here).
+        : GUEST_SYMBOLS.map(({ sym, name }) => ({ sym, name, market: null as string | null }));
 
     return (
         <aside
@@ -385,7 +387,9 @@ export default function Sidebar() {
                     const isActive = selectedStock?.sym === s.sym && isChart;
                     const isFund = s.market === 'FUND' || q?.type === 'fund_nav';
                     const isPending = pendingSyms.has(s.sym) && !q;
-                    const up = q ? q.change >= 0 : true;
+                    // change can be absent on a quote — default to "up" like the
+                    // no-quote row and handleSelect's `(p?.change ?? 0) >= 0` above.
+                    const up = q ? (q.change ?? 0) >= 0 : true;
                     const price = q?.price != null ? q.price.toFixed(2) : '—';
                     const pct = q?.change_pct != null && q.change_pct !== 0
                         ? `${q.change_pct >= 0 ? '+' : ''}${q.change_pct.toFixed(2)}%`
