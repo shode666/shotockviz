@@ -8,6 +8,148 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### alerts + portfolio — the night the silent failures got found (2026-09-05/06)
+
+`bd:shotockviz-*` · 43 commits `34136c2` → `6a54191` · 48 issues closed.
+Per-issue detail is in the beads (`bd list`, `bd show <id>`); this records
+the things that were quietly broken and are not any more.
+
+**Price alerts had never fired.** `alert_checker.py` looked up
+`cache:quote:{sym}`; the cache writes `quote:{sym}`. The prefixes never
+matched, so every alert was skipped every cycle — no log, no error. 0
+keys matched the read pattern against 31 that existed. The comment above
+the line asserted the opposite, and `CLAUDE.md` claimed the cache-key
+class of bug was already fixed. `sr_proximity_digest.py` had the same
+bug and had been reading a price of 0 for every symbol. Both now go
+through `cache_keys.quote()`, a cache miss logs instead of skipping
+silently, and a regression test fails if the key is ever hand-built.
+
+**Five of the seven alert types could not fire either.** The UI offered
+RSI, Golden/Death Cross and Volume Spike, the API accepted them, and the
+checker evaluated only Price Above/Below. All seven work now, sharing
+the screener's indicator maths rather than a second copy. On the way it
+turned out `_resolve_alert_type` mangled the UI's own "RSI Below" label
+into an invalid enum value, so an RSI alert created through the real UI
+would have 422'd anyway.
+
+**The default alert channel delivered nothing.** `in_app` was the
+default and the checker returned early for anything but Telegram; the
+only delivery was a 5-second toast over a WebSocket that was dead in
+production. Telegram is now the channel, existing rows migrated.
+
+**WebSockets were dead everywhere.** Two `header_up` lines on Caddy's
+`/api/ws/*` proxy broke the upgrade on Caddy 2.11 — 404 through Caddy,
+101 straight to the backend. And even with that fixed, no price update
+could ever have arrived: the client never sent a `subscribe` frame. Both
+fixed; the Caddy change is committed but **not deployed**, so production
+is still affected.
+
+**The portfolio invented losses.** An unpriced holding contributed zero
+to value and its full cost to cost — a fabricated loss equal to the
+whole position, in the normal state after 16:30 ICT. Three surfaces
+computed the same book by three different rules with three different
+currency treatments, one of which added THB and USD raw. Commission was
+stored and never read. There is now one valuation fold, one FX rule
+(value at the current rate, cost at each lot's recorded rate, unknown
+reported as unknown and never as zero), realized P&L, and a
+`THBUSD=X` reading that derives its own orientation instead of trusting
+a comment.
+
+**A cleanup script nearly deleted nine real funds.** The bare-ticker
+guard used `startswith` against fund-*house* prefixes, so `TISCOGF`,
+`SCBLT1` and `KFLTF70` all counted as "ambiguous". Caught in a dry run,
+before anything was applied, because the script imported the real
+criterion instead of restating it. Now exact-match on the four strings
+that genuinely are both a SET ticker and a fund house.
+
+Also: `TransactionUpdate.date` resolved to `NoneType` (the field name
+shadowed the type), so no transaction date could be edited; clicking a
+screener result threw a `TypeError` and did nothing; the WebSocket was
+unauthenticated and broadcast every user's alerts to every socket; guest
+quote polling was unmetered; mobile had no way to reach Login, News or
+Settings, and later no way to log out.
+
+Tests: backend 250 → 494 passing, frontend unit 60 → 110, and the E2E
+suite went from 76 known-red to ~40, with the remainder triaged by cause
+in `bd:shotockviz-c73` rather than left as noise.
+
+Not deployed. Production still runs the pre-session code.
+
+
+### security — WS handshake auth + per-user alerts, quote rate limit, prod CSP hardening (2026-09-05)
+
+`bd:shotockviz-pls` · `/api/ws/prices` now requires a valid access JWT
+(`?token=`, same token api.js uses for REST; invalid/missing → HTTP 403 /
+close 1008). `alert_triggered` is no longer `broadcast_all`: the payload
+carries `user_id` from `alert_checker` and the broadcaster delivers it only
+to the owning user's sockets (missing `user_id` → dropped, fail closed).
+`data_ready` stays broadcast (no user data). Client subscribe/unsubscribe
+flow (commit `0b7e47b`) unchanged and re-verified live.
+
+`bd:shotockviz-3du` / CHRIS-11 · quote endpoints (`/api/v1/stocks/quotes`,
+`/{sym}/quote`) — the only unauthenticated routes that can trigger external
+fetches — are now rate-limited per IP: anonymous 30/min, valid-bearer
+120/min (tier by JWT signature, separate Redis buckets). 429 uses the
+standard envelope + `Retry-After`. Other endpoints deliberately unmetered
+(single-user; no external amplification).
+
+`bd:shotockviz-30l` · prod CSP (`caddy/Caddyfile`): dropped `'unsafe-eval'`
+(0 eval in built client bundle) and `apis.google.com` (unreferenced; GSI
+needs only accounts.google.com), dropped cleartext `ws:` from connect-src,
+added `base-uri`/`object-src`/`form-action`/`frame-ancestors`/`worker-src`;
+`X-XSS-Protection` set to `0` (deprecated auditor). `script-src
+'unsafe-inline'` kept — React streaming/TanStack Start inline hydration
+scripts; nonce would need app-level `router.options.ssr.nonce`. `caddy
+validate` green on v2.11.4; **live enforcement verifiable only on deploy**
+(check Google sign-in + charts + WS in DevTools console).
+
+Tests: `backend/tests/test_ws_auth.py` + `test_quotes_rate_limit.py`
+(18 pass) · `frontend/src/utils/wsUrl.ts` + test.
+
+### frontend — mobile: /login, /news, /settings reachable via a "More" tab + bottom sheet (2026-09-05)
+
+`bd:shotockviz-282` (P2) · IA decided by Uma. Below `md` there was no route to
+Login, News or Settings (Navbar is `hidden md:flex`; the tab bar carried only
+the 5 core trading tabs). Fix: a 6th "More" tab (HIG More-tab pattern) opens a
+`glass-dropdown` bottom sheet with News, Settings, and — for guests only —
+Login. The 5 trading tabs are untouched in order and position. Deliberately
+NOT promoted to tabs: News/Settings (not part of the mobile trading loop for
+this persona; REQUIREMENTS.md keeps mobile as a monitoring surface). a11y:
+`aria-expanded`/`aria-controls` on the trigger, `aria-current="page"` on sheet
+links, Escape closes + returns focus to the trigger, focus moves to the first
+item on open, no focus trap, backdrop tap dismisses, all targets ≥ 44 px, sheet
+never obscured by the tab bar (WCAG 2.4.11). Pure logic in
+`utils/mobileNav.ts` + tests (80/80). Verified in-browser at 375×667.
+
+`bd:shotockviz-2w8` (CRITICAL) · `bd:shotockviz-msg` (P1) · `bd:shotockviz-fww` (P1).
+New `backend/services/portfolio_service.py` is now the single holdings +
+valuation computation behind both `/portfolio/analytics` and the dashboard
+summary. Accounting rules are stated in its module docstring.
+
+- **2w8** a position with no usable quote is excluded from **both** sides of
+  the total instead of contributing 0 value against its full cost. One
+  uncached Thai holding after 16:30 ICT used to understate the header P&L by
+  that position's entire market value. A cached price of `0`/negative/
+  non-numeric now counts as "no price", not as a worthless position, and the
+  old `if current_value:` / `if unrealized_pl:` truthiness tests (which also
+  swallowed a legitimate `0.0`) are gone.
+- **msg** `dashboard.py` no longer keeps its own copy of the fold. Its
+  `max(qty, 1)` divide-by-zero guard silently halved avg cost for any
+  fractional position; it is replaced by an explicit qty guard, and the
+  `0.001` vs `1e-6` "active" thresholds are unified on `1e-6`.
+- **fww** commission is finally read: BUY fees are capitalised into cost
+  basis (so `avg_cost` is the real breakeven), SELL fees accumulate on the
+  realized side and are never charged to the shares still held. Realized P&L
+  itself is still not reported (Tara N9, separate bead).
+
+No API response shape change; no frontend change. Money stays `Float` — the
+Decimal migration is a separate bead (Tara N8).
+Tests: `backend/tests/test_portfolio_valuation.py` (partially-cached book,
+fee-bearing buy+sell, dashboard/portfolio agreement). **Not yet executed** —
+the authoring session had no shell; run
+`docker-compose -f docker-compose.dev.yml exec -T backend sh -c "cd /app && python -m pytest tests/ -q -m 'not integration'"`
+before landing.
+
 ### ui — UI honesty pass: removed controls that did nothing, fixed 15 small lies (2026-09-05)
 
 `bd:shotockviz-bct` · `34136c2` → `7f8a7d6` · full record in
