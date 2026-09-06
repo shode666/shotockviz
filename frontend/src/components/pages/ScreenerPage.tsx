@@ -1,15 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { SlidersHorizontal, Play, Loader2, Download } from 'lucide-react';
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
 import { resultsToCsv, type ScreenerRow } from '@/utils/csv';
+import { formatCachedAge } from '@/utils/cachedValueAge';
 
 // Screener API row = the CSV row shape + `up` (backend/api/routes/screener.py
 // sends the direction flag; the CSV export doesn't include it).
 interface ScreenerResult extends ScreenerRow {
     up: boolean; // always sent — backend/api/routes/screener.py:190
     pct?: string | number | null; // not in the payload today; read defensively in handleRowClick
+    // bd:shotockviz-f14.1 — epoch SECONDS of the newest OHLCV bar this
+    // row's indicators were computed from (backend/api/routes/screener.py
+    // `_evaluate_symbol`, `bars[-1].time_unix`). Always present on a real
+    // row today (the function only returns a dict at all when it had
+    // >=26 bars to compute from) — optional here defensively in case an
+    // older cached response or a different code path omits it.
+    ts?: number | null;
 }
 
 const FILTER_OPTIONS: Record<string, string[]> = {
@@ -52,6 +60,18 @@ export default function ScreenerPage() {
     const [loading, setLoading] = useState(false);
     const [hasRun, setHasRun] = useState(false);
     const [error, setError] = useState('');
+
+    // bd:shotockviz-f14.1 — re-render every 30s purely so an already-known
+    // row `ts`'s *displayed* age advances between screener runs, without
+    // fabricating anything: same pattern as RightPanel.tsx's `now` state
+    // for the fundamentals field (bd:shotockviz-f14) — the value shown is
+    // still the real per-row bar timestamp's age, just recomputed
+    // periodically, NOT a wall clock rendered as the update time.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 30_000);
+        return () => clearInterval(t);
+    }, []);
 
     const handleRunScreen = async () => {
         setLoading(true);
@@ -227,7 +247,18 @@ export default function ScreenerPage() {
                                         >
                                             <td className="px-4 py-3 font-semibold" style={{ color: 'var(--color-accent-text)' }}>{r.sym}</td>
                                             <td className="px-4 py-3" style={{ color: 'var(--color-text-sub)' }}>{r.name}</td>
-                                            <td className="px-4 py-3 font-medium tabular-nums">{r.price}</td>
+                                            <td className="px-4 py-3 font-medium tabular-nums">
+                                                {r.price}
+                                                {/* bd:shotockviz-f14.1 — the indicator columns (RSI/MACD/Vol/Signal)
+                                                    in this row are computed from OHLCV bars whose newest bar is
+                                                    `r.ts` old, not from a live quote fetched at request time. Each
+                                                    symbol's bars can be independently stale (on_demand_listener.py
+                                                    writes them per-symbol on cache miss), so this is per-row, not a
+                                                    single header line for the whole table. */}
+                                                <div className="text-[9px] font-normal" style={{ color: 'var(--color-text-sub)' }}>
+                                                    ข้อมูล {formatCachedAge(r.ts, now).label}
+                                                </div>
+                                            </td>
                                             <td className="px-4 py-3 font-medium mono" style={{ color: r.up ? 'var(--color-green)' : 'var(--color-red)' }}>{r.up ? '▲' : '▼'} {r.chg}</td>
                                             <td className="px-4 py-3 font-medium tabular-nums" style={{ color: rsiNum != null && rsiNum < 30 ? 'var(--color-green)' : rsiNum != null && rsiNum > 70 ? 'var(--color-red)' : 'var(--color-text)' }}>
                                                 {typeof r.rsi === 'number' ? r.rsi.toFixed(1) : r.rsi}

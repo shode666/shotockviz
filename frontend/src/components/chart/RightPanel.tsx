@@ -79,6 +79,13 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
 
     // News/Fundamentals tab state (moved from BottomPanel)
     const [news, setNews] = useState<NewsItem[]>([]);
+    // bd:shotockviz-f14.1 — epoch SECONDS the news LIST (not any one
+    // article) was fetched — api/routes/stocks/news_events.py's `ts`,
+    // stamped in workers/news_fetcher.py at write time. A different fact
+    // from each article's own `published_at` (rendered per-card below via
+    // `n.published_at`) — this is "how stale is this list", not "how old
+    // is this headline". `null` when genuinely unknown.
+    const [newsListTs, setNewsListTs] = useState<number | null>(null);
     const [holding, setHolding] = useState<Holding | null>(null);
     const [contentLoading, setContentLoading] = useState(false);
 
@@ -174,8 +181,12 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
     useEffect(() => {
         if (!selectedStock?.sym) return;
         setContentLoading(true);
-        stockService.getNews(selectedStock.sym).catch(() => ({ data: [] })).then((newsRes: any) => {
-            setNews(newsRes.data || []);
+        // bd:shotockviz-f14.1 — response shape is
+        // {"articles": [...], "ts": epoch|null}
+        // (backend/api/routes/stocks/news_events.py), not a bare array.
+        stockService.getNews(selectedStock.sym).catch(() => ({ data: { articles: [], ts: null } })).then((newsRes: any) => {
+            setNews(newsRes.data?.articles || []);
+            setNewsListTs(newsRes.data?.ts ?? null);
             setContentLoading(false);
         });
     }, [selectedStock?.sym]);
@@ -432,6 +443,13 @@ export default function RightPanel({ selectedStock, isOpen, onClose }: RightPane
                                 <>
                                     {tab === 'news' && (
                                         <div className="flex flex-col gap-1.5">
+                                            {/* bd:shotockviz-f14.1 — list-level fetch age, distinct from
+                                                each article's own published date shown per-card below.
+                                                Shown even when empty: a genuinely-empty result is still a
+                                                real check worth dating. */}
+                                            <div className="text-[10px] mb-1" style={{ color: 'var(--color-text-sub)' }}>
+                                                ตรวจสอบ{formatCachedAge(newsListTs, now).label}
+                                            </div>
                                             {news.length === 0 ? (
                                                 <div className="text-[11px] text-center mt-4" style={{ color: 'var(--color-text-sub)' }}>ไม่มีข่าวล่าสุด</div>
                                             ) : (

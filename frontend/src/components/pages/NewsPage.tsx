@@ -12,6 +12,7 @@ import { Newspaper, ThumbsUp, ThumbsDown, Search, X, RefreshCw, Loader2 } from '
 import useAppStore from '@/store/appStore';
 import stockService from '@/services/stockService';
 import { timeAgo, parseSymbol, MARKET_COLORS } from '@/utils/formatters';
+import { formatCachedAge } from '@/utils/cachedValueAge';
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
@@ -97,7 +98,24 @@ export default function NewsPage() {
     const [fetchSym, setFetchSym]       = useState('');
     const [news, setNews]               = useState<any[]>([]);
     const [loading, setLoading]         = useState(false);
+    // bd:shotockviz-f14.1 — epoch SECONDS this news LIST was fetched
+    // (api/routes/stocks/news_events.py's `ts`, stamped in
+    // workers/news_fetcher.py at write time). Deliberately a separate
+    // fact from each article's own `published_at` (already rendered via
+    // `timeAgo` in NewsCard below) — this answers "how stale is this
+    // list", not "how old is this headline". `null` when genuinely
+    // unknown (cache miss, or a legacy pre-bd cache entry).
+    const [newsListTs, setNewsListTs]   = useState<number | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
+
+    // Re-render every 30s so the displayed list age advances between
+    // fetches — same pattern as RightPanel.tsx's fundamentals `now`
+    // state (bd:shotockviz-f14). Real ts, just recomputed periodically.
+    const [now, setNow] = useState(() => Date.now());
+    useEffect(() => {
+        const t = setInterval(() => setNow(Date.now()), 30_000);
+        return () => clearInterval(t);
+    }, []);
 
     // ── Autocomplete ────────────────────────────────────────────────────────
     const [acResults, setAcResults]   = useState<any[]>([]);
@@ -115,14 +133,21 @@ export default function NewsPage() {
         setFetchSym(sym);
         setLoading(true);
         setNews([]);
+        setNewsListTs(null);
         try {
             const { data } = await stockService.getNews(sym);
-            setNews((data ?? []).map((n: any) => ({
+            // bd:shotockviz-f14.1 — response shape is
+            // {"articles": [...], "ts": epoch|null}
+            // (backend/api/routes/stocks/news_events.py), not a bare array.
+            const articles = data?.articles ?? [];
+            setNewsListTs(data?.ts ?? null);
+            setNews(articles.map((n: any) => ({
                 ...n,
                 sentiment: n.sentiment || sentimentFromTitle(n.title),
             })));
         } catch {
             setNews([]);
+            setNewsListTs(null);
         } finally {
             setLoading(false);
         }
@@ -322,6 +347,14 @@ export default function NewsPage() {
                         <span className="text-[10px] font-bold px-2 py-0.5 rounded-md"
                             style={{ background: 'rgba(124,92,252,0.15)', color: 'var(--color-accent-text)' }}>
                             {fetchSym}
+                        </span>
+                        {/* bd:shotockviz-f14.1 — "checked X ago" (list-level
+                            fetch time), NOT the same fact as each headline's
+                            own published date shown per-card below. Rendered
+                            even when news.length === 0: a genuinely-empty
+                            result is still a real check worth dating. */}
+                        <span className="text-[10px]" style={{ color: 'var(--color-text-sub)' }}>
+                            · ตรวจสอบ{formatCachedAge(newsListTs, now).label}
                         </span>
                         {news.length > 0 && (
                             <div className="flex items-center gap-1.5 ml-auto">

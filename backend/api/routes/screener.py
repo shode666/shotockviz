@@ -230,6 +230,18 @@ def _evaluate_symbol(
         "chg": f"{'+' if up else ''}{chg_pct:.2f}%",
         "up": up,
         "signal": signal,
+        # bd:shotockviz-f14.1 — every indicator above is computed from
+        # `bars`, which the guard at the top of this function guarantees
+        # is non-empty (>= 26) whenever we reach here. `bars[-1].time_unix`
+        # is the newest bar actually used (`_fetch_symbol_bars` orders
+        # ascending oldest->newest, matching `closes[-1] == close_now`) —
+        # this is the real stored date of the data (midnight UTC for
+        # daily bars, `models/ohlcv.py`'s own docstring), not the HTTP
+        # request time and not a TTL guess. Unlike fundamentals.py's
+        # TTL-inferred `ts` (weaker signal, no stamped fact to read), this
+        # is the literal fact the row was computed from, so it is never
+        # None for a row that is actually returned.
+        "ts": int(bars[-1].time_unix),
     }
 
 

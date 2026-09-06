@@ -96,9 +96,17 @@ def _fetch_news_for_symbol(symbol_clean: str, redis_client) -> int:
             continue
 
     # Cache regardless of count (empty = no news, which is valid)
+    # bd:shotockviz-f14.1 — was a bare `items` list with no fetch-time
+    # stamp, so the read side (api/routes/stocks/news_events.py) had
+    # nothing to derive a list-level as-of from — only each article's own
+    # `published_at` (a different fact: when the headline was published,
+    # not when THIS cache entry was fetched). Wrap with a real `ts`,
+    # stamped here at write time same as `cache_publisher.py`'s
+    # `cache_and_publish_quotes` does for quotes.
     cache_key = cache_keys.news(symbol_clean)
+    payload = {"articles": items, "ts": int(time.time())}
     try:
-        redis_client.setex(cache_key, NEWS_CACHE_TTL, json.dumps(items, default=str))
+        redis_client.setex(cache_key, NEWS_CACHE_TTL, json.dumps(payload, default=str))
     except Exception as e:
         logger.warning("Redis cache write failed", symbol=symbol_clean, error=str(e))
 

@@ -34,6 +34,14 @@ async def get_stock_news(
     Cache is populated by:
       1. Celery beat: prefetch_news (every 30 min for watched symbols)
       2. On-demand: fetch_news_on_demand (for symbols not in watchlists)
+
+    bd:shotockviz-f14.1 — response shape is `{"articles": [...], "ts": ...}`,
+    not a bare list. `ts` is the epoch seconds THIS cache entry was
+    fetched (`workers/news_fetcher.py`'s `_fetch_news_for_symbol`,
+    stamped at write time) — a different fact from each article's own
+    `published_at`, which is the headline's own timestamp. Do not conflate
+    the two: `ts` answers "how stale is this list", `published_at`
+    answers "how old is this specific headline".
     """
     # ── 1. Clean symbol for cache lookup ──────────────────────────────────
     raw = symbol.upper().strip()
@@ -45,7 +53,7 @@ async def get_stock_news(
     clean = re.sub(r"[^A-Z0-9/\- ]", "", clean)
 
     if not clean or len(clean) < 1:
-        return []
+        return {"articles": [], "ts": None}
 
     # ── 2. Pure-read: Redis cache only ────────────────────────────────────
     cache_key = f"news:{clean}"
@@ -53,7 +61,14 @@ async def get_stock_news(
         r = await stock_service.get_redis()
         cached = await r.get(cache_key)
         if cached:
-            return _json.loads(cached)
+            parsed = _json.loads(cached)
+            # bd:shotockviz-f14.1 — a cache entry written before this bd
+            # (bare list, no `ts`) can still be live within its 30min TTL
+            # right after deploy. Handle it honestly rather than crash or
+            # silently invent a `ts` for it: no stamped time -> None.
+            if isinstance(parsed, list):
+                return {"articles": parsed, "ts": None}
+            return {"articles": parsed.get("articles", []), "ts": parsed.get("ts")}
     except Exception:
         pass
 
@@ -69,8 +84,9 @@ async def get_stock_news(
     except Exception:
         pass
 
-    # Return empty — frontend will retry or show "loading"
-    return []
+    # Return empty — frontend will retry or show "loading". No ts: nothing
+    # was fetched yet, so there is nothing to date.
+    return {"articles": [], "ts": None}
 
 
 @router.get("/{symbol}/events")
