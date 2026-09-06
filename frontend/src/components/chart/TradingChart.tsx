@@ -4,10 +4,14 @@ import { createChart, CandlestickSeries, LineSeries, AreaSeries, HistogramSeries
 import useAppStore from '@/store/appStore';
 import { calculateSMA, calculateEMA, calculateRSI, calculateMACD, calculateBollingerBands, calculateVWAP, isVwapAvailable } from '@/utils/indicators';
 import { useChartData } from '@/hooks/useChartData';
-import { useSrLevels } from '@/hooks/useSrLevels';
 import { syncSrPriceLines } from '@/utils/syncSrPriceLines';
 
-export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null, showSrLevels = false }) {
+// bd:shotockviz-474 — srLevels now comes from a prop, not this component's
+// own useSrLevels() call. ChartPage.tsx owns that hook instead (single
+// fetch shared with the "your levels" delete list + the add-level modal's
+// refetch-on-success — three consumers of one fetch beats three fetches
+// that could disagree with each other after a create/delete).
+export default function TradingChart({ timeframe = '1D', chartType = 'candlestick', activeIndicators = [], onCrosshairMove = null, onLoadingChange = null, showSrLevels = false, srLevels = [] }) {
     const containerRef = useRef(null);
     const chartRef = useRef(null);
     const seriesRef = useRef(null);
@@ -15,7 +19,6 @@ export default function TradingChart({ timeframe = '1D', chartType = 'candlestic
     const indicatorsRef = useRef({}); // Store references to indicator series
     const srPriceLinesRef = useRef([]); // Store references to S/R IPriceLine objects (bd:features-2026-09 slice 2)
     const { selectedStock, darkMode } = useAppStore();
-    const { srLevels } = useSrLevels();
 
     // Last computed value for the RSI/MACD strip labels (bd:ux-2026-09 g2 —
     // Uma #4: strips need a label + divider like page-chart.html, not just

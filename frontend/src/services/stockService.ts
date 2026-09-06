@@ -25,6 +25,12 @@ const stockService = {
     screener: (params: Record<string, unknown>) => api.get('/screener', { params }),
     /** bd:features-2026-09 slice 2 — support/resistance price levels for a symbol */
     getSrLevels: (symbol: string) => api.get(`/sr-levels/${symbol}`),
+    /** bd:shotockviz-474 — create a user-owned horizontal S/R level. Requires auth
+     * (interceptor in api.ts attaches the token automatically when present). */
+    createSrLevel: (symbol: string, body: { price: number; level_type: 'support' | 'resistance'; tag?: string }) =>
+        api.post(`/sr-levels/${symbol}`, body),
+    /** bd:shotockviz-474 — delete a level the caller owns. */
+    deleteSrLevel: (id: number) => api.delete(`/sr-levels/${id}`),
 };
 
 export { stockService };

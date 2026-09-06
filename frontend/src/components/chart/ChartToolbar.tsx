@@ -1,4 +1,4 @@
-import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3 } from 'lucide-react';
+import { CandlestickChart, TrendingUp, AreaChart, Loader2, Rows3, Plus, X } from 'lucide-react';
 import { parseSymbol, MARKET_COLORS } from '@/utils/formatters';
 import { isVwapAvailable } from '@/utils/indicators';
 
@@ -21,6 +21,14 @@ export default function ChartToolbar({
     isLoading = false,
     showSrLevels = false,
     onToggleSrLevels,
+    // bd:shotockviz-474 — user-owned horizontal S/R levels. `isAuthenticated`
+    // gates the "+ Level" control the same honest way F5 gated VWAP on
+    // non-intraday timeframes: visible, but disabled + a title that says why,
+    // never a button that looks clickable and silently does nothing.
+    isAuthenticated = false,
+    onAddLevel,
+    userLevels = [],
+    onDeleteLevel,
 }) {
     return (
         <div
@@ -144,6 +152,56 @@ export default function ChartToolbar({
                 <Rows3 size={12} />
                 S/R
             </button>
+
+            {/* Add horizontal level — bd:shotockviz-474. Logged-out users get
+                the disabled+title pattern (F5 precedent), not a hidden
+                control — the button existing at all is honest about the
+                feature existing; disabled+title is honest about who can use
+                it right now. */}
+            <button
+                onClick={() => isAuthenticated && onAddLevel?.()}
+                disabled={!isAuthenticated}
+                aria-disabled={!isAuthenticated}
+                title={isAuthenticated ? 'Add a horizontal support/resistance level' : 'Sign in to add a level'}
+                aria-label="Add horizontal level"
+                className={`flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg whitespace-nowrap transition-colors ${!isAuthenticated ? 'opacity-40 cursor-not-allowed btn-outline border-violet-500/30 text-violet-400' : 'cursor-pointer btn-outline border-violet-500/30 text-violet-400 hover:bg-violet-500/20'}`}
+            >
+                <Plus size={12} />
+                Level
+            </button>
+
+            {/* Your levels — only the caller's own user_created rows are ever
+                in this list (GET /sr-levels/{symbol} never returns anyone
+                else's, see backend/api/routes/sr_levels.py), so every chip
+                here is deletable by definition; no per-row ownership check
+                needed client-side. Rendered regardless of showSrLevels — the
+                management list and the on-chart visibility toggle are two
+                different questions (bd:shotockviz-474). */}
+            {userLevels.length > 0 && (
+                <div className="flex gap-1 items-center flex-wrap" aria-label="Your horizontal levels">
+                    {userLevels.map((lvl) => (
+                        <span
+                            key={lvl.id}
+                            className="badge text-[11px] flex items-center gap-1"
+                            style={{
+                                background: lvl.level_type === 'support' ? 'rgba(234,179,8,0.15)' : 'rgba(217,70,239,0.15)',
+                                color: lvl.level_type === 'support' ? '#eab308' : '#d946ef',
+                            }}
+                        >
+                            {lvl.level_type === 'support' ? 'S' : 'R'} {lvl.price}
+                            <button
+                                onClick={() => onDeleteLevel?.(lvl.id)}
+                                aria-label={`Delete ${lvl.level_type} level at ${lvl.price}`}
+                                title="Delete this level"
+                                className="cursor-pointer"
+                                style={{ display: 'inline-flex' }}
+                            >
+                                <X size={10} />
+                            </button>
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

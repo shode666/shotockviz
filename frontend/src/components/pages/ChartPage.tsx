@@ -1,9 +1,15 @@
 import { useCallback, useRef, useState } from 'react';
 import { PanelRight } from 'lucide-react';
+import toast from 'react-hot-toast';
 import useAppStore from '@/store/appStore';
+import { useAuthStore } from '@/store/authStore';
 import TradingChart from '@/components/chart/TradingChart';
 import ChartToolbar from '@/components/chart/ChartToolbar';
 import RightPanel from '@/components/chart/RightPanel';
+import AddSrLevelModal from '@/components/chart/AddSrLevelModal';
+import { useSrLevels } from '@/hooks/useSrLevels';
+import stockService from '@/services/stockService';
+import { extractErrorMessage } from '@/services/apiErrorHandler';
 
 interface CrosshairData {
     open?: number;
@@ -41,6 +47,31 @@ export default function ChartPage() {
     const [isChartLoading, setIsChartLoading] = useState(false);
     const [rightPanelOpen, setRightPanelOpen] = useState(false);
     const rightPanelToggleRef = useRef<HTMLButtonElement>(null);
+    const [addLevelOpen, setAddLevelOpen] = useState(false);
+
+    const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+    // bd:shotockviz-474 — single fetch shared by the chart's drawn lines, the
+    // toolbar's "your levels" delete chips, and the add-modal's refetch.
+    const { srLevels, refetch: refetchSrLevels } = useSrLevels();
+    const userLevels = srLevels.filter((lvl) => lvl.source === 'user_created');
+
+    // bd:shotockviz-474 — /sr-levels is in api.ts's SILENT_PATHS (the GET
+    // decoration-fetch precedent), so the global interceptor never toasts
+    // for this URL. A delete the user clicked is not a silent decoration
+    // fetch — surface real failures explicitly, same as PortfolioPage's
+    // delete-transaction handler. A 404 (already gone) is not an error from
+    // the user's point of view, just resync silently.
+    const handleDeleteLevel = useCallback(async (id: number) => {
+        try {
+            await stockService.deleteSrLevel(id);
+        } catch (err: any) {
+            if (err?.response?.status !== 404) {
+                toast.error(extractErrorMessage(err));
+            }
+        } finally {
+            refetchSrLevels();
+        }
+    }, [refetchSrLevels]);
 
     // Single close path for the X button, Escape and the mobile backdrop
     // (all three call RightPanel's onClose prop) — bd:ux-2026-09 Chris review
@@ -69,6 +100,10 @@ export default function ChartPage() {
                     isLoading={isChartLoading}
                     showSrLevels={showSrLevels}
                     onToggleSrLevels={() => setShowSrLevels((v) => !v)}
+                    isAuthenticated={isAuthenticated}
+                    onAddLevel={() => setAddLevelOpen(true)}
+                    userLevels={userLevels}
+                    onDeleteLevel={handleDeleteLevel}
                 />
 
                 {/* Chart area */}
@@ -80,6 +115,7 @@ export default function ChartPage() {
                         onCrosshairMove={setCrosshair}
                         onLoadingChange={setIsChartLoading}
                         showSrLevels={showSrLevels}
+                        srLevels={srLevels}
                     />
 
                     {/* Crosshair OHLCV overlay */}
@@ -121,6 +157,14 @@ export default function ChartPage() {
             </div>
 
             <RightPanel selectedStock={selectedStock} isOpen={rightPanelOpen} onClose={closeRightPanel} />
+
+            <AddSrLevelModal
+                isOpen={addLevelOpen}
+                onClose={() => setAddLevelOpen(false)}
+                onSuccess={refetchSrLevels}
+                symbol={selectedStock.sym}
+                lastPrice={selectedStock.price != null && Number.isFinite(Number(selectedStock.price)) ? Number(selectedStock.price) : null}
+            />
         </div>
     );
 }
