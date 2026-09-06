@@ -25,6 +25,7 @@ celery_app = Celery(
         "workers.news_fetcher",
         "workers.sr_auto_pivot",
         "workers.sr_proximity_digest",
+        "workers.pipeline_health",
         # V2 workers
         "workers.corporate_actions_fetcher",
         "workers.financials_history_fetcher",
@@ -207,5 +208,20 @@ celery_app.conf.beat_schedule = {
         "task": "workers.sr_proximity_digest.send_sr_proximity_digest",
         "schedule": crontab(hour=19, minute=30),  # 19:30 ICT
         "args": ("us_premarket",),
+    },
+    # bd:shotockviz-5e7 — "nothing tells the user the data pipeline has
+    # died". Plain-interval schedule (seconds), same shape as
+    # "fetch-prices"/"check-alerts" above — NOT a crontab(), so the
+    # ICT-vs-UTC footgun (bd:shotockviz-rwq, this file's big warning
+    # comment above) does not apply here and this entry is deliberately
+    # NOT added to test_beat_schedule_ict.py's EXPECTED_ICT map: that map
+    # only covers crontab(hour=...) wall-clock entries, and this task has
+    # no wall-clock-of-day concept — it runs every N seconds from
+    # whenever celery-beat started, forever, 24/7 by design (see
+    # workers/pipeline_health.py's module docstring for why this
+    # detector needs no market-hours gating at all).
+    "check-pipeline-health": {
+        "task": "workers.pipeline_health.check_pipeline_health",
+        "schedule": 300.0,  # every 5 minutes
     },
 }
