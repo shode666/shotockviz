@@ -39,8 +39,41 @@ def main() -> None:
     if not settings.telegram_bot_token:
         # Don't crash-loop under `restart: unless-stopped` when the token
         # is simply not configured yet (dev bootstrap, CI, etc).
-        logger.warning("TELEGRAM_BOT_TOKEN not set — telegram-bot listener exiting")
-        return
+        logger.warning("TELEGRAM_BOT_TOKEN not set — telegram-bot listener not started")
+        return False
+
+    # bd:shotockviz-zz8 — only ONE process may long-poll a bot token.
+    # python-telegram-bot's `getUpdates` allows a single consumer, so a dev
+    # stack and production sharing one token kill each other's poll in a
+    # loop: 9 `telegram.error.Conflict: terminated by other getUpdates
+    # request` tracebacks in 5 minutes on each side, observed 2026-09-06.
+    # The damage is not only log noise — `/start` is how the trader obtains
+    # their chat id, and whichever instance wins the race answers it, so a
+    # reply can come from a laptop instead of production, or not at all.
+    #
+    # `telegram_is_dry_run` is reused rather than inventing a second switch:
+    # it already means "this environment must not act on the real bot", and
+    # bd:shotockviz-4d9 established it for the OUTBOUND half (sends). This is
+    # the inbound half that chokepoint could not cover. Enforced here rather
+    # than by deleting the service from `docker-compose.dev.yml`, because a
+    # compose-level fix breaks again the moment anyone runs the prod compose
+    # locally — the same reason 4d9 rejected "a rule in CLAUDE.md".
+    #
+    # Returns False rather than exiting the process: under
+    # `restart: unless-stopped` a clean exit is still a restart, and the
+    # container relaunched every ~3 seconds logging this same line forever
+    # (measured on the dev stack before `_idle_forever` below was added).
+    # A service that is deliberately not working should sit still and say so
+    # once, not flap.
+    if settings.telegram_is_dry_run:
+        logger.warning(
+            "telegram-bot listener NOT started — this environment is "
+            "dry-run, so it must not consume the bot's getUpdates stream "
+            "(only one instance may poll a token). Set APP_ENV=production, "
+            "or TELEGRAM_DRY_RUN=false, to poll from here instead.",
+            app_env=settings.app_env,
+        )
+        return False
 
     from telegram import Update
     from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -51,7 +84,23 @@ def main() -> None:
 
     logger.info("telegram-bot listener starting (long polling)")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
+    return True
+
+
+def _idle_forever() -> None:
+    """Block without polling, so a deliberately-inactive listener stays up.
+
+    bd:shotockviz-zz8 — `main()` returning is not the same as the process
+    ending well: `restart: unless-stopped` restarts a clean exit too, so the
+    container flapped every ~3 seconds and repeated its explanation forever.
+    Idling keeps the one log line meaningful and the container's state honest
+    (up, and deliberately doing nothing) instead of "restarting".
+    """
+    import threading
+
+    threading.Event().wait()
 
 
 if __name__ == "__main__":
-    main()
+    if not main():
+        _idle_forever()
