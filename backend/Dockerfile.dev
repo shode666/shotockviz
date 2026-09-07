@@ -11,8 +11,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+# bd:deps-2026-09 WP-B1 split test/dev-only packages into
+# requirements-dev.txt so the PROD image (backend/Dockerfile) never ships
+# pytest/ruff/mypy. This is the DEV image, and development includes running
+# the suite — but it only ever installed requirements.txt, so
+# `python -m pytest` failed with "No module named pytest" in a freshly built
+# container. It appeared to work all through 2026-09-06 only because pytest
+# had been installed into a long-lived running container by hand; recreating
+# the container on 2026-09-07 lost it and exposed this.
+#
+# requirements-dev.txt starts with `-r requirements.txt`, so this single
+# install covers both and cannot drift from the runtime set.
+COPY requirements.txt requirements-dev.txt ./
+RUN uv pip install --system --no-cache -r requirements-dev.txt
 
 # Source code is volume-mounted in dev
 EXPOSE 8000
