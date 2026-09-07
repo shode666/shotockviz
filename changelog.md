@@ -8,6 +8,60 @@ Rule: **Update this file after every completed task.**
 
 ## [Unreleased]
 
+### The gap list read "21 จาก 23" every evening and taught the reader to ignore it (2026-09-07)
+
+`bd:shotockviz-06z.2`. Production's first real 20:00 ICT gap-list digest
+(`bd:shotockviz-06z`) ended with "มีราคาสด 21 จาก 23 รายการ" — the 2
+missing, SCB.BK and TISCO.BK, are not a pipeline miss: SET closes 16:30
+ICT, `price_fetcher._set_hours` stops fetching Thai symbols at 09:45 UTC
+(16:45 ICT), and the `quote:{symbol}` TTL is 120s, so both keys are
+structurally gone three hours before this digest ever runs. Dropping them
+was already correct (`bd:shotockviz-06z` deliberately refuses to show a
+stale price); reporting them as an undifferentiated "missing" was not —
+every evening, forever, which is exactly how a reader learns a number is
+noise.
+
+- Weighed both AC options and kept `book_count` (watchlist ∪ holdings,
+  already pinned by `TestBookIsWatchlistUnionHoldings`) rather than
+  scoping the book down to US-session symbols only: `services
+  /portfolio_service.py` rules 2/5 and `Allocation.excluded` already
+  establish the house pattern this needed — a total stays intact and
+  every exclusion is named with a reason, never silently dropped — and
+  retracting `book_count`'s tested definition would have bought nothing a
+  reader needs.
+- New `classify_excluded_symbols()` (`gap_list_digest.py`) names every
+  book symbol not in the results as `market_closed` (that symbol's market
+  is shut right now — reuses `alert_symbol_refresher._is_market_open_for`,
+  this codebase's one per-symbol market-hours model, not reimplemented) or
+  `missed` (market open, still no usable quote — the one case actually
+  worth a reader's attention). A symbol excluded only by the trader's own
+  `min_gap_pct` threshold (bd:shotockviz-06z.1) is deliberately named in
+  neither bucket — that is not a missing price.
+- Checked, not assumed: the digest fires at 20:00 ICT = 13:00 UTC exactly,
+  and `_us_hours`'s lower edge (`13 * 60 <= t`) is inclusive, so a genuine
+  US symbol missing its quote at that exact instant is correctly `missed`,
+  never misclassified as `market_closed`.
+- Explicitly NOT fixed by widening the quote TTL or `_set_hours` — that
+  would reintroduce the stale-price problem `bd:shotockviz-06z` exists to
+  avoid.
+- 16 new tests (`test_gap_list_digest.py`), red-proven by `git stash` on
+  the source file (new tests against the old module fail at import —
+  `classify_excluded_symbols` did not exist — and `build_gap_list_message`
+  raised `TypeError` on the new `excluded=` kwarg), then restored and
+  green. Reproduces the exact production scenario as a fixture (23-symbol
+  book, SCB.BK/TISCO.BK missing) via the pure functions, never against
+  live data.
+- Gates: backend **928 passed, 2 skipped** (baseline 912 + 2 skipped + 16
+  new).
+- Observed live on this dev stack while verifying (not caused by this
+  change): celery-beat fired the real `gap-list-digest` task for real at
+  21:24 ICT today against the dev DB's real `telegram_chat_id` —
+  `bd:shotockviz-4d9`'s dry-run guard is what stopped an actual send
+  (`APP_ENV=development` → "TELEGRAM DRY RUN — message NOT sent" in
+  `celery-worker` logs), not the dormant-beat assumption `bd:shotockviz
+  -06z`'s note relied on. Flagged for Oliver as an open question, not
+  fixed here — out of this bd's scope.
+
 ### dev and prod were fighting over the Telegram bot (2026-09-06)
 
 `bd:shotockviz-zz8`. Found by reading production logs after a deploy rather

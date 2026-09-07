@@ -58,13 +58,16 @@ already closed by then; `_us_hours`, `_eu_hours` and the always-on
 Crypto/Overview slots are the ones still refreshing), a SET or Asia symbol in
 the book will have had no writer for hours and its key will simply be gone —
 not stale, absent. That absence is read as "no fresh quote for this symbol
-right now" and the symbol is silently dropped from THIS digest (same
-"no quote cached -> skip symbol" rule `sr_proximity_digest` already
-documents for spec §6) rather than shown with an old number relabelled as a
-live one. If EVERY symbol in a user's book comes back empty this way (e.g.
-the whole book is Thai-only, or `fetch_prices` itself has not reached the US
-slot yet this minute), `build_gap_list_message` says so explicitly instead
-of sending nothing — see its docstring.
+right now" and the symbol is dropped from the PRICED rows (same "no quote
+cached -> skip symbol" rule `sr_proximity_digest` already documents for
+spec §6) rather than shown with an old number relabelled as a live one. It
+is NOT silently dropped from the message as a whole, though — bd:shotockviz
+-06z.2, "Why a symbol is missing, named" below, names it with a reason
+(`market_closed` vs `missed`) instead of letting it vanish into an
+undifferentiated count. If EVERY symbol in a user's book comes back empty
+this way (e.g. the whole book is Thai-only, or `fetch_prices` itself has
+not reached the US slot yet this minute), `build_gap_list_message` says so
+explicitly instead of sending nothing — see its docstring.
 
 One honest limitation this module does NOT resolve: whether yfinance's
 `fast_info.last_price` reflects an actual pre-market trade or is still
@@ -112,6 +115,60 @@ case it is in:
     however many the trader's book happened to produce today", and it
     names that total and points at Settings — otherwise the cap is a
     de-facto, unstated filter, which is exactly what the parent bd forbids.
+
+── Why a symbol is missing, named — bd:shotockviz-06z.2 ─────────────────────
+The footer line below ("มีราคาสด N จาก M รายการ") counts a real gap
+(pipeline missed a symbol whose market is open right now) the exact same
+way it counts a structural one (a SET stock three hours after 16:30 ICT
+close, whose `quote:{symbol}` key expired on its 120s TTL hours before this
+digest ever runs). Collapsing those into one undifferentiated "N of M" was
+the actual defect production found on 2026-09-07 (23-symbol book, SCB.BK
+and TISCO.BK read as "missing" every single evening, which is how a reader
+learns to ignore the number) — NOT the drop itself, which is correct and
+must stay (module docstring above; a stale Thai price must never be shown
+as live).
+
+Two design options were weighed (bd:shotockviz-06z.2 AC): (a) scope the
+book itself down to US-session symbols only, or (b) keep the whole book —
+same `book_count`, same union-of-watchlist-and-holdings semantics
+`bd:shotockviz-06z` already pinned and `TestBookIsWatchlistUnionHoldings`
+already tests — and NAME every excluded symbol with why. (b) won:
+`services/portfolio_service.py` rules 2/5 and its `Allocation.excluded`
+already establish this exact house pattern for "a position that cannot be
+valued is excluded from the total AND named with a reason, never silently
+dropped" — the parent bd's `book_count` denominator IS this digest's
+equivalent of that total, so reusing the same shape (unchanged total,
+named exclusions) is consistent rather than reinventing (a) would need to
+retract `book_count`'s already-tested definition for zero gain: the reader
+still needs to know a symbol existed and was excluded, which (a) would
+just... not say. `classify_excluded_symbols` below is that naming step.
+
+`_is_market_open_for` (imported from `workers.alert_symbol_refresher`, NOT
+reimplemented — that module's docstring calls it out as "this codebase's
+one per-symbol market-hours model", reused already by `sr_proximity_digest`
+and now by this module) answers "is THIS symbol's market open right now":
+
+  * market closed for that symbol at `utc_now` -> `"market_closed"`. This
+    is the SCB.BK/TISCO.BK case: expected, structural, happens every
+    trading evening, and is reported as such rather than as a miss.
+  * market open for that symbol at `utc_now` but it still produced no row
+    in `compute_gap_list`'s results -> `"missed"`. THIS is the case that
+    deserves a reader's attention — a genuine fetch gap during an open
+    session — and it must not be diluted by mixing it into the harmless,
+    daily `market_closed` bucket.
+  * checked at 20:00 ICT = 13:00 UTC exactly, `_us_hours` is inclusive at
+    its lower edge (`13 * 60 <= t`, `price_fetcher.py`), so a genuine US
+    symbol at the instant this digest fires is correctly `"missed"` (never
+    misclassified as `"market_closed"`) if its quote is absent — verified
+    directly, not assumed: `_us_hours(2026-09-07T13:00:00Z)` returns
+    `True` on that Monday.
+
+A symbol whose quote WAS found but is `type == "fund_nav"` is excluded from
+BOTH named buckets — that is `compute_gap_list`'s pre-existing, unrelated
+exclusion (bd:shotockviz-ubw: a NAV has no gap concept, not a freshness
+problem) and stays silent in the message exactly as `TestFundFallback`
+already pins; naming it here under either "closed" or "missed" would be a
+second, disagreeing story about the same symbol.
 """
 from __future__ import annotations
 
@@ -119,6 +176,7 @@ from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from core.logger import get_logger
+from workers.alert_symbol_refresher import _is_market_open_for
 from workers.sr_proximity_digest import is_trading_day_for_slot
 
 logger = get_logger(__name__)
@@ -181,24 +239,10 @@ def compute_gap_list(
     """
     results: list[dict] = []
     for symbol in book_symbols:
-        quote = quotes_by_symbol.get(symbol)
-        if not quote:
-            continue  # no fresh quote cached at this hour — skip, do not fabricate
-
-        if quote.get("type") == "fund_nav":
-            continue  # NAV has no genuine gap concept — see docstring
-
-        price = quote.get("price")
-        change_pct = quote.get("change_pct")
-        if price is None or change_pct is None:
+        row = _priced_row(quotes_by_symbol.get(symbol))
+        if row is None:
             continue
-        try:
-            price = float(price)
-            change_pct = float(change_pct)
-        except (TypeError, ValueError):
-            continue
-        if price <= 0:
-            continue
+        price, change_pct = row
         if min_gap_pct is not None and abs(change_pct) < min_gap_pct:
             continue  # below the trader's own chosen threshold — not a fabricated cutoff
 
@@ -208,11 +252,84 @@ def compute_gap_list(
     return results
 
 
+def _priced_row(quote: dict | None) -> tuple[float, float] | None:
+    """Parse a `quote:{symbol}` payload into `(price, change_pct)` iff it is
+    a genuinely usable, non-fund quote — same "no usable quote" doctrine as
+    `portfolio_service.usable_price`: present, not a fund NAV (bd:shotockviz
+    -ubw), a positive numeric price, a numeric `change_pct`. `None`
+    otherwise.
+
+    Shared by `compute_gap_list` (which additionally applies `min_gap_pct`
+    on top) and `classify_excluded_symbols` below — so a quote that is
+    perfectly fresh and priced, and was excluded ONLY by the trader's own
+    threshold, is never mistaken by the classifier for a missing price
+    (bd:shotockviz-06z.2: mixing "below your threshold" into "market
+    closed"/"pipeline missed" would be a second, worse version of the
+    exact conflation this bd exists to fix).
+    """
+    if not quote or quote.get("type") == "fund_nav":
+        return None
+    price = quote.get("price")
+    change_pct = quote.get("change_pct")
+    if price is None or change_pct is None:
+        return None
+    try:
+        price = float(price)
+        change_pct = float(change_pct)
+    except (TypeError, ValueError):
+        return None
+    if price <= 0:
+        return None
+    return price, change_pct
+
+
+def classify_excluded_symbols(
+    book_symbols: set[str],
+    quotes_by_symbol: dict[str, dict | None],
+    result_symbols: set[str],
+    utc_now: datetime,
+) -> dict[str, list[str]]:
+    """Name WHY every book symbol that did NOT make it into
+    `compute_gap_list`'s results is missing (bd:shotockviz-06z.2) — see
+    module docstring "Why a symbol is missing, named" for the full
+    reasoning and the option this implements.
+
+    Returns `{"market_closed": [...], "missed": [...]}`, both sorted for a
+    deterministic message. Two kinds of symbol are deliberately skipped
+    entirely (named in neither bucket):
+      * `type == "fund_nav"` — `compute_gap_list`'s own, unrelated,
+        already-silent exclusion (bd:shotockviz-ubw).
+      * a symbol with a genuinely usable quote (`_priced_row` returns a
+        row) that is simply in `result_symbols` already, OR — the case
+        this function must get right — was excluded from `results` only
+        by the trader's own `min_gap_pct` threshold. That is not a
+        "missing price" at all (see `_priced_row` docstring); the message
+        already explains threshold exclusions via `threshold_line`.
+    """
+    market_closed: list[str] = []
+    missed: list[str] = []
+    for symbol in book_symbols:
+        if symbol in result_symbols:
+            continue
+        quote = quotes_by_symbol.get(symbol)
+        if quote is not None and quote.get("type") == "fund_nav":
+            continue  # compute_gap_list's own silent exclusion — not ours to name
+        if _priced_row(quote) is not None:
+            continue  # usable quote — excluded only by min_gap_pct, not "missing"
+        if _is_market_open_for(symbol, utc_now):
+            missed.append(symbol)
+        else:
+            market_closed.append(symbol)
+
+    return {"market_closed": sorted(market_closed), "missed": sorted(missed)}
+
+
 def build_gap_list_message(
     results: list[dict],
     book_count: int,
     today_str: str,
     min_gap_pct: float | None = None,
+    excluded: dict[str, list[str]] | None = None,
 ) -> str:
     """Build the Thai digest message text.
 
@@ -237,11 +354,39 @@ def build_gap_list_message(
         magnitude at all; the cap alone decided what's shown, so the
         message says that explicitly rather than let the 20 shown read as
         "the 20 notable movers".
+
+    `excluded` (bd:shotockviz-06z.2, `classify_excluded_symbols`'s output;
+    `None`/omitted treated as "nothing to name", so every existing caller
+    that does not pass it renders exactly as before) names every book
+    symbol NOT in `results`, split into the two buckets that must never be
+    read as the same thing — see module docstring "Why a symbol is
+    missing, named":
+      * `market_closed` — expected, structural, happens every trading
+        evening (e.g. SCB.BK/TISCO.BK at 20:00 ICT); named so it does NOT
+        erode trust in the `book_count` footer the way an unexplained
+        "21 จาก 23" did in production.
+      * `missed` — that symbol's market is open right now and it still
+        produced no row; the one bucket that is actually worth a reader's
+        attention, and kept visually and textually separate from
+        `market_closed` for exactly that reason.
+
+    The generic "not ready yet, try again shortly" line is kept UNCHANGED
+    and unconditional even when every exclusion turns out to be
+    `market_closed` — deliberately not smart about whether a retry would
+    actually help: whether a given `market_closed` symbol reopens in
+    minutes (a US symbol just before its own session starts) or hours (a
+    SET symbol after 16:30 ICT) is not something this function can tell
+    from a single boolean without inventing a second, untested notion of
+    "how soon", so it says only what it actually knows (WHICH symbols and
+    WHY) and leaves the retry judgement to the reader looking at the named
+    list right below it.
     """
     header = f"📊 Gap ข้ามคืน ก่อน US pre-market ({today_str})"
     threshold_line = (
         f"เกณฑ์ขั้นต่ำที่ตั้งไว้: ≥{min_gap_pct:.1f}%" if min_gap_pct is not None else None
     )
+    market_closed = (excluded or {}).get("market_closed") or []
+    missed = (excluded or {}).get("missed") or []
 
     if not results:
         lines = [
@@ -251,6 +396,16 @@ def build_gap_list_message(
             f"(ทั้งหมด {book_count} รายการ) — อาจเป็นเพราะยังไม่ถึงรอบดึงราคาพรีมาร์เก็ต "
             f"ลองเปิดดูอีกครั้งในอีกไม่กี่นาที",
         ]
+        if missed:
+            lines.append(
+                f"⚠️ ตลาดเปิดอยู่แต่ยังไม่มีราคาสด ({len(missed)} รายการ): "
+                + ", ".join(missed)
+            )
+        if market_closed:
+            lines.append(
+                f"🕐 ตลาดปิดแล้ว ไม่เกี่ยวกับรอบนี้ ({len(market_closed)} รายการ): "
+                + ", ".join(market_closed)
+            )
         if threshold_line:
             lines.append(threshold_line)
         return "\n".join(lines)
@@ -279,6 +434,20 @@ def build_gap_list_message(
                 f"(จำกัดความยาวข้อความ ไม่ใช่เกณฑ์คัดกรอง — ยังไม่ได้ตั้งเกณฑ์ % ขั้นต่ำ "
                 f"ตั้งได้ที่หน้า Settings)"
             )
+
+    # bd:shotockviz-06z.2 — named separately from the count itself, so "N
+    # จาก M" is never the reader's only signal about the gap between them.
+    if missed:
+        lines.append("")
+        lines.append(
+            f"⚠️ ตลาดเปิดอยู่แต่ยังไม่มีราคาสด ({len(missed)} รายการ): " + ", ".join(missed)
+        )
+    if market_closed:
+        lines.append("")
+        lines.append(
+            f"🕐 ตลาดปิดแล้ว ไม่เกี่ยวกับรอบนี้ ({len(market_closed)} รายการ): "
+            + ", ".join(market_closed)
+        )
 
     lines.append("")
     lines.append(f"มีราคาสด {len(results)} จาก {book_count} รายการใน watchlist/พอร์ตของคุณ")
@@ -452,7 +621,15 @@ def send_gap_list_digest(self, now_utc_iso: str | None = None):
             try:
                 min_gap_pct = gap_min_pct_by_user.get(user_id)
                 results = compute_gap_list(book, quotes_by_symbol, min_gap_pct=min_gap_pct)
-                message = build_gap_list_message(results, len(book), today_str, min_gap_pct=min_gap_pct)
+                # bd:shotockviz-06z.2 — name every excluded symbol's reason
+                # (market_closed vs missed) rather than let it disappear
+                # into the "N จาก M" count alone.
+                excluded = classify_excluded_symbols(
+                    book, quotes_by_symbol, {r["symbol"] for r in results}, utc_now
+                )
+                message = build_gap_list_message(
+                    results, len(book), today_str, min_gap_pct=min_gap_pct, excluded=excluded
+                )
                 # One user's failure must not block the rest —
                 # _send_telegram_message itself never raises; this
                 # try/except is the outer safety net for anything else.

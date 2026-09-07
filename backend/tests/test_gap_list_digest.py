@@ -12,7 +12,7 @@ assertion about "a message was sent" reads `mock_post.call_count` /
 `mock_post.call_args`, never a live network response.
 """
 import json
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +26,7 @@ from models.watchlist import Watchlist, WatchlistItem
 from workers.gap_list_digest import (
     GAP_LIST_MAX_SYMBOLS_PER_MESSAGE,
     build_gap_list_message,
+    classify_excluded_symbols,
     compute_gap_list,
     send_gap_list_digest,
 )
@@ -37,6 +38,12 @@ from workers.gap_list_digest import (
 TRADING_MONDAY_UTC_ISO = "2026-09-07T12:30:00+00:00"
 # 2026-09-06 12:30 UTC = Sunday 08:30 in New York — a non-trading day.
 NON_TRADING_SUNDAY_UTC_ISO = "2026-09-06T12:30:00+00:00"
+# 2026-09-07 13:00 UTC = 20:00 ICT Monday — the exact digest run instant
+# (bd:shotockviz-06z.2).
+DIGEST_RUN_UTC = datetime.fromisoformat("2026-09-07T13:00:00+00:00")
+# 2026-09-07 05:00 UTC = 12:00 ICT Monday — inside SET's 02:30-09:45 UTC
+# fetch window (10:00-16:30 ICT trading hours + price_fetcher's buffer).
+SET_OPEN_UTC = datetime.fromisoformat("2026-09-07T05:00:00+00:00")
 
 
 def _quote(price: float, change_pct: float, **over) -> dict:
@@ -307,6 +314,60 @@ class TestFundFallback:
         assert "AAPL" in text and "NVDA" in text
 
 
+class TestProductionScenario20260907:
+    """Reproduces the actual 2026-09-07 20:00 ICT production run
+    (bd:shotockviz-06z.2): a 23-symbol book where 2 Thai symbols (SCB.BK,
+    TISCO.BK) have no quote because SET closed hours earlier. Before this
+    bd, the message read '21 จาก 23' with no explanation. This test proves
+    the reason is now named."""
+
+    def test_thai_symbols_named_as_market_closed_not_generic_missing(self, gap_db, tmp_path):
+        engine = create_engine(gap_db)
+        with Session(engine) as db:
+            u1 = db.query(User).filter_by(email="u1@example.com").one()
+            wl = db.query(Watchlist).filter_by(user_id=u1.id).one()
+            db.add(WatchlistItem(watchlist_id=wl.id, symbol="SCB.BK"))
+            db.add(WatchlistItem(watchlist_id=wl.id, symbol="TISCO.BK"))
+            db.commit()
+        engine.dispose()
+
+        fake_redis = _FakeRedis(quotes={
+            "quote:AAPL": _raw_quote(150.0, 2.0),
+            "quote:NVDA": _raw_quote(118.4, -1.5),
+            # deliberately no quote:SCB.BK / quote:TISCO.BK, no fund: fallback
+            # either — this is the real production Redis state at 20:00 ICT.
+        })
+        mock_post = MagicMock(return_value=MagicMock(status_code=200))
+        _run_digest(gap_db, fake_redis, mock_post, now_utc_iso=DIGEST_RUN_UTC.isoformat())
+
+        text = mock_post.call_args.kwargs["json"]["text"]
+        assert "SCB.BK" in text
+        assert "TISCO.BK" in text
+        assert "ตลาดปิดแล้ว" in text
+        # must NOT read as a pipeline miss
+        assert "ตลาดเปิดอยู่แต่ยังไม่มีราคาสด" not in text
+        # the footer count is unchanged in shape (book_count semantics preserved)
+        assert "มีราคาสด 2 จาก 4 รายการ" in text
+
+    def test_a_us_symbol_missing_during_open_hours_is_flagged_as_missed(self, gap_db):
+        """The other half of the AC: a genuine pipeline gap (US market
+        open, quote missing) must still surface, distinctly from the
+        market_closed case above."""
+        fake_redis = _FakeRedis(quotes={
+            "quote:AAPL": _raw_quote(150.0, 2.0),
+            # quote:NVDA deliberately absent — NVDA's underlying market
+            # (US, catch-all) IS open at 20:00 ICT (see
+            # TestUsHoursBoundaryAtDigestInstant), so this is a real miss.
+        })
+        mock_post = MagicMock(return_value=MagicMock(status_code=200))
+        _run_digest(gap_db, fake_redis, mock_post, now_utc_iso=DIGEST_RUN_UTC.isoformat())
+
+        text = mock_post.call_args.kwargs["json"]["text"]
+        assert "NVDA" in text
+        assert "ตลาดเปิดอยู่แต่ยังไม่มีราคาสด" in text
+        assert "ตลาดปิดแล้ว" not in text
+
+
 class TestTradingDayGate:
     def test_sunday_does_not_send_at_all(self, gap_db):
         fake_redis = _FakeRedis(quotes={
@@ -340,6 +401,164 @@ class TestTelegramTokenGuard:
         ):
             send_gap_list_digest(now_utc_iso=TRADING_MONDAY_UTC_ISO)
         mock_from_url.assert_not_called()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bd:shotockviz-06z.2 — classify_excluded_symbols (pure)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestUsHoursBoundaryAtDigestInstant:
+    def test_us_hours_is_true_at_exactly_13_00_utc(self):
+        """bd:shotockviz-06z.2 — checked, not assumed: the digest fires at
+        20:00 ICT = 13:00 UTC, and `_us_hours`'s lower edge is
+        `13 * 60 <= t` (inclusive). At the exact instant this task runs, a
+        genuine US symbol is correctly judged 'market open' — so a missing
+        US quote at that instant classifies as `missed` (a real gap), never
+        `market_closed`."""
+        from workers.price_fetcher import _us_hours
+
+        assert _us_hours(DIGEST_RUN_UTC) is True
+
+    def test_set_hours_is_false_at_exactly_13_00_utc(self):
+        from workers.price_fetcher import _set_hours
+
+        assert _set_hours(DIGEST_RUN_UTC) is False
+
+
+class TestClassifyExcludedSymbols:
+    def test_symbol_already_in_results_is_not_classified(self):
+        out = classify_excluded_symbols(
+            {"AAPL"}, {"AAPL": _quote(150.0, 2.0)}, {"AAPL"}, DIGEST_RUN_UTC
+        )
+        assert out == {"market_closed": [], "missed": []}
+
+    def test_thai_symbol_missing_quote_at_20_00_ict_is_market_closed(self):
+        """The exact production symptom: SCB.BK / TISCO.BK have no cached
+        quote at 20:00 ICT because SET closed 3+ hours earlier and the
+        120s TTL expired. That is 'market_closed', not 'missed'."""
+        out = classify_excluded_symbols(
+            {"SCB.BK", "TISCO.BK"}, {}, set(), DIGEST_RUN_UTC
+        )
+        assert out == {"market_closed": ["SCB.BK", "TISCO.BK"], "missed": []}
+
+    def test_us_symbol_missing_quote_during_us_hours_is_missed(self):
+        """A US symbol with no quote WHILE its market is open per
+        `_is_market_open_for` is a genuine pipeline gap — must not be
+        diluted into the harmless market_closed bucket."""
+        out = classify_excluded_symbols({"AAPL"}, {}, set(), DIGEST_RUN_UTC)
+        assert out == {"market_closed": [], "missed": ["AAPL"]}
+
+    def test_thai_symbol_during_set_hours_with_missing_quote_is_missed(self):
+        """Proves classification uses ACTUAL per-symbol market hours
+        (`_is_market_open_for`), not a hardcoded 'Thai symbol = always
+        closed' shortcut: at 12:00 ICT (SET open), a Thai symbol with no
+        quote is a real miss."""
+        out = classify_excluded_symbols({"PTT.BK"}, {}, set(), SET_OPEN_UTC)
+        assert out == {"market_closed": [], "missed": ["PTT.BK"]}
+
+    def test_fund_nav_quote_is_not_named_in_either_bucket(self):
+        """Same silent exclusion `compute_gap_list`/`TestFundFallback`
+        already pin — a fund NAV is `compute_gap_list`'s own unrelated
+        exclusion (bd:shotockviz-ubw), not named here as either reason."""
+        out = classify_excluded_symbols(
+            {"KFLTF70"},
+            {"KFLTF70": {"price": 12.34, "change_pct": 0.0, "type": "fund_nav"}},
+            set(),
+            DIGEST_RUN_UTC,
+        )
+        assert out == {"market_closed": [], "missed": []}
+
+    def test_symbol_excluded_only_by_min_gap_pct_threshold_is_not_named(self):
+        """Regression guard for the conflation this bd exists to remove:
+        AAPL has a perfectly fresh, usable quote (a real 0.1% gap) that
+        `compute_gap_list` dropped ONLY because the trader's own
+        `min_gap_pct` threshold excluded it — NOT because the price is
+        missing. Naming it as market_closed/missed here would just
+        reintroduce the same conflation one layer down."""
+        quotes = {"AAPL": _quote(150.0, 0.1)}
+        # Caller would have run compute_gap_list(..., min_gap_pct=5.0),
+        # which drops AAPL — result_symbols reflects that.
+        out = classify_excluded_symbols({"AAPL"}, quotes, set(), DIGEST_RUN_UTC)
+        assert out == {"market_closed": [], "missed": []}
+
+    def test_zero_price_quote_is_treated_as_no_usable_quote(self):
+        """A price of exactly 0.0 is bad data, not a real market price
+        (same doctrine as `portfolio_service.usable_price`) — it must
+        still be classified, not silently treated as 'has a quote'."""
+        out = classify_excluded_symbols(
+            {"AAPL"}, {"AAPL": _quote(0.0, 3.0)}, set(), DIGEST_RUN_UTC
+        )
+        assert out == {"market_closed": [], "missed": ["AAPL"]}
+
+    def test_lists_are_sorted(self):
+        out = classify_excluded_symbols(
+            {"TISCO.BK", "SCB.BK", "PTT.BK"}, {}, set(), DIGEST_RUN_UTC
+        )
+        assert out["market_closed"] == ["PTT.BK", "SCB.BK", "TISCO.BK"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# bd:shotockviz-06z.2 — build_gap_list_message with `excluded`
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBuildGapListMessageExcludedNaming:
+    def test_default_excluded_none_renders_exactly_as_before(self):
+        """Backward compatibility: every existing caller that omits
+        `excluded` must see the unchanged message — no stray bucket
+        lines."""
+        results = [{"symbol": "AAPL", "price": 150.0, "change_pct": 2.0}]
+        msg = build_gap_list_message(results, book_count=3, today_str="07/09")
+        assert "ตลาดปิด" not in msg
+        assert "ตลาดเปิดอยู่แต่ยังไม่มีราคาสด" not in msg
+
+    def test_market_closed_named_separately_from_missed(self):
+        """The core AC: the message must distinguish the two reasons, not
+        collapse them into one undifferentiated count."""
+        results = [{"symbol": "AAPL", "price": 150.0, "change_pct": 2.0}]
+        excluded = {"market_closed": ["SCB.BK", "TISCO.BK"], "missed": ["MSFT"]}
+        msg = build_gap_list_message(
+            results, book_count=4, today_str="07/09", excluded=excluded
+        )
+        assert "SCB.BK" in msg and "TISCO.BK" in msg
+        assert "MSFT" in msg
+        closed_line = next(l for l in msg.splitlines() if "SCB.BK" in l)
+        missed_line = next(l for l in msg.splitlines() if "MSFT" in l)
+        assert closed_line != missed_line
+        # distinct markers, not a substring check — "ปิด" (closed) is
+        # coincidentally a suffix of "เปิด" (open) in Thai script, so a
+        # naive substring assertion would false-positive on the missed
+        # line's own "เปิดอยู่" (is open) wording.
+        assert "🕐" in closed_line and "🕐" not in missed_line
+        assert "⚠️" in missed_line and "⚠️" not in closed_line
+        # the pre-existing footer count is unchanged in shape
+        assert "มีราคาสด 1 จาก 4 รายการ" in msg
+
+    def test_empty_results_all_excluded_are_market_closed_still_names_them(self):
+        """The production defect for an all-Thai-after-close book: whether
+        a market_closed symbol could plausibly return on a retry (a US
+        symbol just before its own session) or not (SET hours after
+        close) is not something this function tries to guess — so the
+        generic retry line is kept, and the named list right below it is
+        what actually tells the reader whether retrying THESE symbols is
+        worth it."""
+        excluded = {"market_closed": ["SCB.BK", "TISCO.BK"], "missed": []}
+        msg = build_gap_list_message(
+            [], book_count=2, today_str="07/09", excluded=excluded
+        )
+        assert "SCB.BK" in msg and "TISCO.BK" in msg
+        assert "ลองเปิดดูอีกครั้ง" in msg
+        assert "🕐" in msg
+
+    def test_empty_results_with_a_missed_symbol_keeps_retry_wording(self):
+        """When at least one exclusion is a genuine pipeline miss, the
+        'try again shortly' advice is still honest and stays — but the
+        missed symbol is still named, not folded into a bare count."""
+        excluded = {"market_closed": [], "missed": ["AAPL"]}
+        msg = build_gap_list_message(
+            [], book_count=1, today_str="07/09", excluded=excluded
+        )
+        assert "ลองเปิดดูอีกครั้ง" in msg
+        assert "AAPL" in msg
 
 
 class TestBatchQueryNoNPlus1:
